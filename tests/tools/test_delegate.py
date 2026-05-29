@@ -14,6 +14,7 @@ import os
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from tools.delegate_tool import (
@@ -48,6 +49,11 @@ def _make_mock_parent(depth=0):
     parent.providers_order = None
     parent.provider_sort = None
     parent._session_db = None
+    parent.user_id = "user-123"
+    parent.chat_id = "chat-456"
+    parent.thread_id = "thread-789"
+    parent._gateway_session_key = "gateway-session"
+    parent.session_id = "parent-session"
     parent._delegate_depth = depth
     parent._active_children = []
     parent._active_children_lock = threading.Lock()
@@ -68,6 +74,7 @@ class TestDelegateRequirements(unittest.TestCase):
         self.assertIn("tasks", props)
         self.assertIn("context", props)
         self.assertIn("toolsets", props)
+        self.assertIn("profile", props)
         # max_iterations is intentionally NOT exposed to the model — it's
         # config-authoritative via delegation.max_iterations so users get
         # predictable budgets.
@@ -157,6 +164,66 @@ class TestStripBlockedTools(unittest.TestCase):
 
 
 class TestDelegateTask(unittest.TestCase):
+    def setUp(self):
+        from tempfile import TemporaryDirectory
+
+        self._tmpdir = TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.hermes_root = Path(self._tmpdir.name) / ".hermes"
+        self.hermes_root.mkdir(parents=True)
+
+        for profile_name in ("coder", "artist"):
+            profile_dir = self.hermes_root / "profiles" / profile_name
+            (profile_dir / "home").mkdir(parents=True)
+            (profile_dir / "memories").mkdir(parents=True)
+            (profile_dir / "skills" / f"{profile_name}-marker-skill").mkdir(parents=True)
+            (profile_dir / ".env").write_text(
+                f"PROFILE_MARKER={profile_name}\nPROFILE_ENV_MARKER={profile_name}-env\n",
+                encoding="utf-8",
+            )
+            (profile_dir / "config.yaml").write_text(
+                "\n".join([
+                    "delegation:",
+                    f"  provider: {profile_name}-provider",
+                    "memory:",
+                    "  memory_enabled: true",
+                    "  user_profile_enabled: true",
+                    "skills: {}",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            (profile_dir / "SOUL.md").write_text(
+                f"PROFILE_SOUL_MARKER={profile_name}-soul\n",
+                encoding="utf-8",
+            )
+            (profile_dir / "memories" / "MEMORY.md").write_text(
+                f"{profile_name}-memory-marker\n",
+                encoding="utf-8",
+            )
+            (profile_dir / "memories" / "USER.md").write_text(
+                f"{profile_name}-user-marker\n",
+                encoding="utf-8",
+            )
+            (profile_dir / "skills" / f"{profile_name}-marker-skill" / "SKILL.md").write_text(
+                "\n".join([
+                    "---",
+                    f"name: {profile_name}-marker-skill",
+                    f"description: {profile_name} skill marker",
+                    "---",
+                    "",
+                    f"# {profile_name} marker skill",
+                    "",
+                    f"This skill belongs to {profile_name}.",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+
+        self._env_patcher = patch.dict(os.environ, {"HERMES_HOME": str(self.hermes_root)}, clear=False)
+        self._env_patcher.start()
+        self.addCleanup(self._env_patcher.stop)
+
     def test_no_parent_agent(self):
         result = json.loads(delegate_task(goal="test"))
         self.assertIn("error", result)
@@ -367,6 +434,198 @@ class TestDelegateTask(unittest.TestCase):
             self.assertEqual(kwargs["api_key"], parent.api_key)
             self.assertEqual(kwargs["provider"], parent.provider)
             self.assertEqual(kwargs["api_mode"], parent.api_mode)
+
+    def test_dispatch_profile_param_reaches_child_agent(self):
+        parent = _make_mock_parent(depth=0)
+
+        observed = {}
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                observed["init_kwargs"] = kwargs
+                observed["init_home"] = str(__import__("hermes_constants").get_hermes_home())
+                observed["init_env_home"] = os.environ.get("HERMES_HOME")
+                self.tool_progress_callback = kwargs.get("tool_progress_callback")
+                self._delegate_role = "leaf"
+                self._subagent_id = "sa-test"
+                self._parent_subagent_id = None
+                self._delegate_depth = 1
+                self.model = kwargs.get("model")
+                self.session_prompt_tokens = 0
+                self.session_completion_tokens = 0
+                self.session_estimated_cost_usd = 0.0
+                self.session_id = "child-session"
+                self._credential_pool = None
+
+            def get_activity_summary(self):
+                return {"current_tool": None, "api_call_count": 0, "max_iterations": 10}
+
+            def run_conversation(self, user_message, task_id):
+                observed["run_home"] = str(__import__("hermes_constants").get_hermes_home())
+                observed["run_env_home"] = os.environ.get("HERMES_HOME")
+                observed["profile_marker"] = os.environ.get("PROFILE_MARKER")
+                return {"final_response": "done", "completed": True, "api_calls": 1, "messages": []}
+
+            def close(self):
+                return None
+
+        with patch("run_agent.AIAgent", FakeAgent):
+            from hermes_constants import get_hermes_home
+
+            result = json.loads(delegate_task(goal="Test profile runtime", profile="coder", parent_agent=parent))
+
+            self.assertEqual(result["results"][0]["status"], "completed")
+            self.assertEqual(observed["init_kwargs"]["user_id"], "user-123")
+            self.assertEqual(observed["init_kwargs"]["chat_id"], "chat-456")
+            self.assertEqual(observed["init_kwargs"]["thread_id"], "thread-789")
+            self.assertEqual(observed["init_kwargs"]["gateway_session_key"], "gateway-session")
+            self.assertTrue(observed["init_kwargs"]["load_soul_identity"])
+            self.assertFalse(observed["init_kwargs"]["skip_memory"])
+            self.assertIsNone(observed["init_kwargs"]["session_db"])
+            self.assertTrue(observed["init_home"].endswith("profiles/coder"))
+            self.assertTrue(observed["run_home"].endswith("profiles/coder"))
+            self.assertEqual(observed["profile_marker"], "coder")
+            self.assertEqual(str(get_hermes_home()), os.environ["HERMES_HOME"])
+            self.assertFalse(str(get_hermes_home()).endswith("profiles/coder"))
+
+    def test_profile_execution_loads_profile_environment_artifacts(self):
+        parent = _make_mock_parent(depth=0)
+        observed = {}
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                from agent.prompt_builder import build_skills_system_prompt, load_soul_md
+                from hermes_cli.config import load_config
+                from hermes_constants import get_hermes_home, get_skills_dir
+                from tools.memory_tool import MemoryStore, get_memory_dir
+
+                cfg = load_config()
+                store = MemoryStore()
+                store.load_from_disk()
+
+                observed["home"] = str(get_hermes_home())
+                observed["skills_dir"] = str(get_skills_dir())
+                observed["memory_dir"] = str(get_memory_dir())
+                observed["config_provider"] = (cfg.get("delegation") or {}).get("provider")
+                observed["env_marker"] = os.environ.get("PROFILE_ENV_MARKER")
+                observed["soul_content"] = load_soul_md() or ""
+                observed["skills_prompt"] = build_skills_system_prompt()
+                observed["memory_block"] = store.format_for_system_prompt("memory") or ""
+                observed["user_block"] = store.format_for_system_prompt("user") or ""
+                self.tool_progress_callback = kwargs.get("tool_progress_callback")
+                self._delegate_role = "leaf"
+                self._subagent_id = "sa-artifacts"
+                self._parent_subagent_id = None
+                self._delegate_depth = 1
+                self.model = kwargs.get("model")
+                self.session_prompt_tokens = 0
+                self.session_completion_tokens = 0
+                self.session_estimated_cost_usd = 0.0
+                self.session_id = "child-session"
+                self._credential_pool = None
+
+            def get_activity_summary(self):
+                return {"current_tool": None, "api_call_count": 0, "max_iterations": 10}
+
+            def run_conversation(self, user_message, task_id):
+                return {"final_response": "done", "completed": True, "api_calls": 1, "messages": []}
+
+            def close(self):
+                return None
+
+        with patch("run_agent.AIAgent", FakeAgent), self.assertLogs("tools.delegate_tool", level="INFO") as logs:
+            result = json.loads(delegate_task(goal="Verify profile artifacts", profile="coder", parent_agent=parent))
+
+        self.assertEqual(result["results"][0]["status"], "completed")
+        self.assertTrue(observed["home"].endswith("profiles/coder"))
+        self.assertTrue(observed["skills_dir"].endswith("profiles/coder/skills"))
+        self.assertTrue(observed["memory_dir"].endswith("profiles/coder/memories"))
+        self.assertEqual(observed["config_provider"], "coder-provider")
+        self.assertEqual(observed["env_marker"], "coder-env")
+        self.assertIn("PROFILE_SOUL_MARKER=coder-soul", observed["soul_content"])
+        self.assertIn("coder-marker-skill", observed["skills_prompt"])
+        self.assertIn("coder-memory-marker", observed["memory_block"])
+        self.assertIn("coder-user-marker", observed["user_block"])
+        joined_logs = "\n".join(logs.output)
+        self.assertIn("profile home=", joined_logs)
+        self.assertIn("config path=", joined_logs)
+        self.assertIn("soul path=", joined_logs)
+        self.assertIn("skills dir=", joined_logs)
+        self.assertIn("memories dir=", joined_logs)
+
+    def test_profile_execution_supports_dynamic_profile_names(self):
+        parent = _make_mock_parent(depth=0)
+        seen = []
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                self.tool_progress_callback = kwargs.get("tool_progress_callback")
+                self._delegate_role = "leaf"
+                self._subagent_id = "sa-dynamic"
+                self._parent_subagent_id = None
+                self._delegate_depth = 1
+                self.model = kwargs.get("model")
+                self.session_prompt_tokens = 0
+                self.session_completion_tokens = 0
+                self.session_estimated_cost_usd = 0.0
+                self.session_id = "child-session"
+                self._credential_pool = None
+
+            def get_activity_summary(self):
+                return {"current_tool": None, "api_call_count": 0, "max_iterations": 10}
+
+            def run_conversation(self, user_message, task_id):
+                seen.append((os.environ.get("PROFILE_MARKER"), os.environ.get("HERMES_HOME")))
+                return {"final_response": "done", "completed": True, "api_calls": 1, "messages": []}
+
+            def close(self):
+                return None
+
+        with patch("run_agent.AIAgent", FakeAgent):
+            for profile_name in ("coder", "artist"):
+                result = json.loads(delegate_task(goal=f"Run in {profile_name}", profile=profile_name, parent_agent=parent))
+                self.assertEqual(result["results"][0]["status"], "completed")
+
+        self.assertEqual([item[0] for item in seen], ["coder", "artist"])
+        self.assertTrue(seen[0][1].endswith("profiles/coder"))
+        self.assertTrue(seen[1][1].endswith("profiles/artist"))
+
+    def test_profile_execution_restores_parent_environment(self):
+        parent = _make_mock_parent(depth=0)
+        os.environ["PROFILE_MARKER"] = "parent"
+        original_home = os.environ["HERMES_HOME"]
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                self.tool_progress_callback = kwargs.get("tool_progress_callback")
+                self._delegate_role = "leaf"
+                self._subagent_id = "sa-restore"
+                self._parent_subagent_id = None
+                self._delegate_depth = 1
+                self.model = kwargs.get("model")
+                self.session_prompt_tokens = 0
+                self.session_completion_tokens = 0
+                self.session_estimated_cost_usd = 0.0
+                self.session_id = "child-session"
+                self._credential_pool = None
+
+            def get_activity_summary(self):
+                return {"current_tool": None, "api_call_count": 0, "max_iterations": 10}
+
+            def run_conversation(self, user_message, task_id):
+                self.seen_profile_marker = os.environ.get("PROFILE_MARKER")
+                self.seen_home = os.environ.get("HERMES_HOME")
+                return {"final_response": "done", "completed": True, "api_calls": 1, "messages": []}
+
+            def close(self):
+                return None
+
+        with patch("run_agent.AIAgent", FakeAgent):
+            result = json.loads(delegate_task(goal="Restore env", profile="coder", parent_agent=parent))
+
+        self.assertEqual(result["results"][0]["status"], "completed")
+        self.assertEqual(os.environ["PROFILE_MARKER"], "parent")
+        self.assertEqual(os.environ["HERMES_HOME"], original_home)
 
     def test_child_inherits_parent_print_fn(self):
         parent = _make_mock_parent(depth=0)

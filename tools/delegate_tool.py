@@ -28,6 +28,8 @@ from concurrent.futures import (
     ThreadPoolExecutor,
     TimeoutError as FuturesTimeoutError,
 )
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from toolsets import TOOLSETS
@@ -867,6 +869,55 @@ def _build_child_progress_callback(
     return _callback
 
 
+@contextmanager
+def _profile_execution_runtime(raw_profile: Optional[str]):
+    """Temporarily scope Hermes runtime reads to a target profile."""
+    profile_name = str(raw_profile or "").strip()
+    if not profile_name:
+        yield None
+        return
+
+    from hermes_cli.env_loader import load_hermes_dotenv
+    from hermes_cli.profiles import normalize_profile_name, resolve_profile_env
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    normalized_profile = normalize_profile_name(profile_name)
+    profile_home = Path(resolve_profile_env(normalized_profile)).resolve()
+
+    env_snapshot = os.environ.copy()
+    override_token = None
+    try:
+        override_token = set_hermes_home_override(profile_home)
+        os.environ["HERMES_HOME"] = str(profile_home)
+        load_hermes_dotenv(hermes_home=profile_home)
+        logger.info(
+            "profile execution target=%s home=%s",
+            normalized_profile,
+            profile_home,
+        )
+        logger.info(
+            "profile home=%s config path=%s soul path=%s skills dir=%s memories dir=%s",
+            profile_home,
+            profile_home / "config.yaml",
+            profile_home / "SOUL.md",
+            profile_home / "skills",
+            profile_home / "memories",
+        )
+        yield {
+            "name": normalized_profile,
+            "home": profile_home,
+        }
+    finally:
+        if override_token is not None:
+            reset_hermes_home_override(override_token)
+        added = set(os.environ.keys()) - set(env_snapshot.keys())
+        for key in added:
+            os.environ.pop(key, None)
+        for key, value in env_snapshot.items():
+            if os.environ.get(key) != value:
+                os.environ[key] = value
+
+
 def _build_child_agent(
     task_index: int,
     goal: str,
@@ -888,6 +939,7 @@ def _build_child_agent(
     # 'leaf' (default) cannot; 'orchestrator' retains the delegation
     # toolset subject to depth/kill-switch bounds applied below.
     role: str = "leaf",
+    profile: Optional[str] = None,
 ):
     """
     Build a child AIAgent on the main thread (thread-safe construction).
@@ -1103,38 +1155,45 @@ def _build_child_agent(
         # openrouter/pareto-code), so we keep it inherited even when the
         # provider is overridden — it's a no-op on any other model.
 
-    child = AIAgent(
-        base_url=effective_base_url,
-        api_key=effective_api_key,
-        model=effective_model,
-        provider=effective_provider,
-        api_mode=effective_api_mode,
-        acp_command=effective_acp_command,
-        acp_args=effective_acp_args,
-        max_iterations=max_iterations,
-        max_tokens=getattr(parent_agent, "max_tokens", None),
-        reasoning_config=child_reasoning,
-        prefill_messages=getattr(parent_agent, "prefill_messages", None),
-        fallback_model=parent_fallback,
-        enabled_toolsets=child_toolsets,
-        quiet_mode=True,
-        ephemeral_system_prompt=child_prompt,
-        log_prefix=f"[subagent-{task_index}]",
-        platform=parent_agent.platform,
-        skip_context_files=True,
-        skip_memory=True,
-        clarify_callback=None,
-        thinking_callback=child_thinking_cb,
-        session_db=getattr(parent_agent, "_session_db", None),
-        parent_session_id=getattr(parent_agent, "session_id", None),
-        providers_allowed=child_providers_allowed,
-        providers_ignored=child_providers_ignored,
-        providers_order=child_providers_order,
-        provider_sort=child_provider_sort,
-        openrouter_min_coding_score=child_openrouter_min_coding_score,
-        tool_progress_callback=child_progress_cb,
-        iteration_budget=None,  # fresh budget per subagent
-    )
+    runtime_profile = str(profile or "").strip() or None
+    with _profile_execution_runtime(runtime_profile) as runtime_profile_info:
+        child = AIAgent(
+            base_url=effective_base_url,
+            api_key=effective_api_key,
+            model=effective_model,
+            provider=effective_provider,
+            api_mode=effective_api_mode,
+            acp_command=effective_acp_command,
+            acp_args=effective_acp_args,
+            max_iterations=max_iterations,
+            max_tokens=getattr(parent_agent, "max_tokens", None),
+            reasoning_config=child_reasoning,
+            prefill_messages=getattr(parent_agent, "prefill_messages", None),
+            fallback_model=parent_fallback,
+            enabled_toolsets=child_toolsets,
+            quiet_mode=True,
+            ephemeral_system_prompt=child_prompt,
+            log_prefix=f"[subagent-{task_index}]",
+            platform=parent_agent.platform,
+            user_id=getattr(parent_agent, "user_id", None),
+            chat_id=getattr(parent_agent, "chat_id", None),
+            thread_id=getattr(parent_agent, "thread_id", None),
+            gateway_session_key=getattr(parent_agent, "_gateway_session_key", None),
+            skip_context_files=True,
+            load_soul_identity=bool(runtime_profile_info),
+            skip_memory=not bool(runtime_profile_info),
+            clarify_callback=None,
+            thinking_callback=child_thinking_cb,
+            session_db=(None if runtime_profile_info else getattr(parent_agent, "_session_db", None)),
+            parent_session_id=getattr(parent_agent, "session_id", None),
+            providers_allowed=child_providers_allowed,
+            providers_ignored=child_providers_ignored,
+            providers_order=child_providers_order,
+            provider_sort=child_provider_sort,
+            openrouter_min_coding_score=child_openrouter_min_coding_score,
+            tool_progress_callback=child_progress_cb,
+            iteration_budget=None,  # fresh budget per subagent
+        )
     child._print_fn = getattr(parent_agent, "_print_fn", None)
     # Set delegation depth so children can't spawn grandchildren
     child._delegate_depth = child_depth
@@ -1146,6 +1205,12 @@ def _build_child_agent(
     child._subagent_id = subagent_id
     child._parent_subagent_id = parent_subagent_id
     child._subagent_goal = goal
+    child._profile_execution_target = (
+        runtime_profile_info.get("name") if runtime_profile_info else None
+    )
+    child._profile_execution_home = (
+        str(runtime_profile_info.get("home")) if runtime_profile_info else None
+    )
 
     # Share a credential pool with the child when possible so subagents can
     # rotate credentials on rate limits instead of getting pinned to one key.
@@ -1501,13 +1566,26 @@ def _run_single_child(
         # Capture the worker thread so the timeout diagnostic can dump its
         # Python stack (see #14726 — 0-API-call hangs are opaque without it).
         _worker_thread_holder: Dict[str, Optional[threading.Thread]] = {"t": None}
+        _raw_profile_target = getattr(child, "_profile_execution_target", None)
+        _profile_target = (
+            _raw_profile_target.strip()
+            if isinstance(_raw_profile_target, str) and _raw_profile_target.strip()
+            else None
+        )
 
         def _run_with_thread_capture():
             _worker_thread_holder["t"] = threading.current_thread()
-            return child.run_conversation(
-                user_message=goal,
-                task_id=child_task_id,
-            )
+            with _profile_execution_runtime(_profile_target):
+                if _profile_target:
+                    logger.info(
+                        "profile-scoped child started target profile=%s task_index=%s",
+                        _profile_target,
+                        task_index,
+                    )
+                return child.run_conversation(
+                    user_message=goal,
+                    task_id=child_task_id,
+                )
 
         _child_future = _timeout_executor.submit(_run_with_thread_capture)
         try:
@@ -1680,6 +1758,15 @@ def _run_single_child(
         _input_tokens = getattr(child, "session_prompt_tokens", 0)
         _output_tokens = getattr(child, "session_completion_tokens", 0)
         _model = getattr(child, "model", None)
+
+        if _profile_target:
+            logger.info(
+                "profile-scoped child completed target profile=%s task_index=%s status=%s duration=%.2fs",
+                _profile_target,
+                task_index,
+                status,
+                duration,
+            )
 
         entry: Dict[str, Any] = {
             "task_index": task_index,
@@ -1924,6 +2011,7 @@ def delegate_task(
     acp_command: Optional[str] = None,
     acp_args: Optional[List[str]] = None,
     role: Optional[str] = None,
+    profile: Optional[str] = None,
     parent_agent=None,
 ) -> str:
     """
@@ -2080,6 +2168,7 @@ def delegate_task(
                     else (acp_args if acp_args is not None else creds.get("args"))
                 ),
                 role=effective_role,
+                profile=profile,
             )
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
@@ -2457,21 +2546,31 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
 
 
 def _load_config() -> dict:
-    """Load delegation config from CLI_CONFIG or persistent config.
+    """Load profile-aware delegate_task config.
 
-    Checks the runtime config (cli.py CLI_CONFIG) first, then falls back
-    to the persistent config (hermes_cli/config.py load_config()) so that
-    ``delegation.model`` / ``delegation.provider`` are picked up regardless
-    of the entry point (CLI, gateway, cron).
+    In the normal parent runtime we honor the in-memory CLI config first. When a
+    profile-scoped child is running under a context-local Hermes home override,
+    we bypass CLI_CONFIG and read the target profile's persistent config.yaml so
+    profile execution actually sees that profile's delegation settings.
     """
     try:
-        from cli import CLI_CONFIG
+        from hermes_constants import get_hermes_home_override
 
-        cfg = CLI_CONFIG.get("delegation") or {}
-        if cfg:
-            return cfg
+        if get_hermes_home_override():
+            raise RuntimeError("profile-scoped persistent config required")
+    except RuntimeError:
+        pass
     except Exception:
         pass
+    else:
+        try:
+            from cli import CLI_CONFIG
+
+            cfg = CLI_CONFIG.get("delegation") or {}
+            if cfg:
+                return cfg
+        except Exception:
+            pass
     try:
         from hermes_cli.config import load_config
 
@@ -2749,6 +2848,10 @@ DELEGATE_TASK_SCHEMA = {
                 "enum": ["leaf", "orchestrator"],
                 "description": "(rebuilt at get_definitions() time)",
             },
+            "profile": {
+                "type": "string",
+                "description": "Optional target profile for profile-scoped child execution. When set, the child runs using that profile's config.yaml, .env, SOUL.md, memories, skills, cache, and logs while preserving the parent's chat metadata.",
+            },
             "acp_command": {
                 "type": "string",
                 "description": (
@@ -2793,6 +2896,7 @@ registry.register(
         acp_command=args.get("acp_command"),
         acp_args=args.get("acp_args"),
         role=args.get("role"),
+        profile=args.get("profile"),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,
