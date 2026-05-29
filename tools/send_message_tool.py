@@ -734,6 +734,16 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
         return last_result
 
     # --- Non-media platforms ---
+    if platform == Platform.SLACK and media_files:
+        return await _send_slack_via_adapter(
+            pconfig,
+            chat_id,
+            message,
+            media_files=media_files,
+            thread_id=thread_id,
+            force_document=force_document,
+        )
+
     if media_files and not message.strip():
         return {
             "error": (
@@ -1456,6 +1466,85 @@ async def _send_matrix_via_adapter(pconfig, chat_id, message, media_files=None, 
             await adapter.disconnect()
         except Exception:
             pass
+
+
+async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, thread_id=None, force_document=False):
+    """Send via the Slack gateway adapter so media uploads use files_upload_v2."""
+    try:
+        from types import SimpleNamespace as _SimpleNamespace
+        from gateway.platforms.slack import SlackAdapter
+        from slack_sdk.web.async_client import AsyncWebClient
+    except ImportError:
+        return {"error": "Slack media delivery requires slack_sdk to be installed"}
+
+    media_files = media_files or []
+
+    try:
+        adapter = SlackAdapter(pconfig)
+        adapter._app = _SimpleNamespace(client=AsyncWebClient(token=pconfig.token))
+        metadata = {"thread_id": thread_id} if thread_id else None
+
+        if message.strip():
+            text_result = await adapter.send(chat_id, message, metadata=metadata)
+            if not text_result.success:
+                return {"error": f"Slack text send failed: {text_result.error}"}
+            message_id = text_result.message_id
+        else:
+            message_id = None
+
+        image_paths: list[str] = []
+        other_media: list[tuple[str, bool]] = []
+        for media_path, is_voice in media_files:
+            if not os.path.exists(media_path):
+                return {"error": f"Media file not found: {media_path}"}
+            ext = os.path.splitext(media_path)[1].lower()
+            if ext in _IMAGE_EXTS and not force_document:
+                image_paths.append(media_path)
+            else:
+                other_media.append((media_path, is_voice))
+
+        if image_paths:
+            file_uploads = [
+                {"file": path, "filename": os.path.basename(path)}
+                for path in image_paths
+            ]
+            image_result = await adapter._get_client(chat_id).files_upload_v2(
+                channel=chat_id,
+                file_uploads=file_uploads,
+                initial_comment="",
+                thread_ts=metadata.get("thread_id") if metadata else None,
+            )
+            ok = True
+            if hasattr(image_result, "get"):
+                ok = bool(image_result.get("ok", True))
+            if not ok:
+                error_text = image_result.get("error", "unknown") if hasattr(image_result, "get") else str(image_result)
+                return {"error": f"Slack image upload failed: {error_text}", "message_id": message_id}
+
+        for media_path, is_voice in other_media:
+            ext = os.path.splitext(media_path)[1].lower()
+            if ext in _VIDEO_EXTS:
+                media_result = await adapter.send_video(chat_id, media_path, metadata=metadata)
+            elif ext in _VOICE_EXTS and is_voice:
+                media_result = await adapter.send_voice(chat_id, media_path, metadata=metadata)
+            elif ext in _AUDIO_EXTS:
+                media_result = await adapter.send_voice(chat_id, media_path, metadata=metadata)
+            else:
+                media_result = await adapter.send_document(chat_id, media_path, metadata=metadata)
+
+            if not media_result.success:
+                return {"error": f"Slack media upload failed: {media_result.error}", "message_id": message_id or media_result.message_id}
+            message_id = media_result.message_id or message_id
+
+        if not message.strip() and not media_files:
+            return {"error": "No deliverable Slack text or media remained after processing"}
+
+        result = {"success": True, "platform": "slack", "chat_id": chat_id}
+        if message_id:
+            result["message_id"] = message_id
+        return result
+    except Exception as e:
+        return {"error": f"Slack send failed: {e}"}
 
 
 async def _send_homeassistant(token, extra, chat_id, message):

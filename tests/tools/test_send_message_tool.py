@@ -597,6 +597,71 @@ class TestSendToPlatformChunking:
             "*hello* from <https://example.com|Hermes>",
         )
 
+    def test_slack_media_upload_uses_files_upload_v2_and_thread_id(self, monkeypatch, tmp_path):
+        _ensure_slack_mock(monkeypatch)
+        import gateway.platforms.slack as slack_mod
+
+        monkeypatch.setattr(slack_mod, "SLACK_AVAILABLE", True)
+
+        image_path = tmp_path / "screenshot.png"
+        image_path.write_bytes(b"not-a-real-png-but-good-enough-for-upload-test")
+
+        fake_client = AsyncMock()
+        fake_client.chat_postMessage = AsyncMock(return_value={"ts": "msg_ts"})
+        fake_client.files_upload_v2 = AsyncMock(return_value={"ok": True, "file": {"id": "F123"}})
+        monkeypatch.setattr(sys.modules["slack_sdk.web.async_client"], "AsyncWebClient", lambda token: fake_client)
+
+        result = asyncio.run(
+            _send_to_platform(
+                Platform.SLACK,
+                SimpleNamespace(enabled=True, token="xoxb-fake", extra={}),
+                "C123",
+                "Here is the image",
+                thread_id="1780046010.326589",
+                media_files=[(str(image_path), False)],
+            )
+        )
+
+        assert result["success"] is True
+        assert result["message_id"] == "msg_ts"
+        fake_client.chat_postMessage.assert_awaited_once()
+        fake_client.files_upload_v2.assert_awaited_once()
+        upload_kwargs = fake_client.files_upload_v2.await_args.kwargs
+        assert upload_kwargs["channel"] == "C123"
+        assert upload_kwargs["thread_ts"] == "1780046010.326589"
+        assert upload_kwargs["file_uploads"][0]["file"] == str(image_path)
+        assert upload_kwargs["file_uploads"][0]["filename"] == "screenshot.png"
+
+    def test_slack_media_upload_failure_is_not_masked_by_text_send(self, monkeypatch, tmp_path):
+        _ensure_slack_mock(monkeypatch)
+        import gateway.platforms.slack as slack_mod
+
+        monkeypatch.setattr(slack_mod, "SLACK_AVAILABLE", True)
+
+        image_path = tmp_path / "broken.png"
+        image_path.write_bytes(b"broken")
+
+        fake_client = AsyncMock()
+        fake_client.chat_postMessage = AsyncMock(return_value={"ts": "msg_ts"})
+        fake_client.files_upload_v2 = AsyncMock(side_effect=RuntimeError("Slack API error"))
+        monkeypatch.setattr(sys.modules["slack_sdk.web.async_client"], "AsyncWebClient", lambda token: fake_client)
+
+        result = asyncio.run(
+            _send_to_platform(
+                Platform.SLACK,
+                SimpleNamespace(enabled=True, token="xoxb-fake", extra={}),
+                "C123",
+                "Here is the image",
+                thread_id="1780046010.326589",
+                media_files=[(str(image_path), False)],
+            )
+        )
+
+        assert "error" in result
+        assert "Slack send failed" in result["error"] or "Slack media upload failed" in result["error"]
+        fake_client.chat_postMessage.assert_awaited_once()
+        fake_client.files_upload_v2.assert_awaited_once()
+
     def test_slack_bold_italic_formatted_before_send(self, monkeypatch):
         """Bold+italic ***text*** survives tool-layer formatting."""
         _ensure_slack_mock(monkeypatch)
