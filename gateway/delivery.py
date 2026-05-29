@@ -9,11 +9,13 @@ Routes messages to the appropriate destination based on:
 """
 
 import logging
+import shutil
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 
+from hermes_constants import get_hermes_work_dir
 from hermes_cli.config import get_hermes_home
 
 logger = logging.getLogger(__name__)
@@ -164,6 +166,13 @@ class DeliveryRouter:
         self.adapters = adapters or {}
         self.output_dir = get_hermes_home() / "cron" / "output"
     
+    def _publish_document_artifact(self, source: Path, *, folder_name: str) -> Path:
+        """Copy a cached document into the standard HermesWork Documents tree."""
+        published_dir = get_hermes_work_dir("Documents", folder_name)
+        published_path = published_dir / source.name
+        shutil.copy2(source, published_path)
+        return published_path
+
     async def deliver(
         self,
         content: str,
@@ -246,9 +255,14 @@ class DeliveryRouter:
         lines.append(content)
         
         output_path.write_text("\n".join(lines))
-        
+
+        published = self._publish_document_artifact(
+            output_path,
+            folder_name=job_name or job_id or "misc",
+        )
+
         return {
-            "path": str(output_path),
+            "path": str(published),
             "timestamp": timestamp
         }
     
@@ -259,7 +273,7 @@ class DeliveryRouter:
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"{job_id}_{timestamp}.txt"
         path.write_text(content)
-        return path
+        return self._publish_document_artifact(path, folder_name=job_id or "misc")
 
     async def _deliver_to_platform(
         self,

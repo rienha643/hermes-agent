@@ -140,6 +140,36 @@ def get_default_hermes_root() -> Path:
     return env_path
 
 
+def get_hermes_work_root() -> Path:
+    """Return the standard HermesWork artifact root.
+
+    Resolution order:
+        1. ``HERMES_WORK_ROOT`` environment override
+        2. WSL default mount for the Windows path requested by policy
+        3. Native Windows path when running on Windows
+        4. Local fallback under the current user's home directory
+    """
+    override = os.getenv("HERMES_WORK_ROOT", "").strip()
+    if override:
+        return Path(override)
+
+    if os.name == "nt":
+        return Path(r"C:\Users\AI_Agent\HermesWork")
+
+    wsl_default = Path("/mnt/c/Users/AI_Agent/HermesWork")
+    if wsl_default.exists():
+        return wsl_default
+
+    return Path.home() / "HermesWork"
+
+
+def get_hermes_work_dir(*parts: str) -> Path:
+    """Return a subdirectory under HermesWork, creating it if needed."""
+    path = get_hermes_work_root().joinpath(*parts)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def _get_packaged_data_dir(name: str) -> Path | None:
     """Return an installed data-files directory if one exists.
 

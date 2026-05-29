@@ -77,7 +77,9 @@ class _TinyImageHandler(http.server.BaseHTTPRequestHandler):
 def http_server(tmp_path, monkeypatch):
     """Spin up a localhost HTTP server and isolate HERMES_HOME under tmp_path."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
     (tmp_path / ".hermes").mkdir()
+    (tmp_path / "HermesWork").mkdir()
 
     # Force the constants/image cache helpers to re-read HERMES_HOME.
     import sys
@@ -94,7 +96,7 @@ def http_server(tmp_path, monkeypatch):
 
 
 class TestSaveUrlImage:
-    def test_writes_real_bytes_to_hermes_home_cache(self, http_server):
+    def test_writes_real_bytes_to_hermes_home_cache(self, http_server, tmp_path):
         base, _ = http_server
         from agent.image_gen_provider import save_url_image
 
@@ -102,10 +104,12 @@ class TestSaveUrlImage:
 
         assert path.exists()
         assert path.read_bytes() == PNG_1PX
-        # The cache directory must be under HERMES_HOME — gateway cleanup
-        # relies on this being the canonical location.
-        assert "cache/images" in str(path)
+        # The cache copy still exists under HERMES_HOME.
+        cache_dir = tmp_path / ".hermes" / "cache" / "images"
+        assert any(p.suffix == ".png" for p in cache_dir.iterdir())
         assert path.suffix == ".png"
+        # Final artifacts are published to HermesWork/Image.
+        assert "/HermesWork/Image/xai_test/" in str(path)
 
     def test_extension_inferred_from_content_type(self, http_server):
         base, _ = http_server

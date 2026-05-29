@@ -32,6 +32,7 @@ import abc
 import base64
 import datetime
 import logging
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -171,24 +172,45 @@ def _images_cache_dir() -> Path:
     return path
 
 
+def _publish_image_artifact(source: Path, *, prefix: str) -> Path:
+    """Copy an image cache file into the standard HermesWork Image tree.
+
+    The cache copy remains the canonical source for internal cleanup, while the
+    published copy is what users should keep as their final artifact.
+    """
+    from hermes_constants import get_hermes_work_dir
+
+    published_dir = get_hermes_work_dir("Image", prefix)
+    published_path = published_dir / source.name
+    shutil.copy2(source, published_path)
+    return published_path
+
+
 def save_b64_image(
     b64_data: str,
     *,
     prefix: str = "image",
     extension: str = "png",
 ) -> Path:
-    """Decode base64 image data and write it under ``$HERMES_HOME/cache/images/``.
+    """Decode base64 image data, cache it, and publish it to HermesWork.
 
-    Returns the absolute :class:`Path` to the saved file.
+    The image is always written under ``$HERMES_HOME/cache/images/`` first so
+    internal cleanup stays unchanged. A second copy is then published under
+    ``HermesWork/Image/<prefix>/`` for the final user-visible artifact.
 
-    Filename format: ``<prefix>_<YYYYMMDD_HHMMSS>_<short-uuid>.<ext>``.
+    Returns the published artifact path when the publish step succeeds, or the
+    cache path as a safe fallback if publication fails.
     """
     raw = base64.b64decode(b64_data)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     short = uuid.uuid4().hex[:8]
     path = _images_cache_dir() / f"{prefix}_{ts}_{short}.{extension}"
     path.write_bytes(raw)
-    return path
+    try:
+        return _publish_image_artifact(path, prefix=prefix)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not publish image artifact to HermesWork: %s", exc)
+        return path
 
 
 # Extension inference for save_url_image — keep small and explicit.  We don't
@@ -270,7 +292,11 @@ def save_url_image(
             pass
         raise ValueError(f"Image at {url} returned 0 bytes; refusing to cache.")
 
-    return path
+    try:
+        return _publish_image_artifact(path, prefix=prefix)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not publish image artifact to HermesWork: %s", exc)
+        return path
 
 
 def success_response(

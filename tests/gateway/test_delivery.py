@@ -1,5 +1,7 @@
 """Tests for the delivery routing module."""
 
+from pathlib import Path
+
 import pytest
 
 from gateway.config import GatewayConfig, Platform
@@ -271,6 +273,28 @@ async def test_explicit_telegram_group_thread_does_not_mark_dm_fallback(tmp_path
 class FailingAdapter:
     async def send(self, chat_id, content, metadata=None):
         return SendResult(success=False, error="route failed", retryable=False)
+
+
+@pytest.mark.asyncio
+async def test_local_delivery_publishes_to_hermeswork_documents(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+    (tmp_path / ".hermes").mkdir()
+    (tmp_path / "HermesWork").mkdir()
+
+    router = DeliveryRouter(GatewayConfig(), adapters={})
+    result = router._deliver_local(
+        "hello from local delivery",
+        job_id="job-123",
+        job_name="dog_character_concept_sheet",
+        metadata={"kind": "document"},
+    )
+
+    published = Path(result["path"])
+    assert published.exists()
+    assert "HermesWork/Documents/dog_character_concept_sheet" in str(published)
+    source_dir = router.output_dir / "job-123"
+    assert any(p.suffix == ".md" for p in source_dir.iterdir())
 
 
 @pytest.mark.asyncio
