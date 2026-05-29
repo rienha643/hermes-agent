@@ -71,6 +71,35 @@ def _error(message: str) -> dict:
     return {"error": _sanitize_error_text(message)}
 
 
+def _normalize_media_files_arg(media_files) -> list[tuple[str, bool]]:
+    """Normalize optional ``media_files`` tool args into ``(path, is_voice)`` pairs.
+
+    Accepts a list of local-path strings, ``[path, is_voice]`` pairs, or dicts
+    with ``path`` / ``file`` / ``media_path`` keys. Unknown entries are ignored
+    so the live tool path can safely pass through richer attachment payloads
+    without breaking older callers.
+    """
+    normalized: list[tuple[str, bool]] = []
+    if not media_files:
+        return normalized
+
+    for entry in media_files:
+        path = None
+        is_voice = False
+        if isinstance(entry, str):
+            path = entry
+        elif isinstance(entry, dict):
+            path = entry.get("path") or entry.get("file") or entry.get("media_path")
+            is_voice = bool(entry.get("is_voice") or entry.get("voice"))
+        elif isinstance(entry, (list, tuple)) and entry:
+            path = entry[0]
+            if len(entry) > 1:
+                is_voice = bool(entry[1])
+        if path:
+            normalized.append((str(path), is_voice))
+    return normalized
+
+
 def _telegram_retry_delay(exc: Exception, attempt: int) -> float | None:
     retry_after = getattr(exc, "retry_after", None)
     if retry_after is not None:
@@ -139,6 +168,11 @@ SEND_MESSAGE_SCHEMA = {
             "message": {
                 "type": "string",
                 "description": "The message text to send. To send an image or file, include MEDIA:<local_path> (e.g. 'MEDIA:/tmp/report.pdf') in the message — the platform will deliver it as a native media attachment."
+            },
+            "media_files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional explicit local media paths to send alongside the message. When provided, these are merged with MEDIA:<path> tags found in the message."
             }
         },
         "required": []
@@ -153,7 +187,7 @@ def send_message_tool(args, **kw):
     if action == "list":
         return _handle_list()
 
-    return _handle_send(args)
+    return _handle_send(args, media_files=_normalize_media_files_arg(args.get("media_files")))
 
 
 def _handle_list():
@@ -165,7 +199,7 @@ def _handle_list():
         return json.dumps(_error(f"Failed to load channel directory: {e}"))
 
 
-def _handle_send(args):
+def _handle_send(args, media_files=None):
     """Send a message to a platform target."""
     target = args.get("target", "")
     message = args.get("message", "")
@@ -249,8 +283,10 @@ def _handle_send(args):
     # JPGs where Telegram's sendPhoto recompresses to 1280px).
     force_document_attachments = "[[as_document]]" in message
 
-    media_files, cleaned_message = BasePlatformAdapter.extract_media(message)
-    media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files)
+    extracted_media_files, cleaned_message = BasePlatformAdapter.extract_media(message)
+    media_files = BasePlatformAdapter.filter_media_delivery_paths(
+        list(extracted_media_files) + list(media_files or [])
+    )
     mirror_text = cleaned_message.strip() or _describe_media_for_mirror(media_files)
 
     used_home_channel = False
@@ -761,7 +797,7 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
     last_result = None
     for chunk in chunks:
         if platform == Platform.SLACK:
-            result = await _send_slack(pconfig.token, chat_id, chunk)
+            result = await _send_slack(pconfig.token, chat_id, chunk, thread_id=thread_id)
         elif platform == Platform.WHATSAPP:
             result = await _send_whatsapp(pconfig.extra, chat_id, chunk)
         elif platform == Platform.SIGNAL:
@@ -1043,7 +1079,7 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
         return _error(f"Telegram send failed: {e}")
 
 
-async def _send_slack(token, chat_id, message):
+async def _send_slack(token, chat_id, message, thread_id=None):
     """Send via Slack Web API."""
     try:
         import aiohttp
@@ -1057,10 +1093,18 @@ async def _send_slack(token, chat_id, message):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30), **_sess_kw) as session:
             payload = {"channel": chat_id, "text": message, "mrkdwn": True}
+            if thread_id is not None:
+                payload["thread_ts"] = str(thread_id)
             async with session.post(url, headers=headers, json=payload, **_req_kw) as resp:
                 data = await resp.json()
                 if data.get("ok"):
-                    return {"success": True, "platform": "slack", "chat_id": chat_id, "message_id": data.get("ts")}
+                    return {
+                        "success": True,
+                        "platform": "slack",
+                        "chat_id": chat_id,
+                        "message_id": data.get("ts"),
+                        "thread_ts": str(thread_id) if thread_id is not None else data.get("thread_ts") or data.get("ts"),
+                    }
                 return _error(f"Slack API error: {data.get('error', 'unknown')}")
     except Exception as e:
         return _error(f"Slack send failed: {e}")
@@ -1494,6 +1538,7 @@ async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, t
 
         image_paths: list[str] = []
         other_media: list[tuple[str, bool]] = []
+        uploaded_files: list[dict[str, str]] = []
         for media_path, is_voice in media_files:
             if not os.path.exists(media_path):
                 return {"error": f"Media file not found: {media_path}"}
@@ -1520,6 +1565,14 @@ async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, t
             if not ok:
                 error_text = image_result.get("error", "unknown") if hasattr(image_result, "get") else str(image_result)
                 return {"error": f"Slack image upload failed: {error_text}", "message_id": message_id}
+            uploaded_files.extend(
+                {
+                    "path": path,
+                    "filename": os.path.basename(path),
+                    "mimetype": "image/png" if os.path.splitext(path)[1].lower() == ".png" else "image/jpeg" if os.path.splitext(path)[1].lower() in {".jpg", ".jpeg"} else "application/octet-stream",
+                }
+                for path in image_paths
+            )
 
         for media_path, is_voice in other_media:
             ext = os.path.splitext(media_path)[1].lower()
@@ -1534,6 +1587,13 @@ async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, t
 
             if not media_result.success:
                 return {"error": f"Slack media upload failed: {media_result.error}", "message_id": message_id or media_result.message_id}
+            uploaded_files.append(
+                {
+                    "path": media_path,
+                    "filename": os.path.basename(media_path),
+                    "mimetype": "audio/ogg" if ext in {".ogg", ".opus"} else "audio/mpeg" if ext in {".mp3", ".m4a"} else "video/mp4" if ext == ".mp4" else "application/octet-stream",
+                }
+            )
             message_id = media_result.message_id or message_id
 
         if not message.strip() and not media_files:
@@ -1542,6 +1602,13 @@ async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, t
         result = {"success": True, "platform": "slack", "chat_id": chat_id}
         if message_id:
             result["message_id"] = message_id
+        if thread_id is not None:
+            result["thread_ts"] = str(thread_id)
+        elif message_id:
+            result["thread_ts"] = message_id
+        if uploaded_files:
+            result["has_files"] = True
+            result["files"] = uploaded_files
         return result
     except Exception as e:
         return {"error": f"Slack send failed: {e}"}

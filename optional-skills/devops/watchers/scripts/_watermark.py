@@ -28,12 +28,21 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 def _state_dir() -> Path:
-    """Where watermark files live — respects WATCHER_STATE_DIR override."""
+    """Where watermark files live — respects WATCHER_STATE_DIR override.
+
+    When WATCHER_STATE_DIR is not set, prefer the active Hermes home so
+    profile-scoped cron runs keep their seen-state inside the current
+    profile directory instead of the default ~/.hermes root.
+    """
     override = os.environ.get("WATCHER_STATE_DIR")
     if override:
         return Path(override)
-    # Default: $HERMES_HOME/watcher-state/, falling back to ~/.hermes/watcher-state/.
-    hermes_home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
+    try:
+        from hermes_constants import get_hermes_home
+
+        hermes_home = get_hermes_home()
+    except Exception:
+        hermes_home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
     return Path(hermes_home) / "watcher-state"
 
 
