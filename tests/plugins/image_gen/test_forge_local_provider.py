@@ -94,6 +94,14 @@ class TestForgeLocalImageGenProviderGenerate:
         assert result["success"] is True
         assert result["provider"] == "forge-local"
         assert result["model"] == "Nullstyle_v20"
+        assert result["local_path"] == result["image"]
+        assert result["nas_status"] == "동기화 요청됨"
+        assert result["slack_status"] == "완료"
+        assert result["message"] == (
+            f"로컬 저장: {result['image']}\n"
+            "NAS 반영: 동기화 요청됨\n"
+            "Slack 첨부: 완료"
+        )
         assert result["image"].startswith(str(get_hermes_work_dir("Image")))
         assert Path(result["image"]).exists()
 

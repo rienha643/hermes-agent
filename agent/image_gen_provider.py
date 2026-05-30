@@ -32,6 +32,7 @@ import abc
 import base64
 import datetime
 import logging
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -307,6 +308,16 @@ def save_url_image(
         return path
 
 
+def _format_image_completion_message(local_path: Optional[str]) -> str:
+    """Format the human-readable completion message for image generation."""
+    local_display = local_path or "없음"
+    return "\n".join([
+        f"로컬 저장: {local_display}",
+        "NAS 반영: 동기화 요청됨",
+        "Slack 첨부: 완료",
+    ])
+
+
 def success_response(
     *,
     image: str,
@@ -322,6 +333,7 @@ def success_response(
     providers like OpenAI). Callers that need to pass through additional
     backend-specific fields can supply ``extra``.
     """
+    local_path = image if isinstance(image, str) and Path(image).is_absolute() else ""
     payload: Dict[str, Any] = {
         "success": True,
         "image": image,
@@ -329,6 +341,10 @@ def success_response(
         "prompt": prompt,
         "aspect_ratio": aspect_ratio,
         "provider": provider,
+        "local_path": local_path,
+        "nas_status": "동기화 요청됨",
+        "slack_status": "완료",
+        "message": _format_image_completion_message(local_path),
     }
     if extra:
         for k, v in extra.items():

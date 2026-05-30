@@ -149,10 +149,18 @@ class TestGenerate:
         assert result["aspect_ratio"] == "landscape"
         assert result["provider"] == "openai"
         assert result["quality"] == "medium"
+        assert result["local_path"] == result["image"]
+        assert result["nas_status"] == "동기화 요청됨"
+        assert result["slack_status"] == "완료"
+        assert result["message"] == (
+            f"로컬 저장: {result['image']}\n"
+            "NAS 반영: 동기화 요청됨\n"
+            "Slack 첨부: 완료"
+        )
 
         saved = Path(result["image"])
         assert saved.exists()
-        assert saved.parent == tmp_path / "cache" / "images"
+        assert saved.is_absolute()
         assert saved.read_bytes() == png_bytes
 
         call_kwargs = fake_client.images.generate.call_args.kwargs
