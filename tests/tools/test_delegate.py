@@ -282,6 +282,67 @@ class TestDelegateTask(unittest.TestCase):
         self.assertEqual(result["results"][1]["summary"], "Result B")
         self.assertIn("total_duration_seconds", result)
 
+    def _assert_gateway_attachment_delivery(self, path: Path, artifacts: list[str], summary: str):
+        from gateway.platforms.base import BasePlatformAdapter
+        from gateway.run import GatewayRunner
+
+        async def _run():
+            adapter = SimpleNamespace(
+                send_multiple_images=AsyncMock(),
+                send_document=AsyncMock(),
+                send_video=AsyncMock(),
+                extract_local_files=BasePlatformAdapter.extract_local_files,
+            )
+            runner = GatewayRunner.__new__(GatewayRunner)
+            await GatewayRunner._deliver_kanban_artifacts(
+                runner,
+                adapter=adapter,
+                chat_id="C123",
+                metadata={"platform": "slack"},
+                event_payload={"artifacts": artifacts, "summary": summary},
+                task=None,
+            )
+            return adapter
+
+        adapter = asyncio.run(_run())
+        adapter.send_multiple_images.assert_awaited_once()
+        batch = adapter.send_multiple_images.await_args.kwargs["images"]
+        self.assertEqual(batch[0][0], f"file://{path}")
+
+    @patch("tools.delegate_tool._run_single_child")
+    def test_forge_local_image_summary_exposes_plain_artifact_for_attachment(self, mock_run):
+        path = _generate_forge_local_image_path()
+        mock_run.return_value = {
+            "task_index": 0,
+            "status": "completed",
+            "summary": f"Rendered local image at `{path}`",
+            "api_calls": 1,
+            "duration_seconds": 1.0,
+        }
+        parent = _make_mock_parent()
+
+        result = json.loads(delegate_task(goal="Generate a local image", parent_agent=parent))
+
+        self.assertEqual(result["artifacts"], [str(path)])
+        self._assert_gateway_attachment_delivery(path, result["artifacts"], result["results"][0]["summary"])
+
+    @patch("tools.delegate_tool._run_single_child")
+    def test_openai_image_summary_exposes_plain_artifact_for_attachment(self, mock_run):
+        path = _generate_openai_image_path()
+        mock_run.return_value = {
+            "task_index": 0,
+            "status": "completed",
+            "summary": f"Rendered OpenAI image at `{path}`",
+            "api_calls": 1,
+            "duration_seconds": 1.0,
+        }
+        parent = _make_mock_parent()
+
+        result = json.loads(delegate_task(goal="Generate an OpenAI image", parent_agent=parent))
+
+        self.assertEqual(result["artifacts"], [str(path)])
+        self._assert_gateway_attachment_delivery(path, result["artifacts"], result["results"][0]["summary"])
+
     @patch("tools.delegate_tool._run_single_child")
     def test_batch_mode_accepts_json_string_tasks(self, mock_run):
         mock_run.side_effect = [
@@ -589,6 +650,141 @@ class TestDelegateTask(unittest.TestCase):
         self.assertEqual([item[0] for item in seen], ["coder", "artist"])
         self.assertTrue(seen[0][1].endswith("profiles/coder"))
         self.assertTrue(seen[1][1].endswith("profiles/artist"))
+
+    def test_profile_execution_infers_profile_from_worker_label(self):
+        parent = _make_mock_parent(depth=0)
+
+        with patch(
+            "tools.delegate_tool._load_config",
+            return_value={"max_iterations": 45, "model": "", "provider": ""},
+        ), patch(
+            "tools.delegate_tool._resolve_delegation_credentials",
+            return_value={
+                "model": None,
+                "provider": None,
+                "base_url": None,
+                "api_key": None,
+                "api_mode": None,
+            },
+        ), patch("tools.delegate_tool._build_child_agent") as mock_build, patch(
+            "tools.delegate_tool._run_single_child"
+        ) as mock_run:
+            mock_child = MagicMock()
+            mock_build.return_value = mock_child
+            mock_run.return_value = {
+                "task_index": 0,
+                "status": "completed",
+                "summary": "done",
+                "api_calls": 1,
+                "duration_seconds": 0.1,
+            }
+
+            cases = [
+                ("Celia가 담당. Forge로 강아지 이미지를 1장 생성해줘.", "forge"),
+                ("Palette가 담당. 사진을 정리해줘.", "artist"),
+                ("Eclipse가 담당. 이 코드를 고쳐줘.", "coder"),
+            ]
+            for goal, expected_profile in cases:
+                result = json.loads(delegate_task(goal=goal, parent_agent=parent))
+                self.assertEqual(result["results"][0]["status"], "completed")
+                self.assertEqual(mock_build.call_args.kwargs["profile"], expected_profile)
+                mock_build.reset_mock()
+                mock_run.reset_mock()
+
+    def test_profile_execution_rejects_mismatched_worker_label(self):
+        parent = _make_mock_parent(depth=0)
+
+        with patch(
+            "tools.delegate_tool._load_config",
+            return_value={"max_iterations": 45, "model": "", "provider": ""},
+        ), patch(
+            "tools.delegate_tool._resolve_delegation_credentials",
+            return_value={
+                "model": None,
+                "provider": None,
+                "base_url": None,
+                "api_key": None,
+                "api_mode": None,
+            },
+        ):
+            result = json.loads(
+                delegate_task(
+                    goal="Celia가 담당. Forge로 강아지 이미지를 1장 생성해줘.",
+                    profile="artist",
+                    parent_agent=parent,
+                )
+            )
+
+        self.assertIn("error", result)
+        self.assertIn("mismatch", result["error"].lower())
+
+    def test_profile_execution_keeps_unknown_worker_label_fallback(self):
+        parent = _make_mock_parent(depth=0)
+
+        with patch(
+            "tools.delegate_tool._load_config",
+            return_value={"max_iterations": 45, "model": "", "provider": ""},
+        ), patch(
+            "tools.delegate_tool._resolve_delegation_credentials",
+            return_value={
+                "model": None,
+                "provider": None,
+                "base_url": None,
+                "api_key": None,
+                "api_mode": None,
+            },
+        ), patch("tools.delegate_tool._build_child_agent") as mock_build, patch(
+            "tools.delegate_tool._run_single_child"
+        ) as mock_run:
+            mock_child = MagicMock()
+            mock_build.return_value = mock_child
+            mock_run.return_value = {
+                "task_index": 0,
+                "status": "completed",
+                "summary": "done",
+                "api_calls": 1,
+                "duration_seconds": 0.1,
+            }
+
+            result = json.loads(
+                delegate_task(
+                    goal="MysteryBot가 담당. 특별한 지시가 없으면 기존 방식으로 처리해줘.",
+                    parent_agent=parent,
+                )
+            )
+
+        self.assertEqual(result["results"][0]["status"], "completed")
+        self.assertIsNone(mock_build.call_args.kwargs["profile"])
+
+    def test_profile_execution_blocks_before_child_build_when_resolution_is_lost(self):
+        parent = _make_mock_parent(depth=0)
+
+        with patch(
+            "tools.delegate_tool._load_config",
+            return_value={"max_iterations": 45, "model": "", "provider": ""},
+        ), patch(
+            "tools.delegate_tool._resolve_delegation_credentials",
+            return_value={
+                "model": None,
+                "provider": None,
+                "base_url": None,
+                "api_key": None,
+                "api_mode": None,
+            },
+        ), patch("tools.delegate_tool._resolve_specialist_profile", return_value=None), patch(
+            "tools.delegate_tool._build_child_agent"
+        ) as mock_build, patch("tools.delegate_tool._run_single_child") as mock_run:
+            result = json.loads(
+                delegate_task(
+                    goal="Celia가 담당. Forge로 강아지 이미지를 1장 생성해줘.",
+                    parent_agent=parent,
+                )
+            )
+
+        self.assertIn("error", result)
+        self.assertIn("profile", result["error"].lower())
+        mock_build.assert_not_called()
+        mock_run.assert_not_called()
 
     def test_profile_execution_restores_parent_environment(self):
         parent = _make_mock_parent(depth=0)

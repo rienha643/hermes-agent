@@ -19,6 +19,7 @@ never the child's intermediate tool calls or reasoning.
 import enum
 import json
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 import os
@@ -524,6 +525,104 @@ _HEARTBEAT_INTERVAL = 30  # seconds between parent activity heartbeats during de
 _HEARTBEAT_STALE_CYCLES_IDLE = 15  # 15 * 30s = 450s idle between turns → stale
 _HEARTBEAT_STALE_CYCLES_IN_TOOL = 40  # 40 * 30s = 1200s stuck on same tool → stale
 DEFAULT_TOOLSETS = ["terminal", "file", "web"]
+
+_SPECIALIST_PROFILE_MAP = {
+    "Palette": "artist",
+    "Celia": "forge",
+    "Angelica": "comfy",
+    "Eclipse": "coder",
+    "Sylvia": "designer",
+    "Liberta": "pm",
+    "Luvencia": "cron-fast",
+    "Tyr": "scenario",
+    "Rafina": "qa",
+    "Blade": "balance",
+}
+_PROFILE_TO_WORKER = {profile: worker for worker, profile in _SPECIALIST_PROFILE_MAP.items()}
+_SPECIALIST_PROFILE_PATTERNS = [
+    (
+        re.compile(
+            rf"(?<![A-Za-z0-9_-]){re.escape(worker)}(?=[^A-Za-z0-9_-]|$)",
+            re.IGNORECASE,
+        ),
+        profile,
+    )
+    for worker, profile in _SPECIALIST_PROFILE_MAP.items()
+] + [
+    (
+        re.compile(
+            rf"(?<![A-Za-z0-9_-]){re.escape(profile)}(?=[^A-Za-z0-9_-]|$)",
+            re.IGNORECASE,
+        ),
+        profile,
+    )
+    for profile in _PROFILE_TO_WORKER
+]
+
+
+def _normalize_specialist_profile(raw_profile: Optional[str]) -> Optional[str]:
+    """Normalize a worker label or profile id to the canonical profile id.
+
+    Returns ``None`` when the value is empty or not recognized.  This lets the
+    runtime infer a target profile from labels like ``Celia`` / ``Palette`` in
+    the user-facing request while still enforcing explicit profile ids in the
+    delegate call itself.
+    """
+    profile_name = str(raw_profile or "").strip()
+    if not profile_name:
+        return None
+    lowered = profile_name.lower()
+    for worker, profile in _SPECIALIST_PROFILE_MAP.items():
+        if lowered == worker.lower() or lowered == profile.lower():
+            return profile
+    return None
+
+
+def _infer_specialist_profile(*texts: Optional[str]) -> Optional[str]:
+    """Infer a specialist profile from free-form text, if one is named."""
+    seen: List[str] = []
+    for text in texts:
+        if not text:
+            continue
+        text_value = str(text)
+        for pattern, profile in _SPECIALIST_PROFILE_PATTERNS:
+            if pattern.search(text_value) and profile not in seen:
+                seen.append(profile)
+    if len(seen) > 1:
+        raise ValueError(
+            "Conflicting specialist profile hints found: " + ", ".join(seen)
+        )
+    return seen[0] if seen else None
+
+
+def _has_specialist_profile_hint(*texts: Optional[str]) -> bool:
+    """Return True when any canonical specialist worker/profile label appears."""
+    for text in texts:
+        if not text:
+            continue
+        text_value = str(text)
+        for pattern, _profile in _SPECIALIST_PROFILE_PATTERNS:
+            if pattern.search(text_value):
+                return True
+    return False
+
+
+def _resolve_specialist_profile(
+    explicit_profile: Optional[str],
+    *texts: Optional[str],
+) -> Optional[str]:
+    """Resolve an explicit profile plus any free-text hints to one profile id."""
+    normalized_explicit = _normalize_specialist_profile(explicit_profile)
+    inferred = _infer_specialist_profile(*texts)
+    if normalized_explicit and inferred and normalized_explicit != inferred:
+        worker_hint = _PROFILE_TO_WORKER.get(inferred, inferred)
+        explicit_worker = _PROFILE_TO_WORKER.get(normalized_explicit, normalized_explicit)
+        raise ValueError(
+            f"Specialist routing mismatch: requested profile='{normalized_explicit}' "
+            f"({explicit_worker}) but task text points to '{inferred}' "
+            f"({worker_hint}). Use the matching profile id."
+        )
+    return normalized_explicit or inferred
 
 
 # ---------------------------------------------------------------------------
@@ -2121,6 +2220,24 @@ def delegate_task(
             )
         if not task.get("goal", "").strip():
             return tool_error(f"Task {i} is missing a 'goal'.")
+        specialist_hint = _has_specialist_profile_hint(
+            task.get("profile") or profile,
+            task.get("goal"),
+            task.get("context"),
+        )
+        try:
+            task["profile"] = _resolve_specialist_profile(
+                task.get("profile") or profile,
+                task.get("goal"),
+                task.get("context"),
+            )
+        except ValueError as exc:
+            return tool_error(str(exc))
+        if specialist_hint and task["profile"] is None:
+            return tool_error(
+                "Specialist worker label detected, but no matching profile "
+                "could be resolved before child execution."
+            )
 
     overall_start = time.monotonic()
     results = []
@@ -2168,7 +2285,7 @@ def delegate_task(
                     else (acp_args if acp_args is not None else creds.get("args"))
                 ),
                 role=effective_role,
-                profile=profile,
+                profile=t.get("profile"),
             )
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
@@ -2835,6 +2952,16 @@ DELEGATE_TASK_SCHEMA = {
                             "enum": ["leaf", "orchestrator"],
                             "description": "Per-task role override. See top-level 'role' for semantics.",
                         },
+                        "profile": {
+                            "type": "string",
+                            "description": (
+                                "Per-task target profile id. Use the real profile id "
+                                "(for example: artist, forge, comfy, coder, designer, "
+                                "pm, cron-fast, scenario, qa, balance). If a worker "
+                                "label like Celia or Palette appears in the task text, "
+                                "this must match the mapped profile id."
+                            ),
+                        },
                     },
                     "required": ["goal"],
                 },
@@ -2850,7 +2977,16 @@ DELEGATE_TASK_SCHEMA = {
             },
             "profile": {
                 "type": "string",
-                "description": "Optional target profile for profile-scoped child execution. When set, the child runs using that profile's config.yaml, .env, SOUL.md, memories, skills, cache, and logs while preserving the parent's chat metadata.",
+                "description": (
+                    "Target profile id for profile-scoped child execution. "
+                    "Use the canonical profile id, not the display label. "
+                    "Mapped specialist workers: Palette→artist, Celia→forge, "
+                    "Angelica→comfy, Eclipse→coder, Sylvia→designer, "
+                    "Liberta→pm, Luvencia→cron-fast, Tyr→scenario, "
+                    "Rafina→qa, Blade→balance. When set, the child runs using "
+                    "that profile's config.yaml, .env, SOUL.md, memories, skills, "
+                    "cache, and logs while preserving the parent's chat metadata."
+                ),
             },
             "acp_command": {
                 "type": "string",
