@@ -37,6 +37,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from nas_sync_hooks import queue_nas_sync_hook
+
 logger = logging.getLogger(__name__)
 
 
@@ -182,7 +184,13 @@ def _publish_image_artifact(source: Path, *, prefix: str) -> Path:
 
     published_dir = get_hermes_work_dir("Image", prefix)
     published_path = published_dir / source.name
-    shutil.copy2(source, published_path)
+    shutil.copyfile(source, published_path)
+    queue_nas_sync_hook(
+        category="image",
+        scope=prefix,
+        artifact_path=published_path,
+        source_root=published_dir,
+    )
     return published_path
 
 
