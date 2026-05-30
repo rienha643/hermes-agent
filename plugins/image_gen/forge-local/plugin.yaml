@@ -1,0 +1,6 @@
+name: forge-local
+version: 1.0.0
+description: "Local Forge/A1111 sdapi image generation backend (txt2img) for HermesWork artifacts."
+author: Hermes
+type: plugin
+kind: backend
