@@ -610,6 +610,41 @@ def _normalize_specialist_profile(raw_profile: Optional[str]) -> Optional[str]:
     return None
 
 
+def _resolve_specialist_worker_label(raw_profile: Optional[str]) -> Optional[str]:
+    """Resolve a canonical specialist profile id to its display worker name."""
+    profile = _normalize_specialist_profile(raw_profile)
+    if not profile:
+        return None
+    return _PROFILE_TO_WORKER.get(profile)
+
+
+def _format_specialist_frame(
+    worker_label: Optional[str],
+    phase: str,
+    body: Optional[str] = None,
+) -> str:
+    """Format the shared start/result frame for specialist subagents.
+
+    When ``worker_label`` is not a known specialist display name, the body is
+    returned unchanged so unknown profiles keep their current fallback output.
+    """
+    body_text = str(body or "").strip()
+    if not worker_label:
+        return body_text
+
+    if phase == "start":
+        header = f"[WORKER: {worker_label}]"
+        intro = f"{worker_label}가 해당 작업을 수행합니다."
+    else:
+        header = f"[WORKER RESULT: {worker_label}]"
+        intro = f"{worker_label}가 작업을 완료했습니다."
+
+    parts = [header, "", intro]
+    if body_text:
+        parts.extend(["", body_text])
+    return "\n".join(parts)
+
+
 def _infer_specialist_profile(*texts: Optional[str]) -> Optional[str]:
     """Infer a specialist profile from free-form text, if one is named."""
     seen: List[str] = []
@@ -824,6 +859,7 @@ def _build_child_progress_callback(
     depth: Optional[int] = None,
     model: Optional[str] = None,
     toolsets: Optional[List[str]] = None,
+    specialist_worker_label: Optional[str] = None,
 ) -> Optional[callable]:
     """Build a callback that relays child agent tool calls to the parent display.
 
@@ -892,19 +928,29 @@ def _build_child_progress_callback(
         # Lifecycle events emitted by the orchestrator itself — handled
         # before enum normalisation since they are not part of DelegateEvent.
         if event_type == "subagent.start":
-            if spinner and goal_label:
+            start_preview = _format_specialist_frame(
+                specialist_worker_label,
+                "start",
+                preview or goal_label or "",
+            )
+            if spinner and start_preview:
                 short = (
-                    (goal_label[:55] + "...") if len(goal_label) > 55 else goal_label
+                    (start_preview[:55] + "...") if len(start_preview) > 55 else start_preview
                 )
                 try:
                     spinner.print_above(f" {prefix}├─ 🔀 {short}")
                 except Exception as e:
                     logger.debug("Spinner print_above failed: %s", e)
-            _relay("subagent.start", preview=preview or goal_label or "", **kwargs)
+            _relay("subagent.start", preview=start_preview, **kwargs)
             return
 
         if event_type == "subagent.complete":
-            _relay("subagent.complete", preview=preview, **kwargs)
+            complete_preview = _format_specialist_frame(
+                specialist_worker_label,
+                "complete",
+                preview or "",
+            )
+            _relay("subagent.complete", preview=complete_preview, **kwargs)
             return
 
         # Normalise legacy strings, new-style "delegate.*" strings, and
@@ -1166,6 +1212,7 @@ def _build_child_agent(
 
     # Resolve the child's effective model early so it can ride on every event.
     effective_model_for_cb = model or getattr(parent_agent, "model", None)
+    specialist_worker_label = _resolve_specialist_worker_label(profile)
 
     # Build progress callback to relay tool calls to parent display.
     # Identity kwargs thread the subagent_id through every emitted event so the
@@ -1180,6 +1227,7 @@ def _build_child_agent(
         depth=tui_depth,
         model=effective_model_for_cb,
         toolsets=child_toolsets,
+        specialist_worker_label=specialist_worker_label,
     )
 
     # Each subagent gets its own iteration budget capped at max_iterations
@@ -1339,6 +1387,7 @@ def _build_child_agent(
     child._profile_execution_target = (
         runtime_profile_info.get("name") if runtime_profile_info else None
     )
+    setattr(child, "_profile_execution_worker_label", specialist_worker_label)
     child._profile_execution_home = (
         str(runtime_profile_info.get("home")) if runtime_profile_info else None
     )
@@ -1826,20 +1875,29 @@ def _run_single_child(
 
         duration = round(time.monotonic() - child_start, 2)
 
-        summary = result.get("final_response") or ""
+        raw_summary = result.get("final_response") or ""
         completed = result.get("completed", False)
         interrupted = result.get("interrupted", False)
         api_calls = result.get("api_calls", 0)
+        specialist_worker_label = getattr(child, "_profile_execution_worker_label", None)
 
         if interrupted:
             status = "interrupted"
-        elif summary:
+        elif raw_summary:
             # A summary means the subagent produced usable output.
             # exit_reason ("completed" vs "max_iterations") already
             # tells the parent *how* the task ended.
             status = "completed"
         else:
             status = "failed"
+
+        summary = raw_summary
+        if specialist_worker_label and summary:
+            summary = _format_specialist_frame(
+                specialist_worker_label,
+                "complete",
+                summary,
+            )
 
         # Build tool trace from conversation messages (already in memory).
         # Uses tool_call_id to correctly pair parallel tool calls with results.

@@ -32,6 +32,8 @@ from tools.delegate_tool import (
     _build_child_agent,
     _build_child_progress_callback,
     _build_child_system_prompt,
+    _format_specialist_frame,
+    _resolve_specialist_worker_label,
     _strip_blocked_tools,
     _resolve_child_credential_pool,
     _resolve_delegation_credentials,
@@ -3037,6 +3039,101 @@ class TestOrchestratorEndToEnd(unittest.TestCase):
         self.assertFalse(built_agents[1]["is_orchestrator_prompt"])
         self.assertNotIn("delegation", built_agents[2]["enabled_toolsets"])
         self.assertFalse(built_agents[2]["is_orchestrator_prompt"])
+
+
+class TestSpecialistWorkerFrames(unittest.TestCase):
+    def test_worker_label_resolution_uses_canonical_profile_map(self):
+        cases = {
+            "artist": "Palette",
+            "forge": "Celia",
+            "comfy": "Angelica",
+            "coder": "Eclipse",
+            "designer": "Sylvia",
+            "cron-fast": "Luvencia",
+            "scenario": "Tyr",
+            "qa": "Rafina",
+            "pm": "Liberta",
+            "balance": "Blade",
+        }
+        for profile, worker in cases.items():
+            self.assertEqual(_resolve_specialist_worker_label(profile), worker)
+        self.assertIsNone(_resolve_specialist_worker_label("unknown-profile"))
+
+    def test_unknown_worker_profile_keeps_fallback_body(self):
+        self.assertEqual(_format_specialist_frame(None, "start", "body text"), "body text")
+        self.assertEqual(_format_specialist_frame(None, "complete", "body text"), "body text")
+
+    def test_progress_callback_wraps_specialist_start_and_result_frames(self):
+        parent = _make_mock_parent(depth=0)
+        parent._delegate_spinner = MagicMock()
+        parent.tool_progress_callback = MagicMock()
+
+        callback = _build_child_progress_callback(
+            0,
+            "Update the formatter",
+            parent,
+            task_count=1,
+            specialist_worker_label="Eclipse",
+        )
+        self.assertIsNotNone(callback)
+        callback_fn = callback
+
+        callback_fn("subagent.start", preview="Update the formatter")
+        callback_fn("subagent.complete", preview="Implemented the requested change.")
+
+        start_calls = [
+            call for call in parent.tool_progress_callback.call_args_list
+            if call.args and call.args[0] == "subagent.start"
+        ]
+        complete_calls = [
+            call for call in parent.tool_progress_callback.call_args_list
+            if call.args and call.args[0] == "subagent.complete"
+        ]
+        self.assertTrue(start_calls)
+        self.assertTrue(complete_calls)
+        self.assertTrue(start_calls[0].args[2].startswith("[WORKER: Eclipse]"))
+        self.assertIn("Eclipse가 해당 작업을 수행합니다.", start_calls[0].args[2])
+        self.assertTrue(complete_calls[0].args[2].startswith("[WORKER RESULT: Eclipse]"))
+        self.assertIn("Eclipse가 작업을 완료했습니다.", complete_calls[0].args[2])
+
+    @patch("tools.delegate_tool._resolve_delegation_credentials")
+    @patch("tools.delegate_tool._load_config", return_value={"max_spawn_depth": 2})
+    def test_delegate_task_wraps_specialist_result_frame(self, _mock_cfg, mock_creds):
+        from tempfile import TemporaryDirectory
+
+        mock_creds.return_value = {
+            "provider": None, "base_url": None,
+            "api_key": None, "api_mode": None, "model": None,
+        }
+        with TemporaryDirectory() as tmpdir:
+            hermes_home = Path(tmpdir) / ".hermes"
+            profile_dir = hermes_home / "profiles" / "coder"
+            profile_dir.mkdir(parents=True)
+            (profile_dir / ".env").write_text("", encoding="utf-8")
+            (profile_dir / "config.yaml").write_text("", encoding="utf-8")
+            with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}, clear=False):
+                parent = _make_mock_parent(depth=0)
+                parent._delegate_spinner = MagicMock()
+                parent.tool_progress_callback = MagicMock()
+
+                with patch("run_agent.AIAgent") as MockAgent:
+                    mock_child = _make_role_mock_child()
+                    mock_child.run_conversation.return_value = {
+                        "final_response": "Implemented the requested change.",
+                        "completed": True,
+                        "api_calls": 2,
+                        "messages": [],
+                    }
+                    MockAgent.return_value = mock_child
+
+                    raw_result = delegate_task(goal="Update the formatter", profile="coder", parent_agent=parent)
+
+        parsed = json.loads(raw_result)
+        self.assertEqual(len(parsed["results"]), 1)
+        entry = parsed["results"][0]
+        self.assertTrue(entry["summary"].startswith("[WORKER RESULT: Eclipse]"))
+        self.assertIn("Eclipse가 작업을 완료했습니다.", entry["summary"])
+        self.assertIn("Implemented the requested change.", entry["summary"])
 
 
 class TestSubagentApprovalCallback(unittest.TestCase):
