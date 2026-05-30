@@ -23,6 +23,7 @@ import re
 
 logger = logging.getLogger(__name__)
 import os
+import shutil
 import threading
 import time
 from concurrent.futures import (
@@ -302,6 +303,15 @@ _ARTIFACT_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
+_DOCUMENT_ARTIFACT_EXTENSIONS = {
+    ".docx",
+    ".md",
+    ".pdf",
+    ".pptx",
+    ".xlsx",
+    ".txt",
+}
+
 
 def _extract_artifact_paths(text: Any) -> List[str]:
     """Return plain absolute/local paths from arbitrary text.
@@ -324,6 +334,66 @@ def _extract_artifact_paths(text: Any) -> List[str]:
         seen.add(expanded)
         paths.append(expanded)
     return paths
+
+
+def _publish_document_artifact_for_delegate(path_text: str) -> str:
+    """Best-effort publish + NAS hook for delegate-produced document artifacts."""
+    if not isinstance(path_text, str) or not path_text:
+        return path_text
+
+    try:
+        source = Path(os.path.expanduser(path_text)).resolve(strict=False)
+    except Exception:
+        return path_text
+
+    if source.suffix.lower() not in _DOCUMENT_ARTIFACT_EXTENSIONS:
+        return path_text
+    if not source.exists() or not source.is_file():
+        return path_text
+
+    try:
+        from hermes_constants import get_hermes_work_dir
+        from nas_sync_hooks import queue_nas_sync_hook
+    except Exception:
+        logger.debug("Could not import document publish helpers", exc_info=True)
+        return str(source)
+
+    try:
+        documents_root = get_hermes_work_dir("Documents")
+        resolved_documents_root = documents_root.resolve(strict=False)
+        resolved_source = source.resolve(strict=False)
+
+        if resolved_source == resolved_documents_root or resolved_documents_root in resolved_source.parents:
+            published_path = resolved_source
+            relative_parent = published_path.parent.relative_to(resolved_documents_root)
+            scope = "" if str(relative_parent) == "." else str(relative_parent).replace("/", os.sep)
+            source_root = published_path.parent
+        else:
+            preferred_folder = source.parent.name.strip() if source.parent.name.strip() else "misc"
+            published_dir = get_hermes_work_dir("Documents", preferred_folder)
+            published_path = published_dir / source.name
+            if published_path.resolve(strict=False) != resolved_source:
+                try:
+                    shutil.copy2(source, published_path)
+                except PermissionError as exc:
+                    logger.warning(
+                        "Delegate document metadata copy failed; falling back to content copy: %s",
+                        exc,
+                    )
+                    shutil.copyfile(source, published_path)
+            scope = preferred_folder
+            source_root = published_dir
+
+        queue_nas_sync_hook(
+            category="documents",
+            scope=scope,
+            artifact_path=published_path,
+            source_root=source_root,
+        )
+        return str(published_path)
+    except Exception:
+        logger.debug("Delegate document publish/NAS hook failed for %s", source, exc_info=True)
+        return str(source)
 
 
 def _rewrite_summary_artifact_paths(
@@ -2825,11 +2895,16 @@ def delegate_task(
             candidates = [c for c in entry_artifacts if isinstance(c, str)]
         else:
             candidates = _extract_artifact_paths(entry.get("summary"))
+        normalized_candidates: List[str] = []
         for candidate in candidates:
-            if candidate in seen_artifacts:
+            normalized = _publish_document_artifact_for_delegate(candidate)
+            if normalized in seen_artifacts:
                 continue
-            seen_artifacts.add(candidate)
-            artifacts.append(candidate)
+            seen_artifacts.add(normalized)
+            artifacts.append(normalized)
+            normalized_candidates.append(normalized)
+        if normalized_candidates:
+            entry["artifacts"] = normalized_candidates
 
     payload = {
         "results": results,

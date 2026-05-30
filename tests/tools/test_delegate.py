@@ -471,6 +471,66 @@ class TestDelegateTask(unittest.TestCase):
         self.assertEqual(result["artifacts"], [str(path)])
         self._assert_gateway_attachment_delivery(path, result["artifacts"], result["results"][0]["summary"])
 
+    @patch("nas_sync_hooks.queue_nas_sync_hook")
+    @patch("tools.delegate_tool._run_single_child")
+    def test_document_artifact_under_documents_queues_hook_without_copy(self, mock_run, mock_hook):
+        doc_path = Path("/mnt/c/Users/AI_Agent/HermesWork/Documents/test-doc/report.docx")
+        doc_path.parent.mkdir(parents=True, exist_ok=True)
+        doc_path.write_text("hello", encoding="utf-8")
+        mock_hook.return_value = True
+        mock_run.return_value = {
+            "task_index": 0,
+            "status": "completed",
+            "summary": f"Saved report at `{doc_path}`",
+            "artifacts": [str(doc_path)],
+            "api_calls": 1,
+            "duration_seconds": 1.0,
+        }
+        parent = _make_mock_parent()
+
+        result = json.loads(delegate_task(goal="Generate a document", parent_agent=parent))
+
+        self.assertEqual(result["artifacts"], [str(doc_path)])
+        self.assertEqual(result["results"][0]["artifacts"], [str(doc_path)])
+        mock_hook.assert_called_once()
+        _, kwargs = mock_hook.call_args
+        self.assertEqual(kwargs["category"], "documents")
+        self.assertEqual(kwargs["artifact_path"], doc_path)
+        self.assertEqual(kwargs["source_root"], doc_path.parent)
+        self.assertEqual(kwargs["scope"], "test-doc")
+
+    @patch("nas_sync_hooks.queue_nas_sync_hook")
+    @patch("tools.delegate_tool._run_single_child")
+    def test_document_artifact_outside_documents_is_published_then_hooked(self, mock_run, mock_hook):
+        with TemporaryDirectory() as tmpdir:
+            outside = Path(tmpdir) / "worker" / "draft.md"
+            outside.parent.mkdir(parents=True, exist_ok=True)
+            outside.write_text("hello", encoding="utf-8")
+            mock_hook.return_value = True
+            mock_run.return_value = {
+                "task_index": 0,
+                "status": "completed",
+                "summary": f"Saved draft at `{outside}`",
+                "artifacts": [str(outside)],
+                "api_calls": 1,
+                "duration_seconds": 1.0,
+            }
+            parent = _make_mock_parent()
+
+            result = json.loads(delegate_task(goal="Generate a document", parent_agent=parent))
+
+        published = Path(result["artifacts"][0])
+        self.assertTrue(published.exists())
+        self.assertTrue(str(published).startswith("/mnt/c/Users/AI_Agent/HermesWork/Documents/worker/"))
+        self.assertEqual(published.read_text(encoding="utf-8"), "hello")
+        self.assertEqual(result["results"][0]["artifacts"], [str(published)])
+        mock_hook.assert_called_once()
+        _, kwargs = mock_hook.call_args
+        self.assertEqual(kwargs["category"], "documents")
+        self.assertEqual(kwargs["artifact_path"], published)
+        self.assertEqual(kwargs["source_root"], published.parent)
+        self.assertEqual(kwargs["scope"], "worker")
+
     @patch("tools.delegate_tool._run_single_child")
     def test_batch_mode_accepts_json_string_tasks(self, mock_run):
         mock_run.side_effect = [
