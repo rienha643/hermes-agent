@@ -45,6 +45,10 @@ _MULTI_OUTPUT_ALLOW_RE = re.compile(
     r"(?:여러 장|후보|variation|variations|변형|다시 생성|리비전|revision|비교용)",
     re.IGNORECASE,
 )
+_NEGATED_MULTI_OUTPUT_RE = re.compile(
+    r"(?:금지|없음|없이|말고|하지\s*말|하지\s*마|no\s+|not\s+|don't\s+)",
+    re.IGNORECASE,
+)
 _IMAGE_TASK_RE = re.compile(r"(?:이미지|image|img|그림|render|렌더)", re.IGNORECASE)
 _IMAGE_SPECIALIST_PROFILES = {"artist", "forge", "comfy"}
 
@@ -375,9 +379,36 @@ def _is_single_output_image_task(
     haystack = "\n".join(part for part in [goal or "", context or ""] if part)
     if not _is_image_generation_task(goal, context, profile=profile, toolsets=toolsets):
         return False
-    if _MULTI_OUTPUT_ALLOW_RE.search(haystack):
+    if _has_positive_multi_output_request(haystack):
         return False
     return bool(_SINGLE_OUTPUT_REQUEST_RE.search(haystack))
+
+
+def _requires_image_gen_toolset(
+    goal: Optional[str],
+    context: Optional[str],
+    *,
+    profile: Optional[str],
+    toolsets: Optional[List[str]] = None,
+) -> bool:
+    specialist = str(profile or "").strip().lower()
+    if specialist not in _IMAGE_SPECIALIST_PROFILES:
+        return False
+    haystack = "\n".join(part for part in [goal or "", context or ""] if part)
+    if toolsets and "image_gen" in toolsets:
+        return True
+    return bool(_IMAGE_TASK_RE.search(haystack))
+
+
+def _has_positive_multi_output_request(text: str) -> bool:
+    for match in _MULTI_OUTPUT_ALLOW_RE.finditer(text or ""):
+        start = max(0, match.start() - 12)
+        end = min(len(text), match.end() + 12)
+        window = text[start:end]
+        if _NEGATED_MULTI_OUTPUT_RE.search(window):
+            continue
+        return True
+    return False
 
 
 def _single_output_cache_key(parent_task_id: Optional[str], profile: Optional[str]) -> Optional[str]:
@@ -1285,11 +1316,12 @@ def _build_child_agent(
     else:
         parent_toolsets = set(DEFAULT_TOOLSETS)
 
+    expanded_parent = _expand_parent_toolsets(parent_toolsets)
+
     if toolsets:
         # Intersect with parent — subagent must not gain tools the parent lacks.
         # Expand composite toolsets (e.g. hermes-cli) so that individual
         # toolset names (e.g. web, terminal) are recognised during intersection.
-        expanded_parent = _expand_parent_toolsets(parent_toolsets)
         child_toolsets = [t for t in toolsets if t in expanded_parent]
         if _get_inherit_mcp_toolsets():
             child_toolsets = _preserve_parent_mcp_toolsets(
@@ -1309,6 +1341,20 @@ def _build_child_agent(
     # test_intersection_preserves_delegation_bound test for the design rationale.
     if effective_role == "orchestrator" and "delegation" not in child_toolsets:
         child_toolsets.append("delegation")
+
+    if _requires_image_gen_toolset(
+        goal,
+        context,
+        profile=profile,
+        toolsets=toolsets,
+    ):
+        if "image_gen" in expanded_parent:
+            if "image_gen" not in child_toolsets:
+                child_toolsets.append("image_gen")
+        elif "image_gen" not in child_toolsets:
+            raise ValueError(
+                "Image specialist task requires the image_gen toolset, but the parent session does not provide it."
+            )
 
     if single_output_image and "terminal" in child_toolsets:
         child_toolsets = [t for t in child_toolsets if t != "terminal"]

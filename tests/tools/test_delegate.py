@@ -34,6 +34,7 @@ from tools.delegate_tool import (
     _build_child_progress_callback,
     _build_child_system_prompt,
     _format_specialist_frame,
+    _is_single_output_image_task,
     _resolve_specialist_worker_label,
     _strip_blocked_tools,
     _resolve_child_credential_pool,
@@ -221,6 +222,16 @@ class TestChildSystemPrompt(unittest.TestCase):
         self.assertIn("SINGLE-OUTPUT IMAGE RULES", prompt)
         self.assertIn("Call image_generate at most once", prompt)
         self.assertIn("MUST NOT return or upload an older file", prompt)
+
+    def test_single_output_detection_ignores_negated_multi_output_words(self):
+        self.assertTrue(
+            _is_single_output_image_task(
+                "Forge로 고양이 이미지를 1장 생성",
+                "추가 후보 생성 금지, 변형 없이 단일 이미지 1장만 허용",
+                profile="forge",
+                toolsets=["terminal", "file", "skills"],
+            )
+        )
 
 
 class TestStripBlockedTools(unittest.TestCase):
@@ -1499,7 +1510,7 @@ class TestDelegationCredentialResolution(unittest.TestCase):
             task_index=0,
             goal="Forge로 고양이 이미지를 1장 생성",
             context=None,
-            toolsets=["image_gen", "terminal", "file", "vision"],
+            toolsets=["terminal", "file", "vision"],
             model=None,
             max_iterations=10,
             task_count=1,
@@ -1510,8 +1521,36 @@ class TestDelegationCredentialResolution(unittest.TestCase):
         )
 
         call_kwargs = MockAgent.call_args.kwargs
-        self.assertEqual(call_kwargs["enabled_toolsets"], ["image_gen", "file", "vision"])
+        self.assertEqual(call_kwargs["enabled_toolsets"], ["file", "vision", "image_gen"])
         self.assertIn("SINGLE-OUTPUT IMAGE RULES", call_kwargs["ephemeral_system_prompt"])
+
+    @patch("tools.delegate_tool._profile_execution_runtime")
+    @patch("tools.delegate_tool._load_config")
+    @patch("run_agent.AIAgent")
+    def test_image_specialist_task_raises_without_parent_image_gen(self, MockAgent, mock_cfg, mock_profile_runtime):
+        mock_cfg.return_value = {"max_iterations": 50, "reasoning_effort": ""}
+        mock_profile_runtime.return_value.__enter__.return_value = None
+        mock_profile_runtime.return_value.__exit__.return_value = False
+        parent = _make_mock_parent(depth=0)
+        parent.enabled_toolsets = ["terminal", "file", "vision"]
+
+        with self.assertRaises(ValueError) as ctx:
+            _build_child_agent(
+                task_index=0,
+                goal="Forge로 고양이 이미지를 1장 생성",
+                context=None,
+                toolsets=["terminal", "file", "vision"],
+                model=None,
+                max_iterations=10,
+                task_count=1,
+                parent_agent=parent,
+                role="leaf",
+                profile="forge",
+                single_output_image=True,
+            )
+
+        self.assertIn("image_gen toolset", str(ctx.exception))
+        MockAgent.assert_not_called()
 
     def test_no_provider_returns_none_credentials(self):
         """When delegation.provider is empty, all credentials are None (inherit parent)."""
