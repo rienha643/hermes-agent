@@ -1892,12 +1892,6 @@ def _run_single_child(
             status = "failed"
 
         summary = raw_summary
-        if specialist_worker_label and summary:
-            summary = _format_specialist_frame(
-                specialist_worker_label,
-                "complete",
-                summary,
-            )
 
         # Build tool trace from conversation messages (already in memory).
         # Uses tool_call_id to correctly pair parallel tool calls with results.

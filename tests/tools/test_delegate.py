@@ -3098,7 +3098,7 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
 
     @patch("tools.delegate_tool._resolve_delegation_credentials")
     @patch("tools.delegate_tool._load_config", return_value={"max_spawn_depth": 2})
-    def test_delegate_task_wraps_specialist_result_frame(self, _mock_cfg, mock_creds):
+    def test_delegate_task_preserves_specialist_raw_summary(self, _mock_cfg, mock_creds):
         from tempfile import TemporaryDirectory
 
         mock_creds.return_value = {
@@ -3131,9 +3131,7 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         parsed = json.loads(raw_result)
         self.assertEqual(len(parsed["results"]), 1)
         entry = parsed["results"][0]
-        self.assertTrue(entry["summary"].startswith("[WORKER RESULT: Eclipse]"))
-        self.assertIn("Eclipse가 작업을 완료했습니다.", entry["summary"])
-        self.assertIn("Implemented the requested change.", entry["summary"])
+        self.assertEqual(entry["summary"], "Implemented the requested change.")
 
 
 class TestSubagentApprovalCallback(unittest.TestCase):
