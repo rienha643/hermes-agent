@@ -62,16 +62,16 @@ class TestPublishDocumentArtifact:
             zf.writestr("[Content_Types].xml", _MINIMAL_DOCX_CONTENT_TYPES)
             zf.writestr("word/document.xml", _MINIMAL_DOCX_DOCUMENT)
 
-        published = document_artifacts.publish_document_artifact(source, folder_name="worldbuilding")
+        published = document_artifacts.publish_document_artifact(source, folder_name="reports")
 
-        expected = work_root / "Documents" / "worldbuilding" / source.name
+        expected = work_root / "Documents" / "reports" / source.name
         assert published == expected
         assert published.exists()
         assert hook_calls
         assert hook_calls[0]["category"] == "documents"
         assert hook_calls[0]["artifact_path"] == published
-        assert hook_calls[0]["scope"] == "worldbuilding"
-        assert hook_calls[0]["source_root"] == work_root / "Documents" / "worldbuilding"
+        assert hook_calls[0]["scope"] == "reports"
+        assert hook_calls[0]["source_root"] == work_root / "Documents" / "reports"
 
         with zipfile.ZipFile(published, "r") as zf:
             names = set(zf.namelist())
@@ -97,5 +97,60 @@ class TestPublishDocumentArtifact:
         assert published == existing
         assert hook_calls
         assert hook_calls[0]["artifact_path"] == existing
-        assert hook_calls[0]["source_root"] == existing.parent
+        assert hook_calls[0]["source_root"] == work_root / "Documents" / "docs"
         assert hook_calls[0]["scope"] == "docs"
+
+    def test_routes_story_like_documents_to_story_and_ignores_ai_agent_scope(self, fake_hermes_work, tmp_path):
+        work_root, hook_calls = fake_hermes_work
+        source = tmp_path / "worldbuilding-lore.docx"
+        with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("[Content_Types].xml", _MINIMAL_DOCX_CONTENT_TYPES)
+            zf.writestr("word/document.xml", _MINIMAL_DOCX_DOCUMENT)
+
+        published = document_artifacts.publish_document_artifact(source, folder_name="worldbuilding")
+
+        expected = work_root / "Story" / "worldbuilding" / source.name
+        assert published == expected
+        assert published.exists()
+        assert hook_calls
+        assert hook_calls[0]["category"] == "story"
+        assert hook_calls[0]["artifact_path"] == published
+        assert hook_calls[0]["scope"] == "worldbuilding"
+        assert hook_calls[0]["source_root"] == work_root / "Story"
+
+    def test_keeps_story_artifacts_without_ai_agent_subfolder(self, fake_hermes_work):
+        work_root, hook_calls = fake_hermes_work
+        existing = work_root / "Story" / "ai_agent" / "간단한_로맨스_세계관_설정.docx"
+        existing.parent.mkdir(parents=True, exist_ok=True)
+        existing.write_text("placeholder", encoding="utf-8")
+
+        published = document_artifacts.publish_document_artifact(existing)
+
+        expected = work_root / "Story" / "간단한_로맨스_세계관_설정.docx"
+        assert published == expected
+        assert published.exists()
+        assert published.read_text(encoding="utf-8") == "placeholder"
+        assert hook_calls
+        assert hook_calls[0]["category"] == "story"
+        assert hook_calls[0]["artifact_path"] == expected
+        assert hook_calls[0]["source_root"] == work_root / "Story"
+        assert hook_calls[0]["scope"] == ""
+
+    def test_repairs_story_duplicate_tree_and_normalizes_source_root(self, fake_hermes_work):
+        work_root, hook_calls = fake_hermes_work
+        nested = work_root / "Story" / "ai_agent" / "Archive" / "Documents" / "Games" / "Image" / "Story" / "간단한_호러_세계관_설정.docx"
+        nested.parent.mkdir(parents=True, exist_ok=True)
+        nested.write_text("deep-tree", encoding="utf-8")
+
+        published = document_artifacts.publish_document_artifact(nested)
+
+        expected = work_root / "Story" / "간단한_호러_세계관_설정.docx"
+        assert published == expected
+        assert published.exists()
+        assert published.read_text(encoding="utf-8") == "deep-tree"
+        assert not (work_root / "Story" / "ai_agent").exists()
+        assert hook_calls
+        assert hook_calls[0]["category"] == "story"
+        assert hook_calls[0]["artifact_path"] == expected
+        assert hook_calls[0]["source_root"] == work_root / "Story"
+        assert hook_calls[0]["scope"] == ""

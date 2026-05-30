@@ -14,6 +14,7 @@ numbering parts present.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -61,9 +62,72 @@ _REL_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/relationships"
 _CT_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/content-types"
 _DRAWINGML_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
+_STORY_SCOPE_ALLOWLIST = {
+    "lore",
+    "scenario",
+    "setting",
+    "story",
+    "worldbuilding",
+}
+_STORY_SCOPE_EMPTY_NAMES = {
+    "",
+    ".",
+    "ai_agent",
+    "archive",
+    "archives",
+    "document",
+    "documents",
+    "game",
+    "games",
+    "image",
+    "images",
+    "misc",
+    "root",
+    "story",
+    "stories",
+}
+
 ET.register_namespace("w", _DOCX_NAMESPACE)
 ET.register_namespace("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships")
 ET.register_namespace("a", _DRAWINGML_NAMESPACE)
+
+
+def _is_under_root(path: Path, root: Path) -> bool:
+    try:
+        return path == root or root in path.parents
+    except Exception:
+        return False
+
+
+def _normalized_scope_name(folder_name: Optional[str], *, source: Path) -> str:
+    candidate = (folder_name or source.parent.name or "").strip()
+    if not candidate:
+        return "misc"
+
+    lowered = candidate.casefold()
+    if lowered == "ai_agent":
+        return "misc"
+    return candidate
+
+
+def _normalized_story_scope(source: Path, story_root: Path, *, folder_name: Optional[str] = None) -> str:
+    if _is_under_root(source, story_root):
+        try:
+            relative_parent = source.parent.relative_to(story_root)
+        except ValueError:
+            relative_parent = Path()
+        if not relative_parent.parts:
+            return ""
+
+        first = relative_parent.parts[0].strip()
+        if first.casefold() in _STORY_SCOPE_EMPTY_NAMES:
+            return ""
+        return first
+
+    candidate = (folder_name or source.parent.name or "").strip()
+    if candidate and candidate.casefold() in _STORY_SCOPE_ALLOWLIST:
+        return candidate
+    return ""
 
 
 _MINIMAL_SETTINGS_XML = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -215,6 +279,93 @@ def _ensure_relationship(root: ET.Element, rel_type: str, target: str) -> bool:
     return True
 
 
+def _canonical_story_relative_path(path: Path, story_root: Path) -> Path:
+    relative = path.relative_to(story_root)
+    parts = list(relative.parts)
+    if len(parts) <= 1:
+        return relative
+
+    idx = 0
+    while idx < len(parts) - 1 and parts[idx].casefold() in _STORY_SCOPE_EMPTY_NAMES:
+        idx += 1
+    if idx == 0:
+        return relative
+    return Path(*parts[idx:])
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _cleanup_story_duplicate_tree(story_root: Path) -> None:
+    if not story_root.exists():
+        return
+
+    story_root = story_root.resolve(strict=False)
+    moved = 0
+    deduped = 0
+    conflicts = 0
+
+    for source_file in sorted((p for p in story_root.rglob("*") if p.is_file()), key=lambda p: len(p.parts), reverse=True):
+        try:
+            relative = source_file.relative_to(story_root)
+        except ValueError:
+            continue
+        if not relative.parts:
+            continue
+        target_relative = _canonical_story_relative_path(source_file, story_root)
+        target = story_root / target_relative
+        if target == source_file:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source_hash = _sha256_path(source_file)
+        if target.exists():
+            if target.is_file() and _sha256_path(target) == source_hash:
+                source_file.unlink()
+                deduped += 1
+                continue
+            conflict = target.with_name(f"{target.stem}__{source_hash[:8]}{target.suffix}")
+            suffix = 1
+            while conflict.exists():
+                conflict = target.with_name(f"{target.stem}__{source_hash[:8]}_{suffix}{target.suffix}")
+                suffix += 1
+            shutil.move(str(source_file), conflict)
+            conflicts += 1
+            continue
+        shutil.move(str(source_file), target)
+        moved += 1
+
+    for direct_child in sorted(
+        (story_root / name for name in _STORY_SCOPE_EMPTY_NAMES if name),
+        key=lambda p: len(p.parts),
+        reverse=True,
+    ):
+        if not direct_child.exists() or not direct_child.is_dir():
+            continue
+        for directory in sorted((p for p in direct_child.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        try:
+            direct_child.rmdir()
+        except OSError:
+            pass
+
+    if moved or deduped or conflicts:
+        logger.info(
+            "Story cleanup repaired duplicate tree under %s: moved=%s deduped=%s conflicts=%s",
+            story_root,
+            moved,
+            deduped,
+            conflicts,
+        )
+
+
 def _modernize_docx_package(docx_path: Path) -> bool:
     """Add common Word parts to minimal OOXML docx packages in place.
 
@@ -298,11 +449,12 @@ def _modernize_docx_package(docx_path: Path) -> bool:
 
 
 def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None) -> Path:
-    """Publish *source* into HermesWork/Documents and queue the NAS sync hook.
+    """Publish *source* into the canonical HermesWork documents or story tree.
 
-    If the source already lives under HermesWork/Documents, it is left in place
-    and only the NAS hook is queued. Otherwise the file is copied into a
-    subfolder chosen from *folder_name* (or the source parent's name).
+    General planning / QA / report documents continue to land under
+    ``HermesWork/Documents``.  Worldbuilding / lore / setting deliverables are
+    routed to ``HermesWork/Story``.  If an artifact already lives under the
+    canonical tree, it is left in place and only the NAS hook is queued.
 
     DOCX files receive a best-effort modernization pass before the hook is
     queued so the published artifact carries standard settings/theme/font table
@@ -315,15 +467,47 @@ def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None
         return source
 
     try:
+        story_root = get_hermes_work_dir("Story")
+        resolved_story_root = story_root.resolve(strict=False)
+        if _is_under_root(source, resolved_story_root) or (
+            folder_name is not None and folder_name.strip().casefold() in _STORY_SCOPE_ALLOWLIST
+        ):
+            scope = _normalized_story_scope(source, resolved_story_root, folder_name=folder_name)
+            if scope:
+                published_dir = get_hermes_work_dir("Story", scope)
+            else:
+                published_dir = story_root
+            published_path = published_dir / source.name
+            if published_path.resolve(strict=False) != source:
+                try:
+                    shutil.copy2(source, published_path)
+                except PermissionError as exc:
+                    logger.warning(
+                        "Story artifact metadata copy failed; falling back to content copy: %s",
+                        exc,
+                    )
+                    shutil.copyfile(source, published_path)
+            source_root = story_root
+            if published_path.suffix.lower() == ".docx":
+                _modernize_docx_package(published_path)
+            _cleanup_story_duplicate_tree(story_root)
+            queue_nas_sync_hook(
+                category="story",
+                scope=scope,
+                artifact_path=published_path,
+                source_root=source_root,
+            )
+            return published_path
+
         documents_root = get_hermes_work_dir("Documents")
         resolved_documents_root = documents_root.resolve(strict=False)
-        if resolved_documents_root in source.parents or source == resolved_documents_root:
+        if _is_under_root(source, resolved_documents_root):
             published_path = source
             relative_parent = published_path.parent.relative_to(resolved_documents_root)
             scope = "" if str(relative_parent) == "." else str(relative_parent).replace("/", os.sep)
             source_root = published_path.parent
         else:
-            preferred_folder = (folder_name or source.parent.name or "misc").strip() or "misc"
+            preferred_folder = _normalized_scope_name(folder_name, source=source)
             published_dir = get_hermes_work_dir("Documents", preferred_folder)
             published_path = published_dir / source.name
             if published_path.resolve(strict=False) != source:

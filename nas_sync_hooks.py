@@ -13,9 +13,26 @@ from hermes_constants import get_default_hermes_root, get_hermes_home
 logger = logging.getLogger(__name__)
 
 DEFAULT_DEBOUNCE_SECONDS = 60.0
-_SUPPORTED_CATEGORIES = {"image", "documents"}
+_SUPPORTED_CATEGORIES = {"image", "documents", "story"}
 _IN_PROCESS_LAST_LAUNCH: dict[str, float] = {}
 _IN_PROCESS_LOCK = Lock()
+_STORY_SCOPE_EMPTY_NAMES = {
+    "",
+    ".",
+    "ai_agent",
+    "archive",
+    "archives",
+    "document",
+    "documents",
+    "game",
+    "games",
+    "image",
+    "images",
+    "misc",
+    "root",
+    "story",
+    "stories",
+}
 _NAS_BACKUP_CONFIG_KEYS = (
     ("nas", "backup_script"),
     ("nas", "immediate_backup_script"),
@@ -78,6 +95,23 @@ def _artifact_hook_key(category: str, scope: str, artifact_path: Path) -> str:
     return f"{category}|{scope}|{resolved}"
 
 
+def _normalized_story_scope(scope: str) -> str:
+    normalized = scope.strip()
+    if normalized.casefold() in _STORY_SCOPE_EMPTY_NAMES:
+        return ""
+    return normalized
+
+
+def _normalized_story_source_root(source_root: Path, artifact_path: Path) -> Path:
+    candidates = [source_root, source_root.parent, artifact_path, artifact_path.parent]
+    candidates.extend(source_root.parents)
+    candidates.extend(artifact_path.parents)
+    for candidate in candidates:
+        if candidate.name.casefold() == "story":
+            return candidate
+    return source_root if source_root.is_dir() else source_root.parent
+
+
 def queue_nas_sync_hook(
     *,
     category: str,
@@ -96,7 +130,14 @@ def queue_nas_sync_hook(
     if normalized_category not in _SUPPORTED_CATEGORIES:
         return False
 
-    key = _artifact_hook_key(normalized_category, scope, artifact_path)
+    normalized_scope = _normalized_story_scope(scope) if normalized_category == "story" else scope.strip()
+    normalized_source_root = (
+        _normalized_story_source_root(source_root, artifact_path)
+        if normalized_category == "story"
+        else (source_root if source_root.is_dir() else source_root.parent)
+    )
+
+    key = _artifact_hook_key(normalized_category, normalized_scope, artifact_path)
     now = time.monotonic()
     with _IN_PROCESS_LOCK:
         last = _IN_PROCESS_LAST_LAUNCH.get(key)
@@ -118,11 +159,11 @@ def queue_nas_sync_hook(
             sys.executable,
             str(script),
             "--hook",
-            str(source_root),
+            str(normalized_source_root),
             "--category",
             normalized_category,
             "--scope",
-            scope,
+            normalized_scope,
             "--artifact-path",
             str(artifact_path),
             "--debounce-seconds",
