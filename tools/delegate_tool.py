@@ -31,7 +31,7 @@ from concurrent.futures import (
 )
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from toolsets import TOOLSETS
 
@@ -307,6 +307,34 @@ def _extract_artifact_paths(text: Any) -> List[str]:
         seen.add(expanded)
         paths.append(expanded)
     return paths
+
+
+def _rewrite_summary_artifact_paths(
+    summary: Any,
+    *,
+    canonical_path: Optional[str],
+    allowed_paths: Optional[Iterable[str]] = None,
+) -> Any:
+    """Force embedded local paths in a summary to resolve to the current task artifact."""
+    if not isinstance(summary, str) or not summary or not canonical_path:
+        return summary
+
+    allowed = {
+        os.path.expanduser(path)
+        for path in (allowed_paths or [])
+        if isinstance(path, str) and path
+    }
+    allowed.add(os.path.expanduser(canonical_path))
+
+    rewritten = summary
+    for path in _extract_artifact_paths(summary):
+        expanded = os.path.expanduser(path)
+        if expanded in allowed:
+            continue
+        rewritten = rewritten.replace(path, canonical_path)
+        if expanded != path:
+            rewritten = rewritten.replace(expanded, canonical_path)
+    return rewritten
 
 
 def _looks_like_error_output(content: str) -> bool:
@@ -1897,6 +1925,9 @@ def _run_single_child(
         # Uses tool_call_id to correctly pair parallel tool calls with results.
         tool_trace: list[Dict[str, Any]] = []
         trace_by_id: Dict[str, Dict[str, Any]] = {}
+        tool_name_by_call_id: Dict[str, str] = {}
+        current_task_image_artifacts: List[str] = []
+        seen_current_task_artifacts: set[str] = set()
         messages = result.get("messages") or []
         if isinstance(messages, list):
             for msg in messages:
@@ -1913,6 +1944,7 @@ def _run_single_child(
                         tc_id = tc.get("id")
                         if tc_id:
                             trace_by_id[tc_id] = entry_t
+                            tool_name_by_call_id[tc_id] = fn.get("name", "unknown")
                 elif msg.get("role") == "tool":
                     content = msg.get("content", "")
                     is_error = _looks_like_error_output(content)
@@ -1928,6 +1960,28 @@ def _run_single_child(
                     elif tool_trace:
                         # Fallback for messages without tool_call_id
                         tool_trace[-1].update(result_meta)
+
+                    if tc_id and tool_name_by_call_id.get(tc_id) == "image_generate":
+                        try:
+                            parsed_tool = json.loads(content)
+                        except Exception:
+                            parsed_tool = None
+                        if isinstance(parsed_tool, dict):
+                            candidate = parsed_tool.get("local_path") or parsed_tool.get("image")
+                            if isinstance(candidate, str):
+                                expanded = os.path.expanduser(candidate)
+                                if os.path.isfile(expanded) and expanded not in seen_current_task_artifacts:
+                                    seen_current_task_artifacts.add(expanded)
+                                    current_task_image_artifacts.append(expanded)
+
+        canonical_image_artifact = (
+            current_task_image_artifacts[-1] if current_task_image_artifacts else None
+        )
+        summary = _rewrite_summary_artifact_paths(
+            summary,
+            canonical_path=canonical_image_artifact,
+            allowed_paths=current_task_image_artifacts,
+        )
 
         # Determine exit reason
         if interrupted:
@@ -1955,6 +2009,7 @@ def _run_single_child(
             "task_index": task_index,
             "status": status,
             "summary": summary,
+            "artifacts": list(current_task_image_artifacts),
             "api_calls": api_calls,
             "duration_seconds": duration,
             "model": _model if isinstance(_model, str) else None,
@@ -2593,7 +2648,12 @@ def delegate_task(
     artifacts: List[str] = []
     seen_artifacts: set[str] = set()
     for entry in results:
-        for candidate in _extract_artifact_paths(entry.get("summary")):
+        entry_artifacts = entry.get("artifacts")
+        if isinstance(entry_artifacts, list) and entry_artifacts:
+            candidates = [c for c in entry_artifacts if isinstance(c, str)]
+        else:
+            candidates = _extract_artifact_paths(entry.get("summary"))
+        for candidate in candidates:
             if candidate in seen_artifacts:
                 continue
             seen_artifacts.add(candidate)

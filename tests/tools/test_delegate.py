@@ -17,6 +17,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1073,6 +1074,68 @@ class TestDelegateObservability(unittest.TestCase):
             self.assertIn("args_bytes", entry["tool_trace"][0])
             self.assertIn("result_bytes", entry["tool_trace"][0])
             self.assertEqual(entry["tool_trace"][0]["status"], "ok")
+
+    def test_image_generate_summary_rewritten_to_current_task_artifact(self):
+        parent = _make_mock_parent(depth=0)
+
+        with TemporaryDirectory() as tmpdir, patch("run_agent.AIAgent") as MockAgent:
+            current_path = Path(tmpdir) / "current.png"
+            old_path = Path(tmpdir) / "old.png"
+            current_path.write_bytes(b"current")
+            old_path.write_bytes(b"old")
+
+            mock_child = MagicMock()
+            mock_child.model = "claude-sonnet-4-6"
+            mock_child.session_prompt_tokens = 0
+            mock_child.session_completion_tokens = 0
+            mock_child.run_conversation.return_value = {
+                "final_response": (
+                    f"결과 파일:\n- `{old_path}`\n\nMEDIA:{old_path}"
+                ),
+                "completed": True,
+                "interrupted": False,
+                "api_calls": 1,
+                "messages": [
+                    {"role": "assistant", "tool_calls": [
+                        {"id": "tc_img", "function": {"name": "image_generate", "arguments": '{"prompt": "cat"}'}}
+                    ]},
+                    {"role": "tool", "tool_call_id": "tc_img", "content": json.dumps({
+                        "success": True,
+                        "image": str(current_path),
+                        "local_path": str(current_path),
+                    })},
+                ],
+            }
+            MockAgent.return_value = mock_child
+
+            result = json.loads(delegate_task(goal="Generate image", parent_agent=parent))
+            entry = result["results"][0]
+
+            self.assertEqual(entry["artifacts"], [str(current_path)])
+            self.assertIn(str(current_path), entry["summary"])
+            self.assertNotIn(str(old_path), entry["summary"])
+            self.assertEqual(result["artifacts"], [str(current_path)])
+
+    def test_delegate_task_prefers_entry_artifacts_over_summary_paths(self):
+        parent = _make_mock_parent(depth=0)
+
+        with TemporaryDirectory() as tmpdir, patch("tools.delegate_tool._run_single_child") as mock_run:
+            current_path = Path(tmpdir) / "current.png"
+            stale_path = Path(tmpdir) / "stale.png"
+            current_path.write_bytes(b"current")
+            stale_path.write_bytes(b"stale")
+            mock_run.return_value = {
+                "task_index": 0,
+                "status": "completed",
+                "summary": f"결과 파일: `{stale_path}`",
+                "artifacts": [str(current_path)],
+                "api_calls": 1,
+                "duration_seconds": 0.1,
+            }
+
+            result = json.loads(delegate_task(goal="Prefer artifacts", parent_agent=parent))
+
+            self.assertEqual(result["artifacts"], [str(current_path)])
 
     def test_tool_trace_detects_error(self):
         """Tool results containing 'error' should be marked as error status."""
