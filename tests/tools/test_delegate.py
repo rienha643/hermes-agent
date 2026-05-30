@@ -213,6 +213,15 @@ class TestChildSystemPrompt(unittest.TestCase):
         prompt = _build_child_system_prompt("Do something", "  ")
         self.assertNotIn("CONTEXT", prompt)
 
+    def test_single_output_image_rules_included(self):
+        prompt = _build_child_system_prompt(
+            "Forge로 고양이 이미지를 1장 생성",
+            single_output_image=True,
+        )
+        self.assertIn("SINGLE-OUTPUT IMAGE RULES", prompt)
+        self.assertIn("Call image_generate at most once", prompt)
+        self.assertIn("MUST NOT return or upload an older file", prompt)
+
 
 class TestStripBlockedTools(unittest.TestCase):
     def test_removes_blocked_toolsets(self):
@@ -310,6 +319,48 @@ class TestDelegateTask(unittest.TestCase):
         parent = _make_mock_parent()
         result = json.loads(delegate_task(goal="  ", parent_agent=parent))
         self.assertIn("error", result)
+
+    @patch("tools.delegate_tool._run_single_child")
+    @patch("tools.delegate_tool._build_child_agent")
+    def test_single_output_image_reuses_cached_result_within_parent_task(self, mock_build_child, mock_run_child):
+        parent = _make_mock_parent()
+        parent._current_task_id = "parent-task-1"
+
+        child = MagicMock()
+        child._delegate_role = "leaf"
+        child.session_id = "child-session"
+        mock_build_child.return_value = child
+        mock_run_child.return_value = {
+            "task_index": 0,
+            "status": "completed",
+            "summary": "/tmp/current-image.png",
+            "artifacts": ["/tmp/current-image.png"],
+            "api_calls": 1,
+            "duration_seconds": 0.2,
+            "_child_role": "leaf",
+        }
+
+        first = json.loads(
+            delegate_task(
+                goal="Forge로 고양이 이미지를 1장 생성",
+                toolsets=["image_gen", "terminal", "file", "vision"],
+                profile="forge",
+                parent_agent=parent,
+            )
+        )
+        second = json.loads(
+            delegate_task(
+                goal="Forge로 고양이 이미지를 1장 생성",
+                toolsets=["image_gen", "terminal", "file", "vision"],
+                profile="forge",
+                parent_agent=parent,
+            )
+        )
+
+        self.assertEqual(first["artifacts"], ["/tmp/current-image.png"])
+        self.assertEqual(second["artifacts"], ["/tmp/current-image.png"])
+        self.assertEqual(mock_run_child.call_count, 1)
+        self.assertEqual(mock_build_child.call_count, 1)
 
     def test_task_missing_goal(self):
         parent = _make_mock_parent()
@@ -1433,6 +1484,34 @@ class TestBlockedTools(unittest.TestCase):
 
 class TestDelegationCredentialResolution(unittest.TestCase):
     """Tests for provider:model credential resolution in delegation config."""
+
+    @patch("tools.delegate_tool._profile_execution_runtime")
+    @patch("tools.delegate_tool._load_config")
+    @patch("run_agent.AIAgent")
+    def test_single_output_image_child_strips_terminal_toolset(self, MockAgent, mock_cfg, mock_profile_runtime):
+        mock_cfg.return_value = {"max_iterations": 50, "reasoning_effort": ""}
+        mock_profile_runtime.return_value.__enter__.return_value = None
+        mock_profile_runtime.return_value.__exit__.return_value = False
+        parent = _make_mock_parent(depth=0)
+        parent.enabled_toolsets = ["image_gen", "terminal", "file", "vision"]
+
+        _build_child_agent(
+            task_index=0,
+            goal="Forge로 고양이 이미지를 1장 생성",
+            context=None,
+            toolsets=["image_gen", "terminal", "file", "vision"],
+            model=None,
+            max_iterations=10,
+            task_count=1,
+            parent_agent=parent,
+            role="leaf",
+            profile="forge",
+            single_output_image=True,
+        )
+
+        call_kwargs = MockAgent.call_args.kwargs
+        self.assertEqual(call_kwargs["enabled_toolsets"], ["image_gen", "file", "vision"])
+        self.assertIn("SINGLE-OUTPUT IMAGE RULES", call_kwargs["ephemeral_system_prompt"])
 
     def test_no_provider_returns_none_credentials(self):
         """When delegation.provider is empty, all credentials are None (inherit parent)."""

@@ -35,6 +35,19 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from toolsets import TOOLSETS
 
+_SINGLE_OUTPUT_IMAGE_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
+_SINGLE_OUTPUT_IMAGE_RESULT_LOCK = threading.Lock()
+_SINGLE_OUTPUT_REQUEST_RE = re.compile(
+    r"(?:\b1\s*image\b|\bone image\b|single image|단일 이미지|이미지 하나|1장|한 장)",
+    re.IGNORECASE,
+)
+_MULTI_OUTPUT_ALLOW_RE = re.compile(
+    r"(?:여러 장|후보|variation|variations|변형|다시 생성|리비전|revision|비교용)",
+    re.IGNORECASE,
+)
+_IMAGE_TASK_RE = re.compile(r"(?:이미지|image|img|그림|render|렌더)", re.IGNORECASE)
+_IMAGE_SPECIALIST_PROFILES = {"artist", "forge", "comfy"}
+
 # Sentinel value used by the runtime provider system for providers that are
 # not natively known (named custom providers, third-party aggregators, etc.).
 # Must match hermes_cli.runtime_provider.RUNTIME_PROVIDER_TYPE_CUSTOM.
@@ -335,6 +348,67 @@ def _rewrite_summary_artifact_paths(
         if expanded != path:
             rewritten = rewritten.replace(expanded, canonical_path)
     return rewritten
+
+
+def _is_image_generation_task(
+    goal: Optional[str],
+    context: Optional[str],
+    *,
+    profile: Optional[str],
+    toolsets: Optional[List[str]],
+) -> bool:
+    if toolsets and "image_gen" in toolsets:
+        return True
+    if str(profile or "").strip().lower() in _IMAGE_SPECIALIST_PROFILES:
+        return True
+    haystack = "\n".join(part for part in [goal or "", context or ""] if part)
+    return bool(_IMAGE_TASK_RE.search(haystack))
+
+
+def _is_single_output_image_task(
+    goal: Optional[str],
+    context: Optional[str],
+    *,
+    profile: Optional[str],
+    toolsets: Optional[List[str]],
+) -> bool:
+    haystack = "\n".join(part for part in [goal or "", context or ""] if part)
+    if not _is_image_generation_task(goal, context, profile=profile, toolsets=toolsets):
+        return False
+    if _MULTI_OUTPUT_ALLOW_RE.search(haystack):
+        return False
+    return bool(_SINGLE_OUTPUT_REQUEST_RE.search(haystack))
+
+
+def _single_output_cache_key(parent_task_id: Optional[str], profile: Optional[str]) -> Optional[str]:
+    task_id = str(parent_task_id or "").strip()
+    if not task_id:
+        return None
+    label = str(profile or "").strip().lower() or "default"
+    return f"{task_id}:{label}"
+
+
+def _get_cached_single_output_result(
+    parent_task_id: Optional[str], profile: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    cache_key = _single_output_cache_key(parent_task_id, profile)
+    if not cache_key:
+        return None
+    with _SINGLE_OUTPUT_IMAGE_RESULT_LOCK:
+        cached = _SINGLE_OUTPUT_IMAGE_RESULT_CACHE.get(cache_key)
+        return json.loads(json.dumps(cached)) if cached else None
+
+
+def _store_cached_single_output_result(
+    parent_task_id: Optional[str],
+    profile: Optional[str],
+    payload: Dict[str, Any],
+) -> None:
+    cache_key = _single_output_cache_key(parent_task_id, profile)
+    if not cache_key:
+        return
+    with _SINGLE_OUTPUT_IMAGE_RESULT_LOCK:
+        _SINGLE_OUTPUT_IMAGE_RESULT_CACHE[cache_key] = json.loads(json.dumps(payload))
 
 
 def _looks_like_error_output(content: str) -> bool:
@@ -768,8 +842,9 @@ def _build_child_system_prompt(
     *,
     workspace_path: Optional[str] = None,
     role: str = "leaf",
-    max_spawn_depth: int = 2,
+    max_spawn_depth: int = 1,
     child_depth: int = 1,
+    single_output_image: bool = False,
 ) -> str:
     """Build a focused system prompt for a child agent.
 
@@ -804,6 +879,16 @@ def _build_child_system_prompt(
         "Be thorough but concise -- your response is returned to the "
         "parent agent as a summary."
     )
+    if single_output_image:
+        parts.append(
+            "\nSINGLE-OUTPUT IMAGE RULES:\n"
+            "- The user asked for exactly one image, so treat this as a strict single-output task.\n"
+            "- Call image_generate at most once for the entire task.\n"
+            "- Do not create extra candidate images, variations, revisions, or quality-improvement reruns unless the user explicitly requested them.\n"
+            "- Do not use terminal to call image APIs directly or to create derivative image files.\n"
+            "- vision_analyze may be used only for QA on the current task's generated image.\n"
+            "- You may inspect older files for reference, but you MUST NOT return or upload an older file as the final result.\n"
+        )
     if role == "orchestrator":
         child_note = (
             "Your own children MUST be leaves (cannot delegate further) "
@@ -1145,6 +1230,7 @@ def _build_child_agent(
     # toolset subject to depth/kill-switch bounds applied below.
     role: str = "leaf",
     profile: Optional[str] = None,
+    single_output_image: bool = False,
 ):
     """
     Build a child AIAgent on the main thread (thread-safe construction).
@@ -1224,6 +1310,9 @@ def _build_child_agent(
     if effective_role == "orchestrator" and "delegation" not in child_toolsets:
         child_toolsets.append("delegation")
 
+    if single_output_image and "terminal" in child_toolsets:
+        child_toolsets = [t for t in child_toolsets if t != "terminal"]
+
     workspace_hint = _resolve_workspace_hint(parent_agent)
     child_prompt = _build_child_system_prompt(
         goal,
@@ -1232,6 +1321,7 @@ def _build_child_agent(
         role=effective_role,
         max_spawn_depth=max_spawn,
         child_depth=child_depth,
+        single_output_image=single_output_image,
     )
     # Extract parent's API key so subagents inherit auth (e.g. Nous Portal).
     parent_api_key = getattr(parent_agent, "api_key", None)
@@ -1416,6 +1506,7 @@ def _build_child_agent(
         runtime_profile_info.get("name") if runtime_profile_info else None
     )
     setattr(child, "_profile_execution_worker_label", specialist_worker_label)
+    setattr(child, "_single_output_image", bool(single_output_image))
     child._profile_execution_home = (
         str(runtime_profile_info.get("home")) if runtime_profile_info else None
     )
@@ -1781,6 +1872,8 @@ def _run_single_child(
             else None
         )
 
+        _single_output_image = bool(getattr(child, "_single_output_image", False))
+
         def _run_with_thread_capture():
             _worker_thread_holder["t"] = threading.current_thread()
             with _profile_execution_runtime(_profile_target):
@@ -1790,10 +1883,26 @@ def _run_single_child(
                         _profile_target,
                         task_index,
                     )
-                return child.run_conversation(
-                    user_message=goal,
-                    task_id=child_task_id,
-                )
+                if _single_output_image:
+                    try:
+                        from tools.image_generation_tool import enable_single_output_task_mode
+
+                        enable_single_output_task_mode(child_task_id)
+                    except Exception:
+                        logger.debug("Could not enable single-output image mode", exc_info=True)
+                try:
+                    return child.run_conversation(
+                        user_message=goal,
+                        task_id=child_task_id,
+                    )
+                finally:
+                    if _single_output_image:
+                        try:
+                            from tools.image_generation_tool import disable_single_output_task_mode
+
+                            disable_single_output_task_mode(child_task_id)
+                        except Exception:
+                            logger.debug("Could not disable single-output image mode", exc_info=True)
 
         _child_future = _timeout_executor.submit(_run_with_thread_capture)
         try:
@@ -2352,6 +2461,7 @@ def delegate_task(
         return tool_error("No tasks provided.")
 
     # Validate each task has a goal
+    parent_task_id = getattr(parent_agent, "_current_task_id", None)
     for i, task in enumerate(task_list):
         if not isinstance(task, dict):
             return tool_error(
@@ -2377,6 +2487,21 @@ def delegate_task(
                 "Specialist worker label detected, but no matching profile "
                 "could be resolved before child execution."
             )
+        task_toolsets = task.get("toolsets") or toolsets
+        task["_single_output_image"] = _is_single_output_image_task(
+            task.get("goal"),
+            task.get("context"),
+            profile=task.get("profile"),
+            toolsets=task_toolsets,
+        )
+
+    if len(task_list) == 1 and task_list[0].get("_single_output_image"):
+        cached_payload = _get_cached_single_output_result(
+            parent_task_id,
+            task_list[0].get("profile"),
+        )
+        if cached_payload:
+            return json.dumps(cached_payload)
 
     overall_start = time.monotonic()
     results = []
@@ -2425,6 +2550,7 @@ def delegate_task(
                 ),
                 role=effective_role,
                 profile=t.get("profile"),
+                single_output_image=bool(t.get("_single_output_image")),
             )
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
@@ -2659,14 +2785,19 @@ def delegate_task(
             seen_artifacts.add(candidate)
             artifacts.append(candidate)
 
-    return json.dumps(
-        {
-            "results": results,
-            "artifacts": artifacts,
-            "total_duration_seconds": total_duration,
-        },
-        ensure_ascii=False,
-    )
+    payload = {
+        "results": results,
+        "artifacts": artifacts,
+        "total_duration_seconds": total_duration,
+    }
+    if len(task_list) == 1 and task_list[0].get("_single_output_image"):
+        _store_cached_single_output_result(
+            parent_task_id,
+            task_list[0].get("profile"),
+            payload,
+        )
+
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _resolve_child_credential_pool(effective_provider: Optional[str], parent_agent):

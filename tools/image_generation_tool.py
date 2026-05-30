@@ -77,6 +77,44 @@ logger = logging.getLogger(__name__)
 # reuse the same result instead of regenerating new candidates.
 _FORGE_LOCAL_SINGLE_PASS_RESULTS: Dict[str, str] = {}
 _FORGE_LOCAL_SINGLE_PASS_LOCK = threading.Lock()
+_SINGLE_OUTPUT_TASKS: set[str] = set()
+_SINGLE_OUTPUT_TASK_RESULTS: Dict[str, str] = {}
+_SINGLE_OUTPUT_TASK_LOCK = threading.Lock()
+
+
+def enable_single_output_task_mode(task_id: str) -> None:
+    task = str(task_id or "").strip()
+    if not task:
+        return
+    with _SINGLE_OUTPUT_TASK_LOCK:
+        _SINGLE_OUTPUT_TASKS.add(task)
+
+
+def disable_single_output_task_mode(task_id: str) -> None:
+    task = str(task_id or "").strip()
+    if not task:
+        return
+    with _SINGLE_OUTPUT_TASK_LOCK:
+        _SINGLE_OUTPUT_TASKS.discard(task)
+
+
+def _single_output_task_cached_result(task_id: str | None) -> str | None:
+    task = str(task_id or "").strip()
+    if not task:
+        return None
+    with _SINGLE_OUTPUT_TASK_LOCK:
+        if task not in _SINGLE_OUTPUT_TASKS:
+            return None
+        return _SINGLE_OUTPUT_TASK_RESULTS.get(task)
+
+
+def _store_single_output_task_result(task_id: str | None, result_json: str) -> None:
+    task = str(task_id or "").strip()
+    if not task:
+        return
+    with _SINGLE_OUTPUT_TASK_LOCK:
+        if task in _SINGLE_OUTPUT_TASKS:
+            _SINGLE_OUTPUT_TASK_RESULTS[task] = result_json
 
 
 # ---------------------------------------------------------------------------
@@ -990,6 +1028,14 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str, task_id: str | 
     if not configured:
         return None
 
+    cached_single_output = _single_output_task_cached_result(task_id)
+    if cached_single_output:
+        logger.info(
+            "single-output image guard: reusing cached image for task_id=%s",
+            task_id,
+        )
+        return cached_single_output
+
     # Local Forge singular requests are single-pass: once a task has already
     # produced one image, return the same result on later calls rather than
     # generating new candidates.
@@ -1067,6 +1113,8 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str, task_id: str | 
         })
 
     result_json = json.dumps(result)
+    if result.get("success") and result.get("image"):
+        _store_single_output_task_result(task_id, result_json)
     if configured == "forge-local" and cache_key and result.get("success") and result.get("image"):
         with _FORGE_LOCAL_SINGLE_PASS_LOCK:
             _FORGE_LOCAL_SINGLE_PASS_RESULTS[cache_key] = result_json

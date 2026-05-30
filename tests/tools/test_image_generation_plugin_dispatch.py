@@ -10,8 +10,16 @@ from agent.image_gen_provider import ImageGenProvider
 @pytest.fixture(autouse=True)
 def _reset_registry():
     image_gen_registry._reset_for_tests()
+    from tools import image_generation_tool
+
+    image_generation_tool._FORGE_LOCAL_SINGLE_PASS_RESULTS.clear()
+    image_generation_tool._SINGLE_OUTPUT_TASKS.clear()
+    image_generation_tool._SINGLE_OUTPUT_TASK_RESULTS.clear()
     yield
     image_gen_registry._reset_for_tests()
+    image_generation_tool._FORGE_LOCAL_SINGLE_PASS_RESULTS.clear()
+    image_generation_tool._SINGLE_OUTPUT_TASKS.clear()
+    image_generation_tool._SINGLE_OUTPUT_TASK_RESULTS.clear()
 
 
 class _FakeCodexProvider(ImageGenProvider):
@@ -91,6 +99,47 @@ class TestPluginDispatch:
         assert json.loads(second)["image"] == "/tmp/forge-local-1.png"
         assert provider.calls == 1
         assert image_generation_tool._FORGE_LOCAL_SINGLE_PASS_RESULTS["task-123"] == first
+
+    def test_dispatch_single_output_mode_reuses_cached_result_for_non_forge_provider(self, monkeypatch, tmp_path):
+        from tools import image_generation_tool
+        from agent import image_gen_registry as registry_module
+        from hermes_cli import plugins as plugins_module
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "config.yaml").write_text("image_gen:\n  provider: codex\n")
+
+        class _CountingCodexProvider(_FakeCodexProvider):
+            def __init__(self):
+                self.calls = 0
+
+            def generate(self, prompt, aspect_ratio="landscape", **kwargs):
+                self.calls += 1
+                return {
+                    "success": True,
+                    "image": f"/tmp/codex-single-{self.calls}.png",
+                    "model": "gpt-5.2-codex",
+                    "prompt": prompt,
+                    "aspect_ratio": aspect_ratio,
+                    "provider": "codex",
+                }
+
+        provider = _CountingCodexProvider()
+        monkeypatch.setattr(image_generation_tool, "_read_configured_image_provider", lambda: "codex")
+        monkeypatch.setattr(plugins_module, "_ensure_plugins_discovered", lambda force=False: None)
+        monkeypatch.setattr(registry_module, "get_provider", lambda name: provider if name == "codex" else None)
+
+        image_generation_tool.enable_single_output_task_mode("task-single")
+        try:
+            first = image_generation_tool._dispatch_to_plugin_provider("draw one cat", "square", task_id="task-single")
+            second = image_generation_tool._dispatch_to_plugin_provider("draw one cat", "square", task_id="task-single")
+        finally:
+            image_generation_tool.disable_single_output_task_mode("task-single")
+
+        assert first is not None
+        assert second is not None
+        assert json.loads(first)["image"] == "/tmp/codex-single-1.png"
+        assert json.loads(second)["image"] == "/tmp/codex-single-1.png"
+        assert provider.calls == 1
 
     def test_dispatch_reports_missing_registered_provider(self, monkeypatch, tmp_path):
         from tools import image_generation_tool
