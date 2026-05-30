@@ -72,6 +72,12 @@ from tools.tool_backend_helpers import (
 
 logger = logging.getLogger(__name__)
 
+# Single-pass guard for local Forge sessions: when a singular request has
+# already produced one image in the current task, later image_generate calls
+# reuse the same result instead of regenerating new candidates.
+_FORGE_LOCAL_SINGLE_PASS_RESULTS: Dict[str, str] = {}
+_FORGE_LOCAL_SINGLE_PASS_LOCK = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # FAL model catalog
@@ -951,7 +957,7 @@ def _read_configured_image_provider():
     return None
 
 
-def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
+def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str, task_id: str | None = None):
     """Route the call to a plugin-registered provider when one is selected.
 
     Returns a JSON string on dispatch, or ``None`` to fall through to the
@@ -966,6 +972,21 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
     configured = _read_configured_image_provider()
     if not configured:
         return None
+
+    # Local Forge singular requests are single-pass: once a task has already
+    # produced one image, return the same result on later calls rather than
+    # generating new candidates.
+    cache_key = None
+    if configured == "forge-local" and isinstance(task_id, str) and task_id.strip():
+        cache_key = task_id.strip()
+        with _FORGE_LOCAL_SINGLE_PASS_LOCK:
+            cached = _FORGE_LOCAL_SINGLE_PASS_RESULTS.get(cache_key)
+        if cached:
+            logger.info(
+                "forge-local single-pass guard: reusing cached image for task_id=%s",
+                cache_key,
+            )
+            return cached
 
     # Also read configured model so we can pass it to the plugin
     configured_model = _read_configured_image_model()
@@ -1027,7 +1048,12 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str):
             "error": "Provider returned a non-dict result",
             "error_type": "provider_contract",
         })
-    return json.dumps(result)
+
+    result_json = json.dumps(result)
+    if configured == "forge-local" and cache_key and result.get("success") and result.get("image"):
+        with _FORGE_LOCAL_SINGLE_PASS_LOCK:
+            _FORGE_LOCAL_SINGLE_PASS_RESULTS[cache_key] = result_json
+    return result_json
 
 
 def _handle_image_generate(args, **kw):
@@ -1035,10 +1061,11 @@ def _handle_image_generate(args, **kw):
     if not prompt:
         return tool_error("prompt is required for image generation")
     aspect_ratio = args.get("aspect_ratio", DEFAULT_ASPECT_RATIO)
+    task_id = kw.get("task_id")
 
     # Route to a plugin-registered provider if one is active (and it's
     # not the in-tree FAL path).
-    dispatched = _dispatch_to_plugin_provider(prompt, aspect_ratio)
+    dispatched = _dispatch_to_plugin_provider(prompt, aspect_ratio, task_id=task_id)
     if dispatched is not None:
         return dispatched
 

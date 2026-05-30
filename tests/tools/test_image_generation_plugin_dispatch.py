@@ -52,6 +52,46 @@ class TestPluginDispatch:
         assert payload["image"] == "/tmp/codex-test.png"
         assert payload["aspect_ratio"] == "square"
 
+    def test_dispatch_single_pass_guard_reuses_forge_local_result(self, monkeypatch, tmp_path):
+        from tools import image_generation_tool
+        from agent import image_gen_registry as registry_module
+        from hermes_cli import plugins as plugins_module
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "config.yaml").write_text("image_gen:\n  provider: forge-local\n")
+        image_generation_tool._FORGE_LOCAL_SINGLE_PASS_RESULTS.clear()
+
+        class _ForgeLocalProvider:
+            name = "forge-local"
+
+            def __init__(self):
+                self.calls = 0
+
+            def generate(self, prompt, aspect_ratio="landscape", **kwargs):
+                self.calls += 1
+                return {
+                    "success": True,
+                    "provider": self.name,
+                    "image": f"/tmp/forge-local-{self.calls}.png",
+                    "prompt": prompt,
+                    "aspect_ratio": aspect_ratio,
+                }
+
+        provider = _ForgeLocalProvider()
+        monkeypatch.setattr(image_generation_tool, "_read_configured_image_provider", lambda: "forge-local")
+        monkeypatch.setattr(plugins_module, "_ensure_plugins_discovered", lambda force=False: None)
+        monkeypatch.setattr(registry_module, "get_provider", lambda name: provider if name == "forge-local" else None)
+
+        first = image_generation_tool._dispatch_to_plugin_provider("draw a robot", "square", task_id="task-123")
+        second = image_generation_tool._dispatch_to_plugin_provider("draw a robot", "square", task_id="task-123")
+
+        assert first is not None
+        assert second is not None
+        assert json.loads(first)["image"] == "/tmp/forge-local-1.png"
+        assert json.loads(second)["image"] == "/tmp/forge-local-1.png"
+        assert provider.calls == 1
+        assert image_generation_tool._FORGE_LOCAL_SINGLE_PASS_RESULTS["task-123"] == first
+
     def test_dispatch_reports_missing_registered_provider(self, monkeypatch, tmp_path):
         from tools import image_generation_tool
         from hermes_cli import plugins as plugins_module
