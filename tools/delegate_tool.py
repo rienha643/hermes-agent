@@ -277,6 +277,38 @@ def _extract_output_tail(
     return tail
 
 
+_ARTIFACT_PATH_RE = re.compile(
+    r"(?<![/:\w.])(?:~/|/)(?:[\w.\-]+/)*[\w.\-]+\.(?:"
+    r"png|jpg|jpeg|gif|webp|bmp|tiff|svg|mp4|mov|avi|mkv|webm|pdf|docx|doc|odt|rtf|"
+    r"txt|md|xlsx|xls|ods|csv|tsv|json|xml|yaml|yml|pptx|ppt|odp|key|zip|tar|gz|"
+    r"tgz|bz2|xz|7z|rar|html|htm)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_artifact_paths(text: Any) -> List[str]:
+    """Return plain absolute/local paths from arbitrary text.
+
+    Unlike gateway.platforms.base.BasePlatformAdapter.extract_local_files(),
+    this helper intentionally does **not** exclude inline code spans.  The
+    delegate_task summary has historically wrapped image paths in backticks,
+    which blocks gateway-side path extraction.  We surface the same paths as a
+    dedicated top-level ``artifacts`` list so the gateway can attach them.
+    """
+    if not isinstance(text, str) or not text:
+        return []
+
+    seen: set[str] = set()
+    paths: List[str] = []
+    for match in _ARTIFACT_PATH_RE.finditer(text):
+        expanded = os.path.expanduser(match.group(0))
+        if not os.path.isfile(expanded) or expanded in seen:
+            continue
+        seen.add(expanded)
+        paths.append(expanded)
+    return paths
+
+
 def _looks_like_error_output(content: str) -> bool:
     """Conservative stderr/error detector for tool-result previews.
 
@@ -2506,9 +2538,19 @@ def delegate_task(
 
     total_duration = round(time.monotonic() - overall_start, 2)
 
+    artifacts: List[str] = []
+    seen_artifacts: set[str] = set()
+    for entry in results:
+        for candidate in _extract_artifact_paths(entry.get("summary")):
+            if candidate in seen_artifacts:
+                continue
+            seen_artifacts.add(candidate)
+            artifacts.append(candidate)
+
     return json.dumps(
         {
             "results": results,
+            "artifacts": artifacts,
             "total_duration_seconds": total_duration,
         },
         ensure_ascii=False,

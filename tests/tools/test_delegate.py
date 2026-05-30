@@ -9,13 +9,16 @@ Run with:  python -m pytest tests/test_delegate.py -v
    or:     python tests/test_delegate.py
 """
 
+import asyncio
+import importlib
 import json
 import os
 import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from tools.delegate_tool import (
     DELEGATE_BLOCKED_TOOLS,
@@ -61,6 +64,65 @@ def _make_mock_parent(depth=0):
     parent.tool_progress_callback = None
     parent.thinking_callback = None
     return parent
+
+
+TINY_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAgMBAp+L"
+    "8QAAAABJRU5ErkJggg=="
+)
+
+
+def _generate_forge_local_image_path() -> Path:
+    forge_mod = importlib.import_module("plugins.image_gen.forge-local")
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "images": [TINY_PNG_B64],
+                "parameters": captured.get("payload", {}),
+                "info": "ok",
+            }
+
+    def fake_post(url, json=None, timeout=None):
+        captured["url"] = url
+        captured["payload"] = json
+        captured["timeout"] = timeout
+        return Response()
+
+    with patch.object(forge_mod.requests, "post", fake_post), \
+         patch.object(forge_mod, "_resolve_base_url", lambda: "http://127.0.0.1:7860"), \
+         patch.object(forge_mod, "_resolve_model", lambda: "Nullstyle_v20"):
+        result = forge_mod.ForgeLocalImageGenProvider().generate(
+            "a cute robot on a desk",
+            aspect_ratio="square",
+        )
+
+    path = Path(result["image"])
+    assert path.exists()
+    return path
+
+
+def _generate_openai_image_path() -> Path:
+    openai_plugin = importlib.import_module("plugins.image_gen.openai")
+    fake_client = MagicMock()
+    fake_client.images.generate.return_value = SimpleNamespace(
+        data=[SimpleNamespace(b64_json=TINY_PNG_B64, url=None, revised_prompt=None)]
+    )
+    fake_openai = MagicMock()
+    fake_openai.OpenAI.return_value = fake_client
+
+    with patch.dict("sys.modules", {"openai": fake_openai}), \
+         patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False):
+        provider = openai_plugin.OpenAIImageGenProvider()
+        result = provider.generate("a cat")
+
+    path = Path(result["image"])
+    assert path.exists()
+    return path
 
 
 class TestDelegateRequirements(unittest.TestCase):
@@ -171,6 +233,7 @@ class TestDelegateTask(unittest.TestCase):
         self.addCleanup(self._tmpdir.cleanup)
         self.hermes_root = Path(self._tmpdir.name) / ".hermes"
         self.hermes_root.mkdir(parents=True)
+        (self.hermes_root / "logs").mkdir(parents=True)
 
         for profile_name in ("coder", "artist"):
             profile_dir = self.hermes_root / "profiles" / profile_name
