@@ -808,6 +808,19 @@ def _build_no_backend_setup_message() -> str:
     return "\n".join(lines)
 
 
+def _is_openai_image_provider(configured_provider: Optional[str]) -> bool:
+    """Return True when the configured provider is an explicit OpenAI route.
+
+    The OpenAI and OpenAI Codex image backends are remote HTTP paths, so we
+    can skip the local HTTP backend availability probe when either one is
+    explicitly selected in config.
+    """
+    if not isinstance(configured_provider, str):
+        return False
+    normalized = configured_provider.strip().lower()
+    return normalized == "openai" or normalized.startswith("openai-codex")
+
+
 def check_image_generation_requirements() -> bool:
     """True if any image gen backend is available.
 
@@ -821,6 +834,10 @@ def check_image_generation_requirements() -> bool:
     should still expose the tool. The active selection among ready
     providers is resolved per-call by ``image_gen.provider``.
     """
+    configured_provider = _read_configured_image_provider()
+    if _is_openai_image_provider(configured_provider):
+        return True
+
     try:
         if check_fal_api_key():
             # Trigger the lazy fal_client import here as the SDK presence

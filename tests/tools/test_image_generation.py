@@ -374,6 +374,72 @@ class TestRegistryIntegration:
         assert set(enum) == {"landscape", "square", "portrait"}
 
 
+class TestImageGenerationAvailabilityChecks:
+    @pytest.mark.parametrize("configured_provider", ["openai", "openai-codex"])
+    def test_explicit_openai_provider_skips_local_backend_probe(
+        self, image_tool, monkeypatch, configured_provider
+    ):
+        import agent.image_gen_registry as image_gen_registry
+        import hermes_cli.plugins as plugins
+
+        monkeypatch.setattr(
+            image_tool, "_read_configured_image_provider", lambda: configured_provider
+        )
+        monkeypatch.setattr(image_tool, "check_fal_api_key", lambda: False)
+        monkeypatch.setattr(
+            image_gen_registry,
+            "list_providers",
+            lambda: (_ for _ in ()).throw(
+                AssertionError(
+                    "local backend probe should be skipped for explicit OpenAI providers"
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            plugins,
+            "_ensure_plugins_discovered",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError(
+                    "plugin discovery should be skipped for explicit OpenAI providers"
+                )
+            ),
+        )
+
+        assert image_tool.check_image_generation_requirements() is True
+
+    def test_explicit_local_backend_still_probes_availability(self, image_tool, monkeypatch):
+        import agent.image_gen_registry as image_gen_registry
+        import hermes_cli.plugins as plugins
+        from unittest.mock import MagicMock
+
+        monkeypatch.setattr(image_tool, "_read_configured_image_provider", lambda: "forge-local")
+        monkeypatch.setattr(image_tool, "check_fal_api_key", lambda: False)
+        monkeypatch.setattr(plugins, "_ensure_plugins_discovered", lambda *args, **kwargs: None)
+
+        provider = MagicMock()
+        provider.is_available.return_value = True
+        monkeypatch.setattr(image_gen_registry, "list_providers", lambda: [provider])
+
+        assert image_tool.check_image_generation_requirements() is True
+        provider.is_available.assert_called_once_with()
+
+    def test_autodetect_path_still_probes_available_providers(self, image_tool, monkeypatch):
+        import agent.image_gen_registry as image_gen_registry
+        import hermes_cli.plugins as plugins
+        from unittest.mock import MagicMock
+
+        monkeypatch.setattr(image_tool, "_read_configured_image_provider", lambda: None)
+        monkeypatch.setattr(image_tool, "check_fal_api_key", lambda: False)
+        monkeypatch.setattr(plugins, "_ensure_plugins_discovered", lambda *args, **kwargs: None)
+
+        provider = MagicMock()
+        provider.is_available.return_value = True
+        monkeypatch.setattr(image_gen_registry, "list_providers", lambda: [provider])
+
+        assert image_tool.check_image_generation_requirements() is True
+        provider.is_available.assert_called_once_with()
+
+
 # ---------------------------------------------------------------------------
 # Managed gateway 4xx translation
 # ---------------------------------------------------------------------------
