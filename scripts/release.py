@@ -19,9 +19,10 @@ Usage:
     # Override CalVer date (e.g. for a belated release)
     python scripts/release.py --bump minor --publish --date 2026.3.15
 """
-
 import argparse
+import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -31,6 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+GIT_PUSH_HOME = "/home/ai_agent"
 VERSION_FILE = REPO_ROOT / "hermes_cli" / "__init__.py"
 PYPROJECT_FILE = REPO_ROOT / "pyproject.toml"
 
@@ -1394,6 +1396,37 @@ def git_result(*args, cwd=None):
     )
 
 
+def setup_git_https_auth(*, cwd=None) -> dict[str, str]:
+    """Prime gh-backed HTTPS credentials under the canonical HOME for pushes."""
+    env = {**os.environ, "HOME": GIT_PUSH_HOME}
+    gh_bin = shutil.which("gh")
+    if not gh_bin:
+        raise RuntimeError("gh CLI not found; cannot set up HTTPS git auth")
+    result = subprocess.run(
+        [gh_bin, "auth", "setup-git"],
+        capture_output=True,
+        text=True,
+        cwd=cwd or str(REPO_ROOT),
+        env=env,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "gh auth setup-git failed"
+        raise RuntimeError(detail)
+    return env
+
+
+def push_git_refs(*, cwd=None) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+    push_env = setup_git_https_auth(cwd=cwd)
+    result = subprocess.run(
+        ["git", "push", "origin", "HEAD", "--tags"],
+        capture_output=True,
+        text=True,
+        cwd=cwd or str(REPO_ROOT),
+        env=push_env,
+    )
+    return result, push_env
+
+
 def get_last_tag():
     """Get the most recent CalVer tag."""
     tags = git("tag", "--list", "v20*", "--sort=-v:refname")
@@ -1898,7 +1931,7 @@ def main():
         print(f"  ✓ Created tag {tag_name}")
 
         # Push
-        push_result = git_result("push", "origin", "HEAD", "--tags")
+        push_result, push_env = push_git_refs(cwd=REPO_ROOT)
         if push_result.returncode == 0:
             print(f"  ✓ Pushed to origin")
         else:
@@ -1931,6 +1964,7 @@ def main():
                 gh_cmd,
                 capture_output=True, text=True,
                 cwd=str(REPO_ROOT),
+                env=push_env,
             )
         else:
             result = None
