@@ -483,6 +483,7 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 from gateway.config import Platform, PlatformConfig
+from gateway.document_artifacts import is_document_artifact_path, publish_document_artifact
 from gateway.session import SessionSource, build_session_key
 from hermes_constants import get_hermes_dir, get_hermes_home
 
@@ -3840,6 +3841,14 @@ class BasePlatformAdapter(ABC):
                         await asyncio.sleep(human_delay)
                     try:
                         ext = Path(media_path).suffix.lower()
+                        if is_document_artifact_path(media_path):
+                            media_path = str(
+                                publish_document_artifact(
+                                    Path(media_path),
+                                    folder_name=Path(media_path).parent.name or "misc",
+                                )
+                            )
+                            ext = Path(media_path).suffix.lower()
                         if should_send_media_as_audio(self.platform, ext, is_voice=is_voice):
                             media_result = await self.send_voice(
                                 chat_id=event.source.chat_id,
@@ -3869,6 +3878,13 @@ class BasePlatformAdapter(ABC):
                     if human_delay > 0:
                         await asyncio.sleep(human_delay)
                     try:
+                        if is_document_artifact_path(file_path):
+                            file_path = str(
+                                publish_document_artifact(
+                                    Path(file_path),
+                                    folder_name=Path(file_path).parent.name or "misc",
+                                )
+                            )
                         ext = Path(file_path).suffix.lower()
                         if ext in _VIDEO_EXTS:
                             await self.send_video(

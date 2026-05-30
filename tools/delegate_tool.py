@@ -23,7 +23,6 @@ import re
 
 logger = logging.getLogger(__name__)
 import os
-import shutil
 import threading
 import time
 from concurrent.futures import (
@@ -352,45 +351,13 @@ def _publish_document_artifact_for_delegate(path_text: str) -> str:
         return path_text
 
     try:
-        from hermes_constants import get_hermes_work_dir
-        from nas_sync_hooks import queue_nas_sync_hook
+        from gateway.document_artifacts import publish_document_artifact
     except Exception:
         logger.debug("Could not import document publish helpers", exc_info=True)
         return str(source)
 
     try:
-        documents_root = get_hermes_work_dir("Documents")
-        resolved_documents_root = documents_root.resolve(strict=False)
-        resolved_source = source.resolve(strict=False)
-
-        if resolved_source == resolved_documents_root or resolved_documents_root in resolved_source.parents:
-            published_path = resolved_source
-            relative_parent = published_path.parent.relative_to(resolved_documents_root)
-            scope = "" if str(relative_parent) == "." else str(relative_parent).replace("/", os.sep)
-            source_root = published_path.parent
-        else:
-            preferred_folder = source.parent.name.strip() if source.parent.name.strip() else "misc"
-            published_dir = get_hermes_work_dir("Documents", preferred_folder)
-            published_path = published_dir / source.name
-            if published_path.resolve(strict=False) != resolved_source:
-                try:
-                    shutil.copy2(source, published_path)
-                except PermissionError as exc:
-                    logger.warning(
-                        "Delegate document metadata copy failed; falling back to content copy: %s",
-                        exc,
-                    )
-                    shutil.copyfile(source, published_path)
-            scope = preferred_folder
-            source_root = published_dir
-
-        queue_nas_sync_hook(
-            category="documents",
-            scope=scope,
-            artifact_path=published_path,
-            source_root=source_root,
-        )
-        return str(published_path)
+        return str(publish_document_artifact(source, folder_name=source.parent.name or "misc"))
     except Exception:
         logger.debug("Delegate document publish/NAS hook failed for %s", source, exc_info=True)
         return str(source)

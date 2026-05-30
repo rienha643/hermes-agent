@@ -1069,6 +1069,12 @@ class TestBuildSystemPrompt:
         prompt = agent._build_system_prompt(system_message="Custom instruction")
         assert "Custom instruction" in prompt
 
+    def test_document_style_guidance_is_present(self, agent):
+        from agent.prompt_builder import DOCUMENT_STYLE_GUIDANCE
+
+        prompt = agent._build_system_prompt()
+        assert DOCUMENT_STYLE_GUIDANCE in prompt
+
     def test_memory_guidance_when_memory_tool_loaded(self, agent_with_memory_tool):
         from agent.prompt_builder import MEMORY_GUIDANCE
 

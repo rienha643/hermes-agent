@@ -1,0 +1,353 @@
+"""Helpers for publishing document artifacts to the HermesWork Documents tree.
+
+This module centralizes two behaviors that used to be spread across the
+delegate, gateway delivery, and response-dispatch code paths:
+
+1. Canonicalize all document outputs under ``HermesWork/Documents`` before
+   they are surfaced to the user.
+2. Queue the NAS documents sync hook for the published artifact.
+
+It also performs a best-effort docx modernization pass for minimal OOXML
+packages so Word opens them with the expected settings/theme/font table/
+numbering parts present.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import tempfile
+import zipfile
+from pathlib import Path
+from typing import Optional
+from xml.etree import ElementTree as ET
+
+from hermes_constants import get_hermes_work_dir
+from nas_sync_hooks import queue_nas_sync_hook
+
+logger = logging.getLogger(__name__)
+
+_DOCUMENT_ARTIFACT_EXTENSIONS = {
+    ".docx",
+    ".doc",
+    ".odt",
+    ".rtf",
+    ".pdf",
+    ".md",
+    ".txt",
+    ".pptx",
+    ".ppt",
+    ".xlsx",
+    ".xls",
+}
+
+_DOCX_CONTENT_TYPES = {
+    "settings": "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
+    "fontTable": "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml",
+    "numbering": "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
+    "theme": "application/vnd.openxmlformats-officedocument.theme+xml",
+}
+
+_DOCX_REL_TYPES = {
+    "settings": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings",
+    "fontTable": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable",
+    "numbering": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering",
+    "theme": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme",
+}
+
+_DOCX_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_REL_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/relationships"
+_CT_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/content-types"
+_DRAWINGML_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+ET.register_namespace("w", _DOCX_NAMESPACE)
+ET.register_namespace("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships")
+ET.register_namespace("a", _DRAWINGML_NAMESPACE)
+
+
+_MINIMAL_SETTINGS_XML = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="{_DOCX_NAMESPACE}">
+  <w:zoom w:percent="100"/>
+  <w:defaultTabStop w:val="720"/>
+  <w:characterSpacingControl w:val="doNotCompress"/>
+  <w:compat>
+    <w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/>
+    <w:compatSetting w:name="overrideTableStyleFontSizeAndJustification" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/>
+    <w:compatSetting w:name="enableOpenTypeFeatures" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/>
+    <w:compatSetting w:name="doNotExpandShiftReturn" w:uri="http://schemas.microsoft.com/office/word" w:val="1"/>
+  </w:compat>
+  <w:themeFontLang w:val="en-US" w:eastAsia="en-US" w:bidi="ar-SA"/>
+</w:settings>
+"""
+
+_MINIMAL_FONT_TABLE_XML = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:fonts xmlns:w="{_DOCX_NAMESPACE}">
+  <w:font w:name="Aptos">
+    <w:panose1 w:val="020B0604030504040204"/>
+    <w:charset w:val="00"/>
+    <w:family w:val="swiss"/>
+    <w:pitch w:val="variable"/>
+  </w:font>
+  <w:font w:name="Aptos Display">
+    <w:panose1 w:val="020B0604030504040204"/>
+    <w:charset w:val="00"/>
+    <w:family w:val="swiss"/>
+    <w:pitch w:val="variable"/>
+  </w:font>
+</w:fonts>
+"""
+
+_MINIMAL_NUMBERING_XML = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="{_DOCX_NAMESPACE}">
+  <w:abstractNum w:abstractNumId="0">
+    <w:nsid w:val="00000000"/>
+    <w:multiLevelType w:val="hybridMultilevel"/>
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="decimal"/>
+      <w:lvlText w:val="%1."/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr>
+        <w:ind w:left="720" w:hanging="360"/>
+      </w:pPr>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1">
+    <w:abstractNumId w:val="0"/>
+  </w:num>
+</w:numbering>
+"""
+
+_MINIMAL_THEME_XML = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="{_DRAWINGML_NAMESPACE}" name="Hermes Theme">
+  <a:themeElements>
+    <a:clrScheme name="Hermes">
+      <a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>
+      <a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
+      <a:dk2><a:srgbClr val="1F1F1F"/></a:dk2>
+      <a:lt2><a:srgbClr val="F3F3F3"/></a:lt2>
+      <a:accent1><a:srgbClr val="4472C4"/></a:accent1>
+      <a:accent2><a:srgbClr val="ED7D31"/></a:accent2>
+      <a:accent3><a:srgbClr val="A5A5A5"/></a:accent3>
+      <a:accent4><a:srgbClr val="FFC000"/></a:accent4>
+      <a:accent5><a:srgbClr val="5B9BD5"/></a:accent5>
+      <a:accent6><a:srgbClr val="70AD47"/></a:accent6>
+      <a:hlink><a:srgbClr val="0563C1"/></a:hlink>
+      <a:folHlink><a:srgbClr val="954F72"/></a:folHlink>
+    </a:clrScheme>
+    <a:fontScheme name="Hermes">
+      <a:majorFont>
+        <a:latin typeface="Aptos Display"/>
+        <a:ea typeface=""/>
+        <a:cs typeface=""/>
+      </a:majorFont>
+      <a:minorFont>
+        <a:latin typeface="Aptos"/>
+        <a:ea typeface=""/>
+        <a:cs typeface=""/>
+      </a:minorFont>
+    </a:fontScheme>
+    <a:fmtScheme name="Hermes">
+      <a:fillStyleLst>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+      </a:fillStyleLst>
+      <a:lnStyleLst>
+        <a:ln w="9525"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln>
+        <a:ln w="25400"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln>
+        <a:ln w="38100"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln>
+      </a:lnStyleLst>
+      <a:effectStyleLst>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+      </a:effectStyleLst>
+      <a:bgFillStyleLst>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+      </a:bgFillStyleLst>
+    </a:fmtScheme>
+  </a:themeElements>
+  <a:objectDefaults/>
+  <a:extraClrSchemeLst/>
+</a:theme>
+"""
+
+
+def is_document_artifact_path(path: str | Path) -> bool:
+    """Return True when *path* looks like a document artifact we should publish."""
+    suffix = Path(str(path)).suffix.lower()
+    return suffix in _DOCUMENT_ARTIFACT_EXTENSIONS
+
+
+def _ensure_xml_override(root: ET.Element, part_name: str, content_type: str) -> bool:
+    for override in root.findall(f"{{{_CT_NAMESPACE}}}Override"):
+        if override.get("PartName") == part_name:
+            return False
+    ET.SubElement(root, f"{{{_CT_NAMESPACE}}}Override", {"PartName": part_name, "ContentType": content_type})
+    return True
+
+
+def _ensure_relationship(root: ET.Element, rel_type: str, target: str) -> bool:
+    existing = [rel.get("Type") for rel in root.findall(f"{{{_REL_NAMESPACE}}}Relationship")]
+    if rel_type in existing:
+        return False
+    next_id = 1
+    for rel in root.findall(f"{{{_REL_NAMESPACE}}}Relationship"):
+        rid = rel.get("Id", "")
+        if rid.startswith("rId"):
+            try:
+                next_id = max(next_id, int(rid[3:]) + 1)
+            except ValueError:
+                continue
+    ET.SubElement(
+        root,
+        f"{{{_REL_NAMESPACE}}}Relationship",
+        {
+            "Id": f"rId{next_id}",
+            "Type": rel_type,
+            "Target": target,
+        },
+    )
+    return True
+
+
+def _modernize_docx_package(docx_path: Path) -> bool:
+    """Add common Word parts to minimal OOXML docx packages in place.
+
+    Returns True when the archive was rewritten.
+    """
+    try:
+        with zipfile.ZipFile(docx_path, "r") as archive:
+            names = set(archive.namelist())
+            if "word/document.xml" not in names:
+                return False
+            payloads = {name: archive.read(name) for name in names}
+    except Exception:
+        logger.debug("DOCX modernization skipped: could not read %s", docx_path, exc_info=True)
+        return False
+
+    changed = False
+
+    if "word/settings.xml" not in payloads:
+        payloads["word/settings.xml"] = _MINIMAL_SETTINGS_XML.encode("utf-8")
+        changed = True
+    if "word/fontTable.xml" not in payloads:
+        payloads["word/fontTable.xml"] = _MINIMAL_FONT_TABLE_XML.encode("utf-8")
+        changed = True
+    if "word/numbering.xml" not in payloads:
+        payloads["word/numbering.xml"] = _MINIMAL_NUMBERING_XML.encode("utf-8")
+        changed = True
+    if "word/theme/theme1.xml" not in payloads:
+        payloads["word/theme/theme1.xml"] = _MINIMAL_THEME_XML.encode("utf-8")
+        changed = True
+
+    ct_name = "[Content_Types].xml"
+    try:
+        ct_root = ET.fromstring(payloads[ct_name])
+    except Exception:
+        ct_root = ET.fromstring(
+            f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="{_CT_NAMESPACE}"/>
+"""
+        )
+        changed = True
+    changed |= _ensure_xml_override(ct_root, "/word/settings.xml", _DOCX_CONTENT_TYPES["settings"])
+    changed |= _ensure_xml_override(ct_root, "/word/fontTable.xml", _DOCX_CONTENT_TYPES["fontTable"])
+    changed |= _ensure_xml_override(ct_root, "/word/numbering.xml", _DOCX_CONTENT_TYPES["numbering"])
+    changed |= _ensure_xml_override(ct_root, "/word/theme/theme1.xml", _DOCX_CONTENT_TYPES["theme"])
+    payloads[ct_name] = ET.tostring(ct_root, encoding="utf-8", xml_declaration=True)
+
+    rels_name = "word/_rels/document.xml.rels"
+    if rels_name in payloads:
+        try:
+            rel_root = ET.fromstring(payloads[rels_name])
+        except Exception:
+            rel_root = ET.Element(f"{{{_REL_NAMESPACE}}}Relationships")
+            changed = True
+    else:
+        rel_root = ET.Element(f"{{{_REL_NAMESPACE}}}Relationships")
+        changed = True
+    changed |= _ensure_relationship(rel_root, _DOCX_REL_TYPES["settings"], "settings.xml")
+    changed |= _ensure_relationship(rel_root, _DOCX_REL_TYPES["fontTable"], "fontTable.xml")
+    changed |= _ensure_relationship(rel_root, _DOCX_REL_TYPES["numbering"], "numbering.xml")
+    changed |= _ensure_relationship(rel_root, _DOCX_REL_TYPES["theme"], "theme/theme1.xml")
+    payloads[rels_name] = ET.tostring(rel_root, encoding="utf-8", xml_declaration=True)
+
+    if not changed:
+        return False
+
+    fd, tmp_name = tempfile.mkstemp(dir=str(docx_path.parent), suffix=".tmp", prefix=docx_path.name + ".")
+    tmp_path = Path(tmp_name)
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as out_zip:
+            for name, data in payloads.items():
+                out_zip.writestr(name, data)
+        tmp_path.replace(docx_path)
+        return True
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+
+
+def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None) -> Path:
+    """Publish *source* into HermesWork/Documents and queue the NAS sync hook.
+
+    If the source already lives under HermesWork/Documents, it is left in place
+    and only the NAS hook is queued. Otherwise the file is copied into a
+    subfolder chosen from *folder_name* (or the source parent's name).
+
+    DOCX files receive a best-effort modernization pass before the hook is
+    queued so the published artifact carries standard settings/theme/font table
+    and numbering parts.
+    """
+    if not isinstance(source, Path):
+        source = Path(source)
+    source = source.expanduser().resolve(strict=False)
+    if not source.exists() or not source.is_file() or not is_document_artifact_path(source):
+        return source
+
+    try:
+        documents_root = get_hermes_work_dir("Documents")
+        resolved_documents_root = documents_root.resolve(strict=False)
+        if resolved_documents_root in source.parents or source == resolved_documents_root:
+            published_path = source
+            relative_parent = published_path.parent.relative_to(resolved_documents_root)
+            scope = "" if str(relative_parent) == "." else str(relative_parent).replace("/", os.sep)
+            source_root = published_path.parent
+        else:
+            preferred_folder = (folder_name or source.parent.name or "misc").strip() or "misc"
+            published_dir = get_hermes_work_dir("Documents", preferred_folder)
+            published_path = published_dir / source.name
+            if published_path.resolve(strict=False) != source:
+                try:
+                    shutil.copy2(source, published_path)
+                except PermissionError as exc:
+                    logger.warning(
+                        "Document artifact metadata copy failed; falling back to content copy: %s",
+                        exc,
+                    )
+                    shutil.copyfile(source, published_path)
+            scope = preferred_folder
+            source_root = published_dir
+
+        if published_path.suffix.lower() == ".docx":
+            _modernize_docx_package(published_path)
+
+        queue_nas_sync_hook(
+            category="documents",
+            scope=scope,
+            artifact_path=published_path,
+            source_root=source_root,
+        )
+        return published_path
+    except Exception:
+        logger.debug("Document publish/NAS hook failed for %s", source, exc_info=True)
+        return source

@@ -11939,6 +11939,15 @@ class GatewayRunner:
                 # Send media files
                 for media_path, _is_voice in (media_files or []):
                     try:
+                        from gateway.document_artifacts import is_document_artifact_path, publish_document_artifact
+
+                        if is_document_artifact_path(media_path):
+                            media_path = str(
+                                publish_document_artifact(
+                                    Path(media_path),
+                                    folder_name=Path(media_path).parent.name or "misc",
+                                )
+                            )
                         await adapter.send_document(
                             chat_id=source.chat_id,
                             file_path=media_path,

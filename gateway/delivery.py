@@ -9,14 +9,12 @@ Routes messages to the appropriate destination based on:
 """
 
 import logging
-import shutil
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 
-from nas_sync_hooks import queue_nas_sync_hook
-from hermes_constants import get_hermes_work_dir
+from gateway.document_artifacts import publish_document_artifact
 from hermes_cli.config import get_hermes_home
 
 logger = logging.getLogger(__name__)
@@ -169,23 +167,7 @@ class DeliveryRouter:
     
     def _publish_document_artifact(self, source: Path, *, folder_name: str) -> Path:
         """Copy a cached document into the standard HermesWork Documents tree."""
-        published_dir = get_hermes_work_dir("Documents", folder_name)
-        published_path = published_dir / source.name
-        try:
-            shutil.copy2(source, published_path)
-        except PermissionError as exc:
-            logger.warning(
-                "Document artifact metadata copy failed; falling back to content copy: %s",
-                exc,
-            )
-            shutil.copyfile(source, published_path)
-        queue_nas_sync_hook(
-            category="documents",
-            scope=folder_name,
-            artifact_path=published_path,
-            source_root=published_dir,
-        )
-        return published_path
+        return publish_document_artifact(source, folder_name=folder_name)
 
     async def deliver(
         self,
