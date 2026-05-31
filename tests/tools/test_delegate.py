@@ -35,6 +35,7 @@ from tools.delegate_tool import (
     _build_child_system_prompt,
     _format_specialist_frame,
     _format_specialist_result_frame,
+    _infer_delegate_image_metadata,
     _is_single_output_image_task,
     _resolve_specialist_worker_label,
     _strip_blocked_tools,
@@ -223,6 +224,26 @@ class TestChildSystemPrompt(unittest.TestCase):
         self.assertIn("SINGLE-OUTPUT IMAGE RULES", prompt)
         self.assertIn("Call image_generate at most once", prompt)
         self.assertIn("MUST NOT return or upload an older file", prompt)
+
+    def test_image_metadata_hints_included_for_delegated_worker(self):
+        prompt = _build_child_system_prompt(
+            "망각구역 주인공 컨셉 이미지 1장 생성",
+            single_output_image=True,
+            image_project_name="망각구역",
+            image_artifact_name="주인공",
+        )
+        self.assertIn("IMAGE PROJECT METADATA", prompt)
+        self.assertIn("project_name: `망각구역`", prompt)
+        self.assertIn("artifact_name: `주인공`", prompt)
+        self.assertIn("pass these exact tool args", prompt)
+
+    def test_infer_delegate_image_metadata_handles_validation_prompts(self):
+        project_name, artifact_name = _infer_delegate_image_metadata(
+            "망각구역 검증용 이미지 1장 생성",
+            None,
+        )
+        self.assertEqual(project_name, "망각구역")
+        self.assertEqual(artifact_name, "검증용이미지")
 
     def test_single_output_detection_ignores_negated_multi_output_words(self):
         self.assertTrue(
@@ -530,7 +551,7 @@ class TestDelegateTask(unittest.TestCase):
         self.assertEqual(kwargs["category"], "documents")
         self.assertEqual(kwargs["artifact_path"], published)
         self.assertEqual(kwargs["source_root"], published.parent)
-        self.assertEqual(kwargs["scope"], "worker")
+        self.assertEqual(kwargs["scope"], "260601_worker")
 
     @patch("tools.delegate_tool._run_single_child")
     def test_batch_mode_accepts_json_string_tasks(self, mock_run):
@@ -1556,6 +1577,36 @@ class TestBlockedTools(unittest.TestCase):
 
 class TestDelegationCredentialResolution(unittest.TestCase):
     """Tests for provider:model credential resolution in delegation config."""
+
+    @patch("tools.delegate_tool._profile_execution_runtime")
+    @patch("tools.delegate_tool._load_config")
+    @patch("run_agent.AIAgent")
+    def test_single_output_image_child_threads_project_metadata(self, MockAgent, mock_cfg, mock_profile_runtime):
+        mock_cfg.return_value = {"max_iterations": 50, "reasoning_effort": ""}
+        mock_profile_runtime.return_value.__enter__.return_value = None
+        mock_profile_runtime.return_value.__exit__.return_value = False
+        parent = _make_mock_parent(depth=0)
+        parent.enabled_toolsets = ["image_gen", "terminal", "file", "vision"]
+
+        _build_child_agent(
+            task_index=0,
+            goal="망각구역 주인공 컨셉 이미지 1장 생성",
+            context=None,
+            toolsets=["terminal", "file", "vision"],
+            model=None,
+            max_iterations=10,
+            task_count=1,
+            parent_agent=parent,
+            role="leaf",
+            profile="artist",
+            single_output_image=True,
+        )
+
+        call_kwargs = MockAgent.call_args.kwargs
+        self.assertEqual(call_kwargs["enabled_toolsets"], ["file", "vision", "image_gen"])
+        self.assertIn("IMAGE PROJECT METADATA", call_kwargs["ephemeral_system_prompt"])
+        self.assertIn("project_name: `망각구역`", call_kwargs["ephemeral_system_prompt"])
+        self.assertIn("artifact_name: `주인공`", call_kwargs["ephemeral_system_prompt"])
 
     @patch("tools.delegate_tool._profile_execution_runtime")
     @patch("tools.delegate_tool._load_config")

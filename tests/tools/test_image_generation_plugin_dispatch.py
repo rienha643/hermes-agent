@@ -208,7 +208,50 @@ class TestPluginDispatch:
             "aspect_ratio": "portrait",
             "task_id": "task-3",
             "project_name": "망각구역",
-            "artifact_name": "이미지",
+            "artifact_name": "검증용이미지",
+        }
+
+    def test_handle_image_generate_uses_task_metadata_registry(self, monkeypatch, tmp_path):
+        from tools import image_generation_tool
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        captured = {}
+
+        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None):
+            captured.update(
+                {
+                    "prompt": prompt,
+                    "aspect_ratio": aspect_ratio,
+                    "task_id": task_id,
+                    "project_name": project_name,
+                    "artifact_name": artifact_name,
+                }
+            )
+            return json.dumps({"success": True, "image": "/tmp/result.png"})
+
+        monkeypatch.setattr(image_generation_tool, "_dispatch_to_plugin_provider", fake_dispatch)
+        image_generation_tool.register_image_task_metadata(
+            "child-task-1",
+            project_name="망각구역",
+            artifact_name="주인공",
+        )
+
+        result = image_generation_tool._handle_image_generate(
+            {
+                "prompt": "주인공 컨셉 이미지 1장 생성",
+                "aspect_ratio": "square",
+            },
+            task_id="child-task-1",
+        )
+
+        assert json.loads(result)["success"] is True
+        assert captured == {
+            "prompt": "주인공 컨셉 이미지 1장 생성",
+            "aspect_ratio": "square",
+            "task_id": "child-task-1",
+            "project_name": "망각구역",
+            "artifact_name": "주인공",
         }
 
     def test_dispatch_single_output_mode_reuses_cached_result_for_non_forge_provider(self, monkeypatch, tmp_path):

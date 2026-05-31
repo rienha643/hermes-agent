@@ -438,6 +438,49 @@ def _requires_image_gen_toolset(
     return bool(_IMAGE_TASK_RE.search(haystack))
 
 
+def _infer_delegate_image_metadata(
+    goal: Optional[str],
+    context: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Infer project routing hints for delegated image tasks.
+
+    The worker prompt needs explicit metadata so the model emits the
+    corresponding ``image_generate`` args instead of relying on fallback
+    publishing heuristics later in the provider pipeline.
+    """
+    haystack = "\n".join(part for part in [goal or "", context or ""] if part)
+
+    project_name: Optional[str] = None
+    if re.search(r"(?<!\\w)망각구역(?!\\w)", haystack):
+        project_name = "망각구역"
+
+    artifact_name: Optional[str] = None
+    if re.search(r"(?<!\\w)주인공(?!\\w)", haystack):
+        artifact_name = "주인공"
+    elif re.search(r"검증용\s*이미지", haystack):
+        artifact_name = "검증용이미지"
+    else:
+        # Fallback: capture the nearest non-generic token before "이미지".
+        image_phrase = re.search(r"(.+?)\\s*(?:이미지|image)\\b", haystack, re.IGNORECASE | re.DOTALL)
+        if image_phrase:
+            phrase = image_phrase.group(1).strip()
+            phrase = re.sub(
+                r"(?:컨셉|concept|그림|illustration|render|이미지|image)\\s*$",
+                "",
+                phrase,
+                flags=re.IGNORECASE,
+            )
+            tokens = [token for token in re.split(r"[\\s/_-]+", phrase) if token]
+            for token in reversed(tokens):
+                lowered = token.lower()
+                if lowered in {"컨셉", "concept", "그림", "illustration", "render", "이미지", "image"}:
+                    continue
+                artifact_name = token
+                break
+
+    return project_name, artifact_name
+
+
 def _has_positive_multi_output_request(text: str) -> bool:
     for match in _MULTI_OUTPUT_ALLOW_RE.finditer(text or ""):
         start = max(0, match.start() - 12)
@@ -1122,6 +1165,8 @@ def _build_child_system_prompt(
     max_spawn_depth: int = 1,
     child_depth: int = 1,
     single_output_image: bool = False,
+    image_project_name: Optional[str] = None,
+    image_artifact_name: Optional[str] = None,
 ) -> str:
     """Build a focused system prompt for a child agent.
 
@@ -1166,6 +1211,17 @@ def _build_child_system_prompt(
             "- vision_analyze may be used only for QA on the current task's generated image.\n"
             "- You may inspect older files for reference, but you MUST NOT return or upload an older file as the final result.\n"
         )
+    if image_project_name or image_artifact_name:
+        routing_lines = ["\nIMAGE PROJECT METADATA:\n"]
+        if image_project_name:
+            routing_lines.append(f"- project_name: `{image_project_name}`\n")
+        if image_artifact_name:
+            routing_lines.append(f"- artifact_name: `{image_artifact_name}`\n")
+        routing_lines.append(
+            "- When you call image_generate, pass these exact tool args instead of omitting them.\n"
+            "- Do not invent a different project or artifact name for the same task.\n"
+        )
+        parts.append("".join(routing_lines).rstrip())
     if role == "orchestrator":
         child_note = (
             "Your own children MUST be leaves (cannot delegate further) "
@@ -1610,6 +1666,10 @@ def _build_child_agent(
                 "Image specialist task requires the image_gen toolset, but the parent session does not provide it."
             )
 
+    image_project_name, image_artifact_name = (None, None)
+    if _is_image_generation_task(goal, context, profile=profile, toolsets=toolsets):
+        image_project_name, image_artifact_name = _infer_delegate_image_metadata(goal, context)
+
     if single_output_image and "terminal" in child_toolsets:
         child_toolsets = [t for t in child_toolsets if t != "terminal"]
 
@@ -1622,6 +1682,8 @@ def _build_child_agent(
         max_spawn_depth=max_spawn,
         child_depth=child_depth,
         single_output_image=single_output_image,
+        image_project_name=image_project_name,
+        image_artifact_name=image_artifact_name,
     )
     # Extract parent's API key so subagents inherit auth (e.g. Nous Portal).
     parent_api_key = getattr(parent_agent, "api_key", None)
@@ -1808,6 +1870,19 @@ def _build_child_agent(
     setattr(child, "_profile_execution_worker_label", specialist_worker_label)
     setattr(child, "_single_output_image", bool(single_output_image))
     setattr(child, "_delegate_task_type", _normalize_delegate_task_type(task_type))
+    setattr(child, "_image_project_name", image_project_name)
+    setattr(child, "_image_artifact_name", image_artifact_name)
+    if image_project_name or image_artifact_name:
+        try:
+            from tools.image_generation_tool import register_image_task_metadata
+
+            register_image_task_metadata(
+                getattr(child, "_subagent_id", None),
+                project_name=image_project_name,
+                artifact_name=image_artifact_name,
+            )
+        except Exception:
+            logger.debug("Could not register image task metadata", exc_info=True)
     child._profile_execution_home = (
         str(runtime_profile_info.get("home")) if runtime_profile_info else None
     )

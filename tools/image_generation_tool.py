@@ -23,6 +23,7 @@ update when it's noticed.
 import json
 import logging
 import os
+import re
 import datetime
 import threading
 import uuid
@@ -39,6 +40,40 @@ from typing import Any, Dict, Optional
 # anything truthy, so a test-installed mock is not overwritten by a
 # subsequent real import.
 fal_client: Any = None
+
+_IMAGE_TASK_METADATA_LOCK = threading.Lock()
+_IMAGE_TASK_METADATA_BY_TASK_ID: Dict[str, Dict[str, Optional[str]]] = {}
+
+
+def register_image_task_metadata(
+    task_id: Optional[str],
+    *,
+    project_name: Optional[str] = None,
+    artifact_name: Optional[str] = None,
+) -> None:
+    """Register delegated image routing hints for a task id."""
+    task_key = str(task_id or "").strip()
+    if not task_key:
+        return
+    payload = {
+        "project_name": str(project_name).strip() if isinstance(project_name, str) and project_name.strip() else None,
+        "artifact_name": str(artifact_name).strip() if isinstance(artifact_name, str) and artifact_name.strip() else None,
+    }
+    if not payload["project_name"] and not payload["artifact_name"]:
+        return
+    with _IMAGE_TASK_METADATA_LOCK:
+        _IMAGE_TASK_METADATA_BY_TASK_ID[task_key] = payload
+
+
+def _consume_image_task_metadata(task_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    task_key = str(task_id or "").strip()
+    if not task_key:
+        return None, None
+    with _IMAGE_TASK_METADATA_LOCK:
+        payload = _IMAGE_TASK_METADATA_BY_TASK_ID.pop(task_key, None)
+    if not payload:
+        return None, None
+    return payload.get("project_name"), payload.get("artifact_name")
 
 
 def _load_fal_client() -> Any:
@@ -1006,10 +1041,35 @@ def _infer_image_project_metadata(
     resolved_project = str(project_name).strip() if isinstance(project_name, str) else ""
     resolved_artifact = str(artifact_name).strip() if isinstance(artifact_name, str) else ""
 
-    if not resolved_project and "망각구역" in prompt_text:
+    if not resolved_project and re.search(r"(?<!\w)망각구역(?!\w)", prompt_text):
         resolved_project = "망각구역"
+
     if not resolved_artifact:
-        resolved_artifact = "주인공" if "주인공" in prompt_text else "이미지"
+        if re.search(r"(?<!\w)주인공(?!\w)", prompt_text):
+            resolved_artifact = "주인공"
+        elif re.search(r"검증용\s*이미지", prompt_text):
+            resolved_artifact = "검증용이미지"
+        else:
+            phrase = None
+            image_phrase = re.search(r"(.+?)\s*(?:이미지|image)\b", prompt_text, re.IGNORECASE | re.DOTALL)
+            if image_phrase:
+                phrase = image_phrase.group(1).strip()
+                phrase = re.sub(
+                    r"(?:컨셉|concept|그림|illustration|render|이미지|image)\s*$",
+                    "",
+                    phrase,
+                    flags=re.IGNORECASE,
+                )
+            if phrase:
+                tokens = [token for token in re.split(r"[\s/_-]+", phrase) if token]
+                for token in reversed(tokens):
+                    lowered = token.lower()
+                    if lowered in {"컨셉", "concept", "그림", "illustration", "render", "이미지", "image"}:
+                        continue
+                    resolved_artifact = token
+                    break
+            if not resolved_artifact:
+                resolved_artifact = "이미지"
 
     return (resolved_project or None, resolved_artifact or None)
 
@@ -1180,6 +1240,12 @@ def _handle_image_generate(args, **kw):
     project_name = args.get("project_name")
     artifact_name = args.get("artifact_name")
     task_id = kw.get("task_id")
+
+    task_project_name, task_artifact_name = _consume_image_task_metadata(task_id)
+    if task_project_name and not project_name:
+        project_name = task_project_name
+    if task_artifact_name and not artifact_name:
+        artifact_name = task_artifact_name
 
     project_name, artifact_name = _infer_image_project_metadata(
         prompt,
