@@ -925,7 +925,10 @@ class TeamsAdapter(BasePlatformAdapter):
         if not self._app:
             return SendResult(success=False, error="Teams app not initialized")
 
+        from tools.approval import build_approval_intro
+
         cmd_preview = command[:2000] + "..." if len(command) > 2000 else command
+        intro = build_approval_intro(command, description, metadata)
         # Truncated for button data payload — just enough to reconstruct the card body.
         btn_data_base = {
             "session_key": session_key,
@@ -937,7 +940,7 @@ class TeamsAdapter(BasePlatformAdapter):
             AdaptiveCard()
             .with_version("1.4")
             .with_body([
-                TextBlock(text="⚠️ Command Approval Required", wrap=True, weight="Bolder"),
+                TextBlock(text=intro, wrap=True, weight="Bolder"),  # type: ignore[reportOptionalCall]
                 TextBlock(text=f"```\n{cmd_preview}\n```", wrap=True),
                 TextBlock(text=f"Reason: {description}", wrap=True, isSubtle=True),
             ])

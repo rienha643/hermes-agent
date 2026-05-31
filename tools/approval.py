@@ -16,12 +16,109 @@ import sys
 import threading
 import time
 import unicodedata
-from typing import Optional
+from typing import Any, Optional
 from hermes_cli.config import cfg_get
 
 from utils import env_var_enabled, is_truthy_value
 
 logger = logging.getLogger(__name__)
+
+
+_APPROVAL_SUMMARY_RULES: list[tuple[re.Pattern[str], tuple[str, str]]] = [
+    (
+        re.compile(r"\bgit\s+push\b|\bgh\s+repo\b.*\bpush\b|\bgit\s+remote\b.*\bpush\b", re.IGNORECASE),
+        ("GitHub 저장소 반영", "원격 저장소로 변경사항을 전송합니다."),
+    ),
+    (
+        re.compile(
+            r"(?:curl|wget)\b.*(?:127\.0\.0\.1|localhost|0\.0\.0\.0|:7860|:7861|:8000|:5000|comfyui|forge|webui)",
+            re.IGNORECASE,
+        ),
+        ("로컬 이미지 API 상태 확인", "로컬 서비스의 응답과 상태를 확인합니다."),
+    ),
+    (
+        re.compile(r"(?:\\\\|/mnt/(?:nas|share)|\b(?:nas|smb|cifs)\b)", re.IGNORECASE),
+        ("NAS 상태 확인", "NAS 또는 공유 폴더 접근 상태를 확인합니다."),
+    ),
+    (
+        re.compile(r"\b(?:cron|crontab|crond|systemctl\s+status\s+cron|systemctl\s+status\s+crond|schedule|scheduler)\b", re.IGNORECASE),
+        ("cron 상태 점검", "예약 작업과 cron 상태를 확인합니다."),
+    ),
+    (
+        re.compile(r"\bstory\b|story[/\\]|docs[/\\]story|\.docx\b|\.md\b", re.IGNORECASE),
+        ("Story 문서 경로 정리", "Story 문서 경로와 파일 위치를 정리합니다."),
+    ),
+    (
+        re.compile(r"\bcomfyui\b|\bforge\b|\bstable-diffusion\b|\bsd-webui\b", re.IGNORECASE),
+        ("ComfyUI 상태 점검", "ComfyUI 또는 이미지 생성 워크플로 상태를 확인합니다."),
+    ),
+]
+
+
+def _clean_approval_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return text
+
+
+def summarize_approval_intent(command: str, description: str = "", metadata: Optional[dict] = None) -> dict[str, str]:
+    """Return a short Korean purpose/work summary for an approval prompt.
+
+    If explicit metadata is available, prefer it. Otherwise fall back to a
+    deterministic command-string classifier so the UX still has a meaningful
+    purpose/work block even when no tool metadata is propagated through the
+    approval pipeline.
+    """
+    meta = metadata if isinstance(metadata, dict) else {}
+    purpose = _clean_approval_text(
+        meta.get("purpose") or meta.get("objective") or meta.get("goal") or meta.get("summary")
+    )
+    work = _clean_approval_text(
+        meta.get("work") or meta.get("task") or meta.get("operation") or meta.get("intent")
+    )
+
+    if purpose or work:
+        if not purpose:
+            purpose = "명령 실행 전 검토"
+        if not work:
+            work = "명령 내용을 확인합니다."
+        return {"purpose": purpose, "work": work, "source": "metadata"}
+
+    normalized = " ".join((command or "").split())
+    lowered = normalized.lower()
+    for pattern, (rule_purpose, rule_work) in _APPROVAL_SUMMARY_RULES:
+        if pattern.search(lowered):
+            return {"purpose": rule_purpose, "work": rule_work, "source": "command"}
+
+    safe_description = _clean_approval_text(description)
+    if (
+        not safe_description
+        or len(safe_description) > 80
+        or re.search(r"traceback|httpconnectionpool|readtimeout|exception|stack trace", safe_description, re.IGNORECASE)
+    ):
+        safe_description = "명령 내용을 확인합니다."
+
+    return {
+        "purpose": "명령 실행 전 승인",
+        "work": safe_description,
+        "source": "fallback",
+    }
+
+
+def build_approval_intro(command: str, description: str = "", metadata: Optional[dict] = None) -> str:
+    """Build the Korean 안내 block shown immediately before approval.
+
+    The returned text intentionally keeps the approval policy/result unchanged;
+    it only improves what the user sees before making the approval decision.
+    """
+    summary = summarize_approval_intent(command, description, metadata)
+    return "\n".join([
+        f"목적: {summary['purpose']}",
+        f"작업: {summary['work']}",
+        "승인 필요: 예",
+        "Command Approval Required",
+    ])
 
 # Freeze YOLO mode at module import time. Reading os.environ on every call
 # would allow any skill running inside the process to set this variable and
@@ -710,7 +807,8 @@ def save_permanent_allowlist(patterns: set):
 def prompt_dangerous_approval(command: str, description: str,
                               timeout_seconds: int | None = None,
                               allow_permanent: bool = True,
-                              approval_callback=None) -> str:
+                              approval_callback=None,
+                              approval_metadata: Optional[dict] = None) -> str:
     """Prompt the user to approve a dangerous command (CLI only).
 
     Args:
@@ -767,6 +865,10 @@ def prompt_dangerous_approval(command: str, description: str,
         # config/YAML inside the retry loop below.
         from agent.i18n import t
         while True:
+            approval_intro = build_approval_intro(command, description, approval_metadata)
+            print()
+            for line in approval_intro.splitlines():
+                print(f"  {line}")
             print()
             print(f"  {t('approval.dangerous_header', description=description)}")
             print(f"      {command}")
@@ -923,7 +1025,8 @@ Respond with exactly one word: APPROVE, DENY, or ESCALATE"""
 
 
 def check_dangerous_command(command: str, env_type: str,
-                            approval_callback=None) -> dict:
+                            approval_callback=None,
+                            approval_metadata: Optional[dict] = None) -> dict:
     """Check if a command is dangerous and handle approval.
 
     This is the main entry point called by terminal_tool before executing
@@ -993,6 +1096,7 @@ def check_dangerous_command(command: str, env_type: str,
             "pattern_key": pattern_key,
             "description": description,
         })
+        intro = build_approval_intro(command, description, approval_metadata)
         return {
             "approved": False,
             "pattern_key": pattern_key,
@@ -1000,13 +1104,18 @@ def check_dangerous_command(command: str, env_type: str,
             "command": command,
             "description": description,
             "message": (
-                f"⚠️ This command is potentially dangerous ({description}). "
-                f"Asking the user for approval.\n\n**Command:**\n```\n{command}\n```"
+                f"{intro}\n\n"
+                f"**Reason:** {description}\n\n"
+                f"**Command:**\n```\n{command}\n```"
             ),
         }
 
-    choice = prompt_dangerous_approval(command, description,
-                                       approval_callback=approval_callback)
+    choice = prompt_dangerous_approval(
+        command,
+        description,
+        approval_callback=approval_callback,
+        approval_metadata=approval_metadata,
+    )
 
     if choice == "deny":
         return {
@@ -1058,7 +1167,8 @@ def _format_tirith_description(tirith_result: dict) -> str:
 
 
 def check_all_command_guards(command: str, env_type: str,
-                             approval_callback=None) -> dict:
+                             approval_callback=None,
+                             approval_metadata: Optional[dict] = None) -> dict:
     """Run all pre-exec security checks and return a single approval decision.
 
     Gathers findings from tirith and dangerous-command detection, then
@@ -1109,9 +1219,11 @@ def check_all_command_guards(command: str, env_type: str,
                 # Run detection to get a description for the block message
                 is_dangerous, _pk, description = detect_dangerous_command(command)
                 if is_dangerous:
+                    intro = build_approval_intro(command, description, approval_metadata)
                     return {
                         "approved": False,
                         "message": (
+                            f"{intro}\n\n"
                             f"BLOCKED: Command flagged as dangerous ({description}) "
                             "but cron jobs run without a user present to approve it. "
                             "Find an alternative approach that avoids this command. "
@@ -1361,24 +1473,27 @@ def check_all_command_guards(command: str, env_type: str,
                     "user_approved": True, "description": combined_desc}
 
         # Fallback: no gateway callback registered (e.g. cron, batch).
-        # Return approval_required for backward compat.
-        submit_pending(session_key, {
-            "command": command,
-            "pattern_key": primary_key,
-            "pattern_keys": all_keys,
-            "description": combined_desc,
-        })
-        return {
-            "approved": False,
-            "pattern_key": primary_key,
-            "status": "pending_approval",
-            "approval_pending": True,
-            "command": command,
-            "description": combined_desc,
-            "message": (
-                f"⚠️ {combined_desc}. Asking the user for approval.\n\n**Command:**\n```\n{command}\n```"
-            ),
-        }
+        if is_gateway or is_ask:
+            submit_pending(session_key, {
+                "command": command,
+                "pattern_key": primary_key,
+                "pattern_keys": all_keys,
+                "description": combined_desc,
+            })
+            intro = build_approval_intro(command, combined_desc, approval_metadata)
+            return {
+                "approved": False,
+                "pattern_key": primary_key,
+                "status": "pending_approval",
+                "approval_pending": True,
+                "command": command,
+                "description": combined_desc,
+                "message": (
+                    f"{intro}\n\n"
+                    f"**Reason:** {combined_desc}\n\n"
+                    f"**Command:**\n```\n{command}\n```"
+                ),
+            }
 
     # CLI interactive: single combined prompt
     # Hide [a]lways when any tirith warning is present
@@ -1393,7 +1508,8 @@ def check_all_command_guards(command: str, env_type: str,
     )
     choice = prompt_dangerous_approval(command, combined_desc,
                                        allow_permanent=not has_tirith,
-                                       approval_callback=approval_callback)
+                                       approval_callback=approval_callback,
+                                       approval_metadata=approval_metadata)
     _fire_approval_hook(
         "post_approval_response",
         command=command,

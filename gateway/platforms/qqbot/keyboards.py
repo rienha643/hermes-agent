@@ -34,6 +34,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from tools.approval import build_approval_intro
+
 logger = logging.getLogger(__name__)
 
 # ── button_data prefixes + patterns ──────────────────────────────────
@@ -306,6 +308,9 @@ def build_approval_text(req: ApprovalRequest) -> str:
 
 def _build_exec_text(req: ApprovalRequest) -> str:
     lines: List[str] = ["🔐 **命令执行审批**", ""]
+    intro = build_approval_intro(req.command_preview, req.description)
+    lines.extend(intro.splitlines())
+    lines.append("")
     if req.command_preview:
         preview = req.command_preview[:300]
         lines.append(f"```\n{preview}\n```")

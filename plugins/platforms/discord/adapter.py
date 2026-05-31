@@ -4075,6 +4075,8 @@ class DiscordAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
+            from tools.approval import build_approval_intro
+
             # Resolve channel — use thread_id from metadata if present
             target_id = chat_id
             if metadata and metadata.get("thread_id"):
@@ -4087,9 +4089,10 @@ class DiscordAdapter(BasePlatformAdapter):
             # Discord embed description limit is 4096; show full command up to that
             max_desc = 4088
             cmd_display = command if len(command) <= max_desc else command[: max_desc - 3] + "..."
+            intro = build_approval_intro(command, description, metadata)
             embed = discord.Embed(
                 title="⚠️ Command Approval Required",
-                description=f"```\n{cmd_display}\n```",
+                description=f"{intro}\n\n```\n{cmd_display}\n```",
                 color=discord.Color.orange(),
             )
             embed.add_field(name="Reason", value=description, inline=False)

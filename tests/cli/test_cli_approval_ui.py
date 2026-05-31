@@ -153,6 +153,10 @@ class TestCliApprovalUi:
         assert lines[0].startswith("╭")
         assert "Dangerous Command" not in lines[0]
         assert any("Dangerous Command" in line for line in lines[1:3])
+        assert "목적:" in rendered
+        assert "작업:" in rendered
+        assert "승인 필요: 예" in rendered
+        assert "Command Approval Required" in rendered
         assert "Show full command" in rendered
         assert "githubcli-archive-keyring.gpg" not in rendered
 

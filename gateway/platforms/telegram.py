@@ -2591,9 +2591,12 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
+            from tools.approval import build_approval_intro
+
             cmd_preview = command[:3800] + "..." if len(command) > 3800 else command
+            intro = build_approval_intro(command, description, metadata)
             text = (
-                f"⚠️ <b>Command Approval Required</b>\n\n"
+                f"{intro}\n\n"
                 f"<pre>{_html.escape(cmd_preview)}</pre>\n\n"
                 f"Reason: {_html.escape(description)}"
             )

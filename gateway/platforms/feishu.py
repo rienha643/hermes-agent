@@ -1868,8 +1868,11 @@ class FeishuAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
+            from tools.approval import build_approval_intro
+
             approval_id = next(self._approval_counter)
             cmd_preview = command[:3000] + "..." if len(command) > 3000 else command
+            intro = build_approval_intro(command, description, metadata)
 
             def _btn(label: str, action_name: str, btn_type: str = "default") -> dict:
                 return {
@@ -1888,7 +1891,7 @@ class FeishuAdapter(BasePlatformAdapter):
                 "elements": [
                     {
                         "tag": "markdown",
-                        "content": f"```\n{cmd_preview}\n```\n**Reason:** {description}",
+                        "content": f"{intro}\n\n```\n{cmd_preview}\n```\n**Reason:** {description}",
                     },
                     {
                         "tag": "action",

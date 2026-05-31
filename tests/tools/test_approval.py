@@ -12,11 +12,13 @@ import tools.approval as approval_module
 from tools.approval import (
     _get_approval_mode,
     _smart_approve,
+    build_approval_intro,
     approve_session,
     detect_dangerous_command,
     is_approved,
     load_permanent,
     prompt_dangerous_approval,
+    summarize_approval_intent,
 )
 
 
@@ -28,6 +30,52 @@ class TestApprovalModeParsing:
     def test_string_off_still_maps_to_off(self):
         with mock_patch("hermes_cli.config.load_config", return_value={"approvals": {"mode": "off"}}):
             assert _get_approval_mode() == "off"
+
+
+class TestApprovalIntro:
+    def test_command_only_summary_rules_cover_common_cases(self):
+        cases = [
+            (
+                "curl http://127.0.0.1:7860/sdapi/v1/progress",
+                "로컬 이미지 API 상태 확인",
+                "로컬 서비스의 응답과 상태를 확인합니다.",
+            ),
+            (
+                "git push origin main",
+                "GitHub 저장소 반영",
+                "원격 저장소로 변경사항을 전송합니다.",
+            ),
+            (
+                "ls /mnt/nas/share",
+                "NAS 상태 확인",
+                "NAS 또는 공유 폴더 접근 상태를 확인합니다.",
+            ),
+            (
+                "systemctl status cron",
+                "cron 상태 점검",
+                "예약 작업과 cron 상태를 확인합니다.",
+            ),
+        ]
+
+        for command, purpose, work in cases:
+            summary = summarize_approval_intent(command, description="ignored")
+            assert summary["purpose"] == purpose
+            assert summary["work"] == work
+
+            intro = build_approval_intro(command, description="ignored")
+            assert f"목적: {purpose}" in intro
+            assert f"작업: {work}" in intro
+            assert "승인 필요: 예" in intro
+            assert "Command Approval Required" in intro
+
+    def test_metadata_overrides_command_classifier(self):
+        summary = summarize_approval_intent(
+            "git push origin main",
+            metadata={"purpose": "NAS 상태 확인", "work": "사내 공유폴더 연결 상태 점검"},
+        )
+
+        assert summary["purpose"] == "NAS 상태 확인"
+        assert summary["work"] == "사내 공유폴더 연결 상태 점검"
 
 
 class TestSmartApproval:

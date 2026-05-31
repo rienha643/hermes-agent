@@ -1104,6 +1104,10 @@ class TestBuildApprovalText:
         )
         text = build_approval_text(req)
         assert "命令执行审批" in text
+        assert "목적:" in text
+        assert "작업:" in text
+        assert "승인 필요: 예" in text
+        assert "Command Approval Required" in text
         assert "rm -rf /tmp/demo" in text
         assert "/home/user" in text
         assert "60" in text

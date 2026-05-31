@@ -2253,7 +2253,10 @@ class SlackAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
+            from tools.approval import build_approval_intro
+
             cmd_preview = command[:2900] + "..." if len(command) > 2900 else command
+            intro = build_approval_intro(command, description, metadata)
             thread_ts = self._resolve_thread_ts(None, metadata)
 
             blocks = [
@@ -2262,7 +2265,7 @@ class SlackAdapter(BasePlatformAdapter):
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f":warning: *Command Approval Required*\n"
+                            f"{intro}\n\n"
                             f"```{cmd_preview}```\n"
                             f"Reason: {description}"
                         ),

@@ -11443,12 +11443,15 @@ class HermesCLI:
 
         command = state["command"]
         description = state["description"]
+        approval_metadata = state.get("approval_metadata")
         choices = state["choices"]
         selected = state.get("selected", 0)
         show_full = state.get("show_full", False)
+        from tools.approval import build_approval_intro
 
         title = "⚠️  Dangerous Command"
         cmd_display = command if show_full or len(command) <= 70 else command[:70] + '...'
+        approval_intro = build_approval_intro(command, description, approval_metadata)
         choice_labels = {
             "once": "Allow once",
             "session": "Allow for this session",
@@ -11457,7 +11460,8 @@ class HermesCLI:
             "view": "Show full command",
         }
 
-        preview_lines = _wrap_panel_text(description, 60)
+        preview_lines = _wrap_panel_text(approval_intro, 60)
+        preview_lines.extend(_wrap_panel_text(description, 60))
         preview_lines.extend(_wrap_panel_text(cmd_display, 60))
         for i, choice in enumerate(choices):
             prefix = '❯ ' if i == selected else '  '
@@ -11470,7 +11474,8 @@ class HermesCLI:
         box_width = _panel_box_width(title, preview_lines)
         inner_text_width = max(8, box_width - 2)
 
-        # Pre-wrap the mandatory content — command + choices must always render.
+        # Pre-wrap the mandatory content — intro block + command + choices must always render.
+        intro_wrapped = _wrap_panel_text(approval_intro, inner_text_width)
         cmd_wrapped = _wrap_panel_text(cmd_display, inner_text_width)
 
         # (choice_index, wrapped_line) so we can re-apply selected styling below
@@ -11508,7 +11513,7 @@ class HermesCLI:
         reserved_below = 6
 
         available = max(0, term_rows - reserved_below)
-        mandatory_full = chrome_full + len(cmd_wrapped) + len(choice_wrapped)
+        mandatory_full = chrome_full + len(intro_wrapped) + len(cmd_wrapped) + len(choice_wrapped)
 
         # If the full-chrome panel doesn't fit, drop the separator blanks.
         # This keeps the command and every choice on-screen in compact terminals.
@@ -11518,14 +11523,14 @@ class HermesCLI:
         # If the command itself is too long to leave room for choices (e.g. user
         # hit "view" on a multi-hundred-character command), truncate it so the
         # approve/deny buttons still render. Keep at least 1 row of command.
-        max_cmd_rows = max(1, available - chrome_rows - len(choice_wrapped))
+        max_cmd_rows = max(1, available - chrome_rows - len(intro_wrapped) - len(choice_wrapped))
         if len(cmd_wrapped) > max_cmd_rows:
             keep = max(1, max_cmd_rows - 1) if max_cmd_rows > 1 else 1
             cmd_wrapped = cmd_wrapped[:keep] + ["… (command truncated — use /logs or /debug for full text)"]
 
         # Allocate any remaining rows to description. The extra -1 in full mode
         # accounts for the blank separator between choices and description.
-        mandatory_no_desc = chrome_rows + len(cmd_wrapped) + len(choice_wrapped)
+        mandatory_no_desc = chrome_rows + len(intro_wrapped) + len(cmd_wrapped) + len(choice_wrapped)
         desc_sep_cost = 0 if use_compact_chrome else 1
         available_for_desc = available - mandatory_no_desc - desc_sep_cost
         # Even on huge terminals, cap description height so the panel stays compact.
@@ -11545,6 +11550,11 @@ class HermesCLI:
         lines = []
         lines.append(('class:approval-border', '╭' + ('─' * box_width) + '╮\n'))
         _append_panel_line(lines, 'class:approval-border', 'class:approval-title', title, box_width)
+        if not use_compact_chrome:
+            _append_blank_panel_line(lines, 'class:approval-border', box_width)
+
+        for wrapped in intro_wrapped:
+            _append_panel_line(lines, 'class:approval-border', 'class:approval-desc', wrapped, box_width)
         if not use_compact_chrome:
             _append_blank_panel_line(lines, 'class:approval-border', box_width)
 
