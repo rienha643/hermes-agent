@@ -3321,7 +3321,8 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         callback_fn = callback
 
         with TemporaryDirectory() as tmpdir:
-            artifact = Path(tmpdir) / "report.md"
+            artifact = Path(tmpdir) / "HermesWork" / "Story" / "worldbuilding" / "report.md"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text("done", encoding="utf-8")
 
             callback_fn("subagent.start", preview="Update the formatter")
@@ -3329,6 +3330,7 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
                 "subagent.complete",
                 preview="Implemented the requested change.",
                 status="completed",
+                task_type="artifact",
                 summary="Implemented the requested change.",
                 artifacts=[str(artifact)],
                 output_tail=[{"tool": "terminal", "preview": "pytest -q\n12 passed"}],
@@ -3354,13 +3356,64 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertIn("Eclipse가 작업을 완료했습니다.", complete_preview)
         self.assertIn("- 수행 내용", complete_preview)
         self.assertIn("- 검증 결과", complete_preview)
-        self.assertIn("- 추가 확인 사항", complete_preview)
+        self.assertNotIn("- 추가 확인 사항", complete_preview)
         self.assertIn("- 산출물", complete_preview)
         self.assertIn("형식: MD", complete_preview)
         self.assertIn("전달 방식: Slack 첨부", complete_preview)
-        self.assertIn("저장 위치: `", complete_preview)
+        self.assertIn("저장 위치: `HermesWork/Story/worldbuilding/report.md`", complete_preview)
         self.assertIn("표시 방식: 파일 첨부", complete_preview)
         self.assertIn("report.md", complete_preview)
+
+    def test_specialist_result_frame_conditionally_shows_success_sections(self):
+        simple_frame = _format_specialist_result_frame(
+            "Eclipse",
+            status="completed",
+            task_type="simple",
+            preview="짧은 정리 작업을 마쳤습니다.",
+            summary="짧은 정리 작업을 마쳤습니다.",
+            exit_reason="completed",
+        )
+        self.assertIn("- 수행 내용", simple_frame)
+        self.assertIn("- 검증 결과", simple_frame)
+        self.assertNotIn("- 추가 확인 사항", simple_frame)
+        self.assertNotIn("- 산출물", simple_frame)
+
+        general_frame = _format_specialist_result_frame(
+            "Eclipse",
+            status="completed",
+            task_type="general",
+            preview="변경 사항을 반영했습니다.",
+            summary="변경 사항을 반영했습니다.",
+            follow_up="배포 전에 린트 규칙을 한 번 더 확인해 주세요.",
+            exit_reason="completed",
+        )
+        self.assertIn("- 수행 내용", general_frame)
+        self.assertIn("- 검증 결과", general_frame)
+        self.assertIn("- 추가 확인 사항", general_frame)
+        self.assertIn("린트 규칙을 한 번 더 확인해 주세요.", general_frame)
+        self.assertNotIn("- 산출물", general_frame)
+
+        with TemporaryDirectory() as tmpdir:
+            artifact = Path(tmpdir) / "HermesWork" / "Story" / "worldbuilding" / "report.docx"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_text("done", encoding="utf-8")
+
+            artifact_frame = _format_specialist_result_frame(
+                "Eclipse",
+                status="completed",
+                task_type="artifact",
+                preview="문서 산출물을 만들었습니다.",
+                summary="문서 산출물을 만들었습니다.",
+                artifacts=[str(artifact)],
+                exit_reason="completed",
+            )
+
+        self.assertIn("- 수행 내용", artifact_frame)
+        self.assertIn("- 검증 결과", artifact_frame)
+        self.assertIn("- 산출물", artifact_frame)
+        self.assertIn("형식: DOCX", artifact_frame)
+        self.assertIn("저장 위치: `HermesWork/Story/worldbuilding/report.docx`", artifact_frame)
+        self.assertNotIn("- 추가 확인 사항", artifact_frame)
 
     def test_progress_callback_uses_failure_frame_for_general_specialists(self):
         parent = _make_mock_parent(depth=0)

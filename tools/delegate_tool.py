@@ -863,16 +863,75 @@ def _classify_delegate_artifact(path: str) -> Optional[Dict[str, str]]:
     }
 
 
+def _display_delegate_artifact_path(path: str) -> str:
+    """Prefer a HermesWork-relative path when the artifact lives under it."""
+    resolved = Path(path).expanduser()
+    parts = resolved.parts
+    if "HermesWork" in parts:
+        return str(Path(*parts[parts.index("HermesWork") :]))
+    return str(resolved)
+
+
+def _normalize_delegate_task_type(task_type: Optional[str]) -> Optional[str]:
+    """Normalize task type labels used by the delegated-worker UX."""
+    normalized = str(task_type or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"simple", "general", "artifact", "failure"}:
+        return normalized
+    if normalized in {"normal", "default"}:
+        return "general"
+    if normalized in {"docs", "document", "documents", "story", "report"}:
+        return "artifact"
+    if normalized in {"fail", "failed", "error"}:
+        return "failure"
+    return normalized
+
+
+def _normalize_delegate_follow_up(follow_up: Any) -> Optional[str]:
+    """Return a non-trivial follow-up note, or None for generic filler."""
+    if follow_up is None:
+        return None
+    if isinstance(follow_up, (list, tuple, set)):
+        pieces = [str(item).strip() for item in follow_up if str(item).strip()]
+        text = "\n".join(pieces)
+    else:
+        text = str(follow_up).strip()
+    if not text:
+        return None
+
+    lowered = text.lower()
+    generic_phrases = (
+        "추가 후속 작업은 필요하지 않습니다",
+        "추가 확인 사항 없음",
+        "no follow-up",
+        "no follow up",
+        "no risk",
+        "no recommendation",
+        "없음",
+        "없습니다",
+        "필요하지 않습니다",
+        "n/a",
+        "na",
+        "none",
+    )
+    if any(phrase in lowered for phrase in generic_phrases):
+        return None
+    return text
+
+
 def _format_specialist_result_frame(
     worker_label: Optional[str],
     *,
     status: Optional[str] = None,
+    task_type: Optional[str] = None,
     preview: Optional[str] = None,
     summary: Optional[str] = None,
     artifacts: Optional[Iterable[Any]] = None,
     output_tail: Optional[Iterable[Dict[str, Any]]] = None,
     api_calls: Optional[Any] = None,
     exit_reason: Optional[str] = None,
+    follow_up: Any = None,
 ) -> str:
     """Render the shared hybrid result frame for general specialist workers."""
     if not _is_general_specialist_worker_label(worker_label):
@@ -881,6 +940,7 @@ def _format_specialist_result_frame(
     label = str(worker_label or "").strip()
     normalized_status = str(status or "").strip().lower()
     is_failure = normalized_status in {"error", "failed", "failure", "timeout", "interrupted"}
+    normalized_task_type = _normalize_delegate_task_type(task_type)
     intro = f"{label}가 작업을 완료했습니다." if not is_failure else f"{label}가 작업을 완료하지 못했습니다."
 
     sections: List[str] = []
@@ -912,7 +972,16 @@ def _format_specialist_result_frame(
         sections.append("- 검증 결과\n  - " + "\n  - ".join(verification_lines))
 
     if not is_failure:
-        sections.append("- 추가 확인 사항\n  추가 후속 작업은 필요하지 않습니다.")
+        follow_up_text = _normalize_delegate_follow_up(follow_up)
+        if follow_up_text is None and exit_reason:
+            exit_reason_text = str(exit_reason).strip().lower()
+            if exit_reason_text and exit_reason_text not in {"completed", "complete", "done", "success"}:
+                follow_up_text = f"종료 사유가 {exit_reason!r}이므로 후속 확인이 필요합니다."
+        if follow_up_text and normalized_task_type != "simple":
+            sections.append(
+                "- 추가 확인 사항\n  "
+                + follow_up_text.replace("\n", "\n  ")
+            )
     else:
         retry_text = (
             "중단 원인을 확인한 뒤 재실행하세요."
@@ -938,14 +1007,12 @@ def _format_specialist_result_frame(
     if artifact_entries:
         artifact_lines: List[str] = []
         for entry in artifact_entries:
-            artifact_lines.extend(
-                [
-                    f"형식: {entry['format']}",
-                    f"전달 방식: {entry['delivery']}",
-                    f"저장 위치: `{entry['path']}`",
-                    f"표시 방식: {entry['display']}",
-                ]
-            )
+            artifact_lines.extend([f"형식: {entry['format']}", f"전달 방식: {entry['delivery']}"])
+            if entry["format"] != "이미지":
+                artifact_lines.append(
+                    f"저장 위치: `{_display_delegate_artifact_path(entry['path'])}`"
+                )
+            artifact_lines.append(f"표시 방식: {entry['display']}")
         sections.append("- 산출물\n  - " + "\n  - ".join(artifact_lines))
 
     parts = [f"[WORKER RESULT: {label}]", "", intro]
@@ -1268,12 +1335,14 @@ def _build_child_progress_callback(
             complete_preview = _format_specialist_result_frame(
                 specialist_worker_label,
                 status=kwargs.get("status"),
+                task_type=kwargs.get("task_type"),
                 preview=preview,
                 summary=kwargs.get("summary") or preview or "",
                 artifacts=kwargs.get("artifacts"),
                 output_tail=kwargs.get("output_tail"),
                 api_calls=kwargs.get("api_calls"),
                 exit_reason=kwargs.get("exit_reason"),
+                follow_up=kwargs.get("follow_up") or kwargs.get("additional_check") or kwargs.get("next_steps"),
             )
             _relay("subagent.complete", preview=complete_preview, **kwargs)
             return
@@ -1443,6 +1512,7 @@ def _build_child_agent(
     role: str = "leaf",
     profile: Optional[str] = None,
     single_output_image: bool = False,
+    task_type: Optional[str] = None,
 ):
     """
     Build a child AIAgent on the main thread (thread-safe construction).
@@ -1734,6 +1804,7 @@ def _build_child_agent(
     )
     setattr(child, "_profile_execution_worker_label", specialist_worker_label)
     setattr(child, "_single_output_image", bool(single_output_image))
+    setattr(child, "_delegate_task_type", _normalize_delegate_task_type(task_type))
     child._profile_execution_home = (
         str(runtime_profile_info.get("home")) if runtime_profile_info else None
     )
@@ -2100,6 +2171,9 @@ def _run_single_child(
         )
 
         _single_output_image = bool(getattr(child, "_single_output_image", False))
+        _task_type = _normalize_delegate_task_type(
+            _kwargs.get("task_type") or getattr(child, "_delegate_task_type", None)
+        )
 
         def _run_with_thread_capture():
             _worker_thread_holder["t"] = threading.current_thread()
@@ -2465,6 +2539,7 @@ def _run_single_child(
                 list(current_task_image_artifacts) + _extract_artifact_paths(summary)
             ),
             "exit_reason": exit_reason,
+            "task_type": _task_type,
         }
         if _cost_usd is not None:
             try:
@@ -2725,6 +2800,7 @@ def delegate_task(
             profile=task.get("profile"),
             toolsets=task_toolsets,
         )
+        task["_task_type"] = _normalize_delegate_task_type(task.get("task_type") or task.get("type"))
 
     if len(task_list) == 1 and task_list[0].get("_single_output_image"):
         cached_payload = _get_cached_single_output_result(
@@ -2782,6 +2858,7 @@ def delegate_task(
                 role=effective_role,
                 profile=t.get("profile"),
                 single_output_image=bool(t.get("_single_output_image")),
+                task_type=t.get("_task_type"),
             )
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
@@ -2793,7 +2870,7 @@ def delegate_task(
     if n_tasks == 1:
         # Single task -- run directly (no thread pool overhead)
         _i, _t, child = children[0]
-        result = _run_single_child(0, _t["goal"], child, parent_agent)
+        result = _run_single_child(0, _t["goal"], child, parent_agent, task_type=_t.get("_task_type"))
         results.append(result)
     else:
         # Batch -- run in parallel with per-task progress lines
@@ -2809,6 +2886,7 @@ def delegate_task(
                     goal=t["goal"],
                     child=child,
                     parent_agent=parent_agent,
+                    task_type=t.get("_task_type"),
                 )
                 futures[future] = i
 
