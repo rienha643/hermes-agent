@@ -33,6 +33,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from gateway.document_artifacts import format_document_artifact_lines
 from toolsets import TOOLSETS
 
 _SINGLE_OUTPUT_IMAGE_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -1007,12 +1008,14 @@ def _format_specialist_result_frame(
     if artifact_entries:
         artifact_lines: List[str] = []
         for entry in artifact_entries:
-            artifact_lines.extend([f"형식: {entry['format']}", f"전달 방식: {entry['delivery']}"])
-            if entry["format"] != "이미지":
+            if entry["format"] == "이미지":
+                artifact_lines.extend([f"형식: {entry['format']}", f"전달 방식: {entry['delivery']}"])
                 artifact_lines.append(
                     f"저장 위치: `{_display_delegate_artifact_path(entry['path'])}`"
                 )
-            artifact_lines.append(f"표시 방식: {entry['display']}")
+                artifact_lines.append(f"표시 방식: {entry['display']}")
+                continue
+            artifact_lines.extend(format_document_artifact_lines(entry["path"]))
         sections.append("- 산출물\n  - " + "\n  - ".join(artifact_lines))
 
     parts = [f"[WORKER RESULT: {label}]", "", intro]

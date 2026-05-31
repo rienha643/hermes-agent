@@ -26,9 +26,13 @@ from typing import Optional
 from xml.etree import ElementTree as ET
 
 from hermes_constants import get_hermes_work_dir
-from nas_sync_hooks import queue_nas_sync_hook
+import nas_sync_hooks
 
 logger = logging.getLogger(__name__)
+
+
+def queue_nas_sync_hook(*args, **kwargs):
+    return nas_sync_hooks.queue_nas_sync_hook(*args, **kwargs)
 
 _DOCUMENT_ARTIFACT_EXTENSIONS = {
     ".docx",
@@ -312,10 +316,125 @@ _MINIMAL_THEME_XML = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 """
 
 
+_DOCUMENT_ARTIFACT_DELIVERY = "Slack 첨부"
+_DOCUMENT_ARTIFACT_NAS_STATE_GENERATED = "hook state 생성"
+_DOCUMENT_ARTIFACT_NAS_STATE_NONE = "hook state 없음"
+_DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN = "확인 불가"
+
+
 def is_document_artifact_path(path: str | Path) -> bool:
     """Return True when *path* looks like a document artifact we should publish."""
     suffix = Path(str(path)).suffix.lower()
     return suffix in _DOCUMENT_ARTIFACT_EXTENSIONS
+
+
+def _display_document_artifact_path(path: str | Path) -> str:
+    """Prefer a HermesWork-relative path when the artifact lives under it."""
+    resolved = Path(path).expanduser().resolve(strict=False)
+    work_root = get_hermes_work_dir().resolve(strict=False)
+    try:
+        relative = resolved.relative_to(work_root)
+    except ValueError:
+        try:
+            idx = next(i for i, part in enumerate(resolved.parts) if part.casefold() == "hermeswork")
+            relative = Path(*resolved.parts[idx + 1 :])
+        except StopIteration:
+            return str(resolved)
+    if not relative.parts:
+        return "HermesWork"
+    return f"HermesWork/{relative.as_posix()}"
+
+
+def _document_artifact_category_scope(path: Path) -> tuple[Optional[str], Optional[str]]:
+    resolved = path.expanduser().resolve(strict=False)
+    story_root = get_hermes_work_dir("Story").resolve(strict=False)
+    documents_root = get_hermes_work_dir("Documents").resolve(strict=False)
+
+    if _is_under_root(resolved, story_root):
+        try:
+            relative_parent = resolved.parent.relative_to(story_root)
+        except ValueError:
+            relative_parent = Path()
+        if not relative_parent.parts:
+            return "story", ""
+        first = relative_parent.parts[0].strip()
+        if first.casefold() in _STORY_SCOPE_EMPTY_NAMES:
+            return "story", ""
+        return "story", first
+
+    if _is_under_root(resolved, documents_root):
+        try:
+            relative_parent = resolved.parent.relative_to(documents_root)
+        except ValueError:
+            relative_parent = Path()
+        scope = "" if str(relative_parent) == "." else relative_parent.as_posix()
+        return "documents", scope
+
+    return None, None
+
+
+def infer_document_artifact_nas_state(path: str | Path) -> str:
+    """Best-effort NAS state label for a published HermesWork document artifact."""
+    artifact_path = Path(path)
+    category, scope = _document_artifact_category_scope(artifact_path)
+    if not category:
+        return _DOCUMENT_ARTIFACT_NAS_STATE_NONE
+
+    try:
+        key = nas_sync_hooks._artifact_hook_key(category, scope or "", artifact_path)
+        state_path = nas_sync_hooks._resolve_nas_hook_state_dir() / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()}.json"
+        return (
+            _DOCUMENT_ARTIFACT_NAS_STATE_GENERATED
+            if state_path.exists()
+            else _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
+        )
+    except Exception:
+        return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
+
+
+def describe_document_artifact(
+    path: str | Path,
+    *,
+    nas_state: str = _DOCUMENT_ARTIFACT_NAS_STATE_GENERATED,
+    delivery: str = _DOCUMENT_ARTIFACT_DELIVERY,
+) -> dict[str, str]:
+    """Return the standard document artifact UX fields for a published file."""
+    artifact_path = Path(path)
+    suffix = artifact_path.suffix.lstrip(".").upper() or "FILE"
+    return {
+        "format": suffix,
+        "path": _display_document_artifact_path(artifact_path),
+        "delivery": delivery,
+        "nas_state": nas_state,
+    }
+
+
+def format_document_artifact_lines(
+    path: str | Path,
+    *,
+    nas_state: str = _DOCUMENT_ARTIFACT_NAS_STATE_GENERATED,
+    delivery: str = _DOCUMENT_ARTIFACT_DELIVERY,
+) -> list[str]:
+    """Return the canonical bullet lines for a document artifact report."""
+    info = describe_document_artifact(path, nas_state=nas_state, delivery=delivery)
+    return [
+        f"형식: {info['format']}",
+        f"저장 위치: `{info['path']}`",
+        f"전달 방식: {info['delivery']}",
+        f"NAS 상태: {info['nas_state']}",
+    ]
+
+
+def format_document_artifact_block(
+    path: str | Path,
+    *,
+    nas_state: str = _DOCUMENT_ARTIFACT_NAS_STATE_GENERATED,
+    delivery: str = _DOCUMENT_ARTIFACT_DELIVERY,
+) -> str:
+    """Return the canonical completion block for document artifacts."""
+    return "- 산출물\n  - " + "\n  - ".join(
+        format_document_artifact_lines(path, nas_state=nas_state, delivery=delivery)
+    )
 
 
 def _ensure_xml_override(root: ET.Element, part_name: str, content_type: str) -> bool:

@@ -3361,7 +3361,8 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertIn("형식: MD", complete_preview)
         self.assertIn("전달 방식: Slack 첨부", complete_preview)
         self.assertIn("저장 위치: `HermesWork/Story/worldbuilding/report.md`", complete_preview)
-        self.assertIn("표시 방식: 파일 첨부", complete_preview)
+        self.assertIn("NAS 상태: hook state 생성", complete_preview)
+        self.assertNotIn("표시 방식", complete_preview)
         self.assertIn("report.md", complete_preview)
 
     def test_specialist_result_frame_conditionally_shows_success_sections(self):
@@ -3413,7 +3414,34 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertIn("- 산출물", artifact_frame)
         self.assertIn("형식: DOCX", artifact_frame)
         self.assertIn("저장 위치: `HermesWork/Story/worldbuilding/report.docx`", artifact_frame)
+        self.assertIn("전달 방식: Slack 첨부", artifact_frame)
+        self.assertIn("NAS 상태: hook state 생성", artifact_frame)
+        self.assertNotIn("표시 방식", artifact_frame)
         self.assertNotIn("- 추가 확인 사항", artifact_frame)
+
+    def test_specialist_result_frame_uses_standard_document_block_for_planning_and_story_docs(self):
+        from gateway.document_artifacts import format_document_artifact_block
+
+        with TemporaryDirectory() as tmpdir:
+            cases = [
+                Path(tmpdir) / "HermesWork" / "Documents" / "planning" / "brief.docx",
+                Path(tmpdir) / "HermesWork" / "Story" / "worldbuilding" / "report.docx",
+            ]
+            for artifact in cases:
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_text("done", encoding="utf-8")
+
+                frame = _format_specialist_result_frame(
+                    "Eclipse",
+                    status="completed",
+                    task_type="artifact",
+                    preview="문서 산출물을 만들었습니다.",
+                    summary="문서 산출물을 만들었습니다.",
+                    artifacts=[str(artifact)],
+                    exit_reason="completed",
+                )
+
+                self.assertIn(format_document_artifact_block(artifact), frame)
 
     def test_progress_callback_uses_failure_frame_for_general_specialists(self):
         parent = _make_mock_parent(depth=0)

@@ -204,3 +204,25 @@ class TestPublishDocumentArtifact:
         assert hook_calls[0]["artifact_path"] == expected
         assert hook_calls[0]["source_root"] == work_root / "Story"
         assert hook_calls[0]["scope"] == ""
+
+
+@pytest.mark.parametrize(
+    ("published_path", "expected_block"),
+    [
+        (
+            Path("/tmp/HermesWork/Documents/planning/brief.docx"),
+            "- 산출물\n  - 형식: DOCX\n  - 저장 위치: `HermesWork/Documents/planning/brief.docx`\n  - 전달 방식: Slack 첨부\n  - NAS 상태: hook state 생성",
+        ),
+        (
+            Path("/tmp/HermesWork/Story/worldbuilding/report.docx"),
+            "- 산출물\n  - 형식: DOCX\n  - 저장 위치: `HermesWork/Story/worldbuilding/report.docx`\n  - 전달 방식: Slack 첨부\n  - NAS 상태: hook state 생성",
+        ),
+    ],
+)
+def test_format_document_artifact_block_prefers_hermeswork_relative_paths(monkeypatch, tmp_path, published_path, expected_block):
+    monkeypatch.setattr(document_artifacts, "get_hermes_work_dir", lambda *parts: tmp_path / "HermesWork" / Path(*parts))
+    artifact = tmp_path / "HermesWork" / published_path.relative_to("/tmp/HermesWork")
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("placeholder", encoding="utf-8")
+
+    assert document_artifacts.format_document_artifact_block(artifact) == expected_block

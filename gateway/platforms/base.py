@@ -483,7 +483,11 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 from gateway.config import Platform, PlatformConfig
-from gateway.document_artifacts import is_document_artifact_path, publish_document_artifact
+from gateway.document_artifacts import (
+    format_document_artifact_block,
+    is_document_artifact_path,
+    publish_document_artifact,
+)
 from gateway.session import SessionSource, build_session_key
 from hermes_constants import get_hermes_dir, get_hermes_home
 
@@ -3688,7 +3692,31 @@ class BasePlatformAdapter(ABC):
                 local_files = self.filter_local_delivery_paths(local_files)
                 if local_files:
                     logger.info("[%s] extract_local_files found %d file(s) in response", self.name, len(local_files))
-                
+
+                artifact_reports: list[str] = []
+                artifact_report_seen: set[str] = set()
+
+                def _publish_document_for_ux(path: str) -> str:
+                    if not is_document_artifact_path(path):
+                        return path
+                    published_path = str(
+                        publish_document_artifact(
+                            Path(path),
+                            folder_name=Path(path).parent.name or "misc",
+                        )
+                    )
+                    report = format_document_artifact_block(published_path)
+                    if report not in artifact_report_seen:
+                        artifact_report_seen.add(report)
+                        artifact_reports.append(report)
+                    return published_path
+
+                media_files = [(_publish_document_for_ux(path), is_voice) for path, is_voice in media_files]
+                local_files = [_publish_document_for_ux(path) for path in local_files]
+                if artifact_reports:
+                    artifact_section = "\n\n".join(artifact_reports)
+                    text_content = f"{text_content}\n\n{artifact_section}".strip() if text_content else artifact_section
+
                 # Auto-TTS: if voice message, generate audio FIRST (before sending text)
                 # Gated via ``_should_auto_tts_for_chat``: fires when the chat has
                 # an explicit ``/voice on|tts`` opt-in OR when ``voice.auto_tts`` is
@@ -3841,14 +3869,6 @@ class BasePlatformAdapter(ABC):
                         await asyncio.sleep(human_delay)
                     try:
                         ext = Path(media_path).suffix.lower()
-                        if is_document_artifact_path(media_path):
-                            media_path = str(
-                                publish_document_artifact(
-                                    Path(media_path),
-                                    folder_name=Path(media_path).parent.name or "misc",
-                                )
-                            )
-                            ext = Path(media_path).suffix.lower()
                         if should_send_media_as_audio(self.platform, ext, is_voice=is_voice):
                             media_result = await self.send_voice(
                                 chat_id=event.source.chat_id,
@@ -3878,13 +3898,6 @@ class BasePlatformAdapter(ABC):
                     if human_delay > 0:
                         await asyncio.sleep(human_delay)
                     try:
-                        if is_document_artifact_path(file_path):
-                            file_path = str(
-                                publish_document_artifact(
-                                    Path(file_path),
-                                    folder_name=Path(file_path).parent.name or "misc",
-                                )
-                            )
                         ext = Path(file_path).suffix.lower()
                         if ext in _VIDEO_EXTS:
                             await self.send_video(
