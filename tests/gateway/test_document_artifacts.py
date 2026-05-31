@@ -118,6 +118,56 @@ class TestPublishDocumentArtifact:
         assert hook_calls[0]["scope"] == "worldbuilding"
         assert hook_calls[0]["source_root"] == work_root / "Story"
 
+    def test_routes_story_title_from_internal_folder_to_story_root(self, fake_hermes_work, tmp_path):
+        work_root, hook_calls = fake_hermes_work
+        source_dir = tmp_path / "hermes-agent"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        source = source_dir / "간단한_스릴러_세계관_설정.docx"
+        with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("[Content_Types].xml", _MINIMAL_DOCX_CONTENT_TYPES)
+            zf.writestr("word/document.xml", _MINIMAL_DOCX_DOCUMENT)
+
+        published = document_artifacts.publish_document_artifact(source, folder_name="hermes-agent")
+
+        expected = work_root / "Story" / source.name
+        assert published == expected
+        assert hook_calls[0]["category"] == "story"
+        assert hook_calls[0]["scope"] == ""
+        assert hook_calls[0]["source_root"] == work_root / "Story"
+        assert not (work_root / "Documents" / "hermes-agent").exists()
+
+    def test_normalizes_internal_document_scope_to_misc(self, fake_hermes_work, tmp_path):
+        work_root, hook_calls = fake_hermes_work
+        source_dir = tmp_path / "speedy"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        source = source_dir / "게임_기획서.docx"
+        with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("[Content_Types].xml", _MINIMAL_DOCX_CONTENT_TYPES)
+            zf.writestr("word/document.xml", _MINIMAL_DOCX_DOCUMENT)
+
+        published = document_artifacts.publish_document_artifact(source, folder_name="speedy")
+
+        expected = work_root / "Documents" / "misc" / source.name
+        assert published == expected
+        assert hook_calls[0]["category"] == "documents"
+        assert hook_calls[0]["scope"] == "misc"
+        assert hook_calls[0]["source_root"] == work_root / "Documents" / "misc"
+
+    def test_routes_tyr_and_lyra_hints_to_story_root(self, fake_hermes_work, tmp_path):
+        work_root, hook_calls = fake_hermes_work
+        for folder_name, filename in [("tyr", "연대기_초안.docx"), ("lyra", "설정집_초안.docx")]:
+            source = tmp_path / f"{folder_name}_{filename}"
+            with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("[Content_Types].xml", _MINIMAL_DOCX_CONTENT_TYPES)
+                zf.writestr("word/document.xml", _MINIMAL_DOCX_DOCUMENT)
+
+            published = document_artifacts.publish_document_artifact(source, folder_name=folder_name)
+            expected = work_root / "Story" / source.name
+            assert published == expected
+            assert hook_calls[-1]["category"] == "story"
+            assert hook_calls[-1]["scope"] == ""
+            assert hook_calls[-1]["source_root"] == work_root / "Story"
+
     def test_keeps_story_artifacts_without_ai_agent_subfolder(self, fake_hermes_work):
         work_root, hook_calls = fake_hermes_work
         existing = work_root / "Story" / "ai_agent" / "간단한_로맨스_세계관_설정.docx"

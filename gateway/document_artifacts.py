@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import shutil
 import tempfile
 import zipfile
@@ -64,10 +65,25 @@ _DRAWINGML_NAMESPACE = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
 _STORY_SCOPE_ALLOWLIST = {
     "lore",
-    "scenario",
     "setting",
     "story",
     "worldbuilding",
+}
+_INTERNAL_SCOPE_NAMES = {
+    "ai_agent",
+    "artist",
+    "balance",
+    "coder",
+    "comfy",
+    "cron-fast",
+    "designer",
+    "forge",
+    "hermes-agent",
+    "pm",
+    "qa",
+    "root",
+    "scenario",
+    "speedy",
 }
 _STORY_SCOPE_EMPTY_NAMES = {
     "",
@@ -85,7 +101,20 @@ _STORY_SCOPE_EMPTY_NAMES = {
     "root",
     "story",
     "stories",
+    *_INTERNAL_SCOPE_NAMES,
 }
+_STORY_HINT_TOKENS = {
+    "chronicle",
+    "lore",
+    "lyra",
+    "tyr",
+    "worldbuilding",
+    "세계관",
+    "설정집",
+    "시나리오",
+    "연대기",
+}
+_SCOPE_TOKEN_SPLIT_RE = re.compile(r"[^0-9A-Za-z가-힣]+")
 
 ET.register_namespace("w", _DOCX_NAMESPACE)
 ET.register_namespace("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships")
@@ -99,13 +128,51 @@ def _is_under_root(path: Path, root: Path) -> bool:
         return False
 
 
+def _scope_tokens(*values: str) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        if not value:
+            continue
+        lowered = value.casefold()
+        tokens.add(lowered)
+        for piece in _SCOPE_TOKEN_SPLIT_RE.split(
+            lowered.replace("-", " ").replace("_", " ").replace("/", " ").replace("\\", " ")
+        ):
+            piece = piece.strip("._ ")
+            if piece:
+                tokens.add(piece)
+    return tokens
+
+
+def _candidate_scope_name(folder_name: Optional[str], *, source: Path) -> str:
+    return (folder_name or source.parent.name or "").strip()
+
+
+def _is_internal_scope_name(name: str) -> bool:
+    return name.casefold() in _INTERNAL_SCOPE_NAMES
+
+
+def _looks_like_story_artifact(source: Path, story_root: Path, *, folder_name: Optional[str] = None) -> bool:
+    if _is_under_root(source, story_root):
+        return True
+    tokens = _scope_tokens(
+        folder_name or "",
+        source.name,
+        source.stem,
+        source.parent.name,
+        *source.parts[-4:],
+    )
+    return bool(tokens & _STORY_HINT_TOKENS)
+
+
 def _normalized_scope_name(folder_name: Optional[str], *, source: Path) -> str:
-    candidate = (folder_name or source.parent.name or "").strip()
+    candidate = _candidate_scope_name(folder_name, source=source)
     if not candidate:
         return "misc"
 
-    lowered = candidate.casefold()
-    if lowered == "ai_agent":
+    if _is_internal_scope_name(candidate):
+        return "misc"
+    if candidate.casefold() == "ai_agent":
         return "misc"
     return candidate
 
@@ -124,8 +191,12 @@ def _normalized_story_scope(source: Path, story_root: Path, *, folder_name: Opti
             return ""
         return first
 
-    candidate = (folder_name or source.parent.name or "").strip()
-    if candidate and candidate.casefold() in _STORY_SCOPE_ALLOWLIST:
+    candidate = _candidate_scope_name(folder_name, source=source)
+    if not candidate:
+        return ""
+    if candidate.casefold() in _STORY_SCOPE_EMPTY_NAMES:
+        return ""
+    if candidate.casefold() in _STORY_SCOPE_ALLOWLIST:
         return candidate
     return ""
 
@@ -469,9 +540,7 @@ def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None
     try:
         story_root = get_hermes_work_dir("Story")
         resolved_story_root = story_root.resolve(strict=False)
-        if _is_under_root(source, resolved_story_root) or (
-            folder_name is not None and folder_name.strip().casefold() in _STORY_SCOPE_ALLOWLIST
-        ):
+        if _looks_like_story_artifact(source, resolved_story_root, folder_name=folder_name):
             scope = _normalized_story_scope(source, resolved_story_root, folder_name=folder_name)
             if scope:
                 published_dir = get_hermes_work_dir("Story", scope)
