@@ -741,6 +741,21 @@ _SPECIALIST_PROFILE_MAP = {
     "Blade": "balance",
 }
 _PROFILE_TO_WORKER = {profile: worker for worker, profile in _SPECIALIST_PROFILE_MAP.items()}
+_GENERAL_SPECIALIST_PROFILES = frozenset(
+    {"coder", "designer", "pm", "cron-fast", "scenario", "qa", "balance"}
+)
+_UX_ARTIFACT_EXTENSIONS = {
+    ".docx": "DOCX",
+    ".pdf": "PDF",
+    ".pptx": "PPTX",
+    ".xlsx": "XLSX",
+    ".md": "MD",
+    ".png": "이미지",
+    ".jpg": "이미지",
+    ".jpeg": "이미지",
+    ".webp": "이미지",
+    ".gif": "이미지",
+}
 _SPECIALIST_PROFILE_PATTERNS = [
     (
         re.compile(
@@ -812,6 +827,130 @@ def _format_specialist_frame(
     parts = [header, "", intro]
     if body_text:
         parts.extend(["", body_text])
+    return "\n".join(parts)
+
+
+def _is_general_specialist_worker_label(worker_label: Optional[str]) -> bool:
+    profile = _normalize_specialist_profile(worker_label)
+    return bool(profile and profile in _GENERAL_SPECIALIST_PROFILES)
+
+
+def _normalize_delegate_artifacts(artifacts: Optional[Iterable[Any]]) -> List[str]:
+    seen: set[str] = set()
+    normalized: List[str] = []
+    for item in artifacts or []:
+        if not isinstance(item, str) or not item:
+            continue
+        expanded = os.path.expanduser(item)
+        if not os.path.isfile(expanded) or expanded in seen:
+            continue
+        seen.add(expanded)
+        normalized.append(expanded)
+    return normalized
+
+
+def _classify_delegate_artifact(path: str) -> Optional[Dict[str, str]]:
+    suffix = Path(path).suffix.lower()
+    artifact_type = _UX_ARTIFACT_EXTENSIONS.get(suffix)
+    if not artifact_type:
+        return None
+    display = "이미지 첨부" if artifact_type == "이미지" else "파일 첨부"
+    return {
+        "format": artifact_type,
+        "delivery": "Slack 첨부",
+        "display": display,
+        "path": path,
+    }
+
+
+def _format_specialist_result_frame(
+    worker_label: Optional[str],
+    *,
+    status: Optional[str] = None,
+    preview: Optional[str] = None,
+    summary: Optional[str] = None,
+    artifacts: Optional[Iterable[Any]] = None,
+    output_tail: Optional[Iterable[Dict[str, Any]]] = None,
+    api_calls: Optional[Any] = None,
+    exit_reason: Optional[str] = None,
+) -> str:
+    """Render the shared hybrid result frame for general specialist workers."""
+    if not _is_general_specialist_worker_label(worker_label):
+        return _format_specialist_frame(worker_label, "complete", preview or summary or "")
+
+    label = str(worker_label or "").strip()
+    normalized_status = str(status or "").strip().lower()
+    is_failure = normalized_status in {"error", "failed", "failure", "timeout", "interrupted"}
+    intro = f"{label}가 작업을 완료했습니다." if not is_failure else f"{label}가 작업을 완료하지 못했습니다."
+
+    sections: List[str] = []
+    primary_text = str(summary or preview or "").strip()
+    if primary_text:
+        sections.append(
+            "- "
+            + ("수행 내용" if not is_failure else "원인")
+            + "\n  "
+            + primary_text.replace("\n", "\n  ")
+        )
+
+    verification_lines: List[str] = []
+    verification_lines.append(f"상태: {'완료' if not is_failure else '실패'}")
+    if exit_reason:
+        verification_lines.append(f"종료 사유: {exit_reason}")
+    if api_calls is not None:
+        verification_lines.append(f"API 호출: {api_calls}")
+    tail = list(output_tail or [])
+    if tail:
+        last_tool = tail[-1] if isinstance(tail[-1], dict) else {}
+        if isinstance(last_tool, dict):
+            tool_name = str(last_tool.get("tool") or "tool").strip()
+            preview_text = str(last_tool.get("preview") or "").strip()
+            if preview_text:
+                first_line = preview_text.splitlines()[0].strip()
+                verification_lines.append(f"마지막 출력: {tool_name} — {first_line}")
+    if verification_lines:
+        sections.append("- 검증 결과\n  - " + "\n  - ".join(verification_lines))
+
+    if not is_failure:
+        sections.append("- 추가 확인 사항\n  추가 후속 작업은 필요하지 않습니다.")
+    else:
+        retry_text = (
+            "중단 원인을 확인한 뒤 재실행하세요."
+            if normalized_status == "interrupted"
+            else (
+                "시간 초과 원인을 확인한 뒤 더 작은 단위로 다시 시도하세요."
+                if normalized_status == "timeout"
+                else "실패 원인을 확인한 뒤 필요한 수정 후 재시도하세요."
+            )
+        )
+        sections.append(f"- 재시도 방법\n  {retry_text}")
+        user_action = (
+            "작업을 다시 진행할지, 범위를 줄일지 사용자 확인이 필요합니다."
+            if normalized_status == "interrupted"
+            else "실패 원인 수정 후 다시 실행할지 사용자 확인이 필요합니다."
+        )
+        sections.append(f"- 사용자 확인 필요 사항\n  {user_action}")
+
+    artifact_paths = _normalize_delegate_artifacts(artifacts)
+    artifact_entries = [
+        entry for path in artifact_paths if (entry := _classify_delegate_artifact(path)) is not None
+    ]
+    if artifact_entries:
+        artifact_lines: List[str] = []
+        for entry in artifact_entries:
+            artifact_lines.extend(
+                [
+                    f"형식: {entry['format']}",
+                    f"전달 방식: {entry['delivery']}",
+                    f"저장 위치: `{entry['path']}`",
+                    f"표시 방식: {entry['display']}",
+                ]
+            )
+        sections.append("- 산출물\n  - " + "\n  - ".join(artifact_lines))
+
+    parts = [f"[WORKER RESULT: {label}]", "", intro]
+    if sections:
+        parts.extend(["", "\n\n".join(sections)])
     return "\n".join(parts)
 
 
@@ -1126,10 +1265,15 @@ def _build_child_progress_callback(
             return
 
         if event_type == "subagent.complete":
-            complete_preview = _format_specialist_frame(
+            complete_preview = _format_specialist_result_frame(
                 specialist_worker_label,
-                "complete",
-                preview or "",
+                status=kwargs.get("status"),
+                preview=preview,
+                summary=kwargs.get("summary") or preview or "",
+                artifacts=kwargs.get("artifacts"),
+                output_tail=kwargs.get("output_tail"),
+                api_calls=kwargs.get("api_calls"),
+                exit_reason=kwargs.get("exit_reason"),
             )
             _relay("subagent.complete", preview=complete_preview, **kwargs)
             return
@@ -2317,6 +2461,10 @@ def _run_single_child(
             "files_read": _files_read,
             "files_written": _files_written,
             "output_tail": _output_tail,
+            "artifacts": _normalize_delegate_artifacts(
+                list(current_task_image_artifacts) + _extract_artifact_paths(summary)
+            ),
+            "exit_reason": exit_reason,
         }
         if _cost_usd is not None:
             try:

@@ -34,6 +34,7 @@ from tools.delegate_tool import (
     _build_child_progress_callback,
     _build_child_system_prompt,
     _format_specialist_frame,
+    _format_specialist_result_frame,
     _is_single_output_image_task,
     _resolve_specialist_worker_label,
     _strip_blocked_tools,
@@ -3316,11 +3317,24 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
             task_count=1,
             specialist_worker_label="Eclipse",
         )
-        self.assertIsNotNone(callback)
+        assert callback is not None
         callback_fn = callback
 
-        callback_fn("subagent.start", preview="Update the formatter")
-        callback_fn("subagent.complete", preview="Implemented the requested change.")
+        with TemporaryDirectory() as tmpdir:
+            artifact = Path(tmpdir) / "report.md"
+            artifact.write_text("done", encoding="utf-8")
+
+            callback_fn("subagent.start", preview="Update the formatter")
+            callback_fn(
+                "subagent.complete",
+                preview="Implemented the requested change.",
+                status="completed",
+                summary="Implemented the requested change.",
+                artifacts=[str(artifact)],
+                output_tail=[{"tool": "terminal", "preview": "pytest -q\n12 passed"}],
+                api_calls=3,
+                exit_reason="completed",
+            )
 
         start_calls = [
             call for call in parent.tool_progress_callback.call_args_list
@@ -3334,8 +3348,72 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertTrue(complete_calls)
         self.assertTrue(start_calls[0].args[2].startswith("[WORKER: Eclipse]"))
         self.assertIn("Eclipse가 해당 작업을 수행합니다.", start_calls[0].args[2])
-        self.assertTrue(complete_calls[0].args[2].startswith("[WORKER RESULT: Eclipse]"))
-        self.assertIn("Eclipse가 작업을 완료했습니다.", complete_calls[0].args[2])
+
+        complete_preview = complete_calls[0].args[2]
+        self.assertTrue(complete_preview.startswith("[WORKER RESULT: Eclipse]"))
+        self.assertIn("Eclipse가 작업을 완료했습니다.", complete_preview)
+        self.assertIn("- 수행 내용", complete_preview)
+        self.assertIn("- 검증 결과", complete_preview)
+        self.assertIn("- 추가 확인 사항", complete_preview)
+        self.assertIn("- 산출물", complete_preview)
+        self.assertIn("형식: MD", complete_preview)
+        self.assertIn("전달 방식: Slack 첨부", complete_preview)
+        self.assertIn("저장 위치: `", complete_preview)
+        self.assertIn("표시 방식: 파일 첨부", complete_preview)
+        self.assertIn("report.md", complete_preview)
+
+    def test_progress_callback_uses_failure_frame_for_general_specialists(self):
+        parent = _make_mock_parent(depth=0)
+        parent._delegate_spinner = MagicMock()
+        parent.tool_progress_callback = MagicMock()
+
+        callback = _build_child_progress_callback(
+            0,
+            "Validate the patch",
+            parent,
+            task_count=1,
+            specialist_worker_label="Rafina",
+        )
+        assert callback is not None
+        callback_fn = callback
+
+        callback_fn(
+            "subagent.complete",
+            preview="AssertionError: mismatch",
+            status="failed",
+            summary="AssertionError: mismatch",
+            artifacts=[],
+            output_tail=[],
+            api_calls=0,
+            exit_reason="error",
+        )
+
+        complete_calls = [
+            call for call in parent.tool_progress_callback.call_args_list
+            if call.args and call.args[0] == "subagent.complete"
+        ]
+        self.assertTrue(complete_calls)
+        complete_preview = complete_calls[0].args[2]
+        self.assertIn("[WORKER RESULT: Rafina]", complete_preview)
+        self.assertIn("Rafina가 작업을 완료하지 못했습니다.", complete_preview)
+        self.assertIn("- 원인", complete_preview)
+        self.assertIn("- 검증 결과", complete_preview)
+        self.assertIn("- 재시도 방법", complete_preview)
+        self.assertIn("- 사용자 확인 필요 사항", complete_preview)
+        self.assertNotIn("- 산출물", complete_preview)
+
+    def test_image_specialist_result_frame_stays_on_media_lineage(self):
+        frame = _format_specialist_result_frame(
+            "Palette",
+            status="completed",
+            preview="이미지 하나 생성 완료",
+            summary="이미지 하나 생성 완료",
+        )
+        self.assertIn("[WORKER RESULT: Palette]", frame)
+        self.assertIn("Palette가 작업을 완료했습니다.", frame)
+        self.assertNotIn("- 구현 요약", frame)
+        self.assertNotIn("- 검증", frame)
+
 
     @patch("tools.delegate_tool._resolve_delegation_credentials")
     @patch("tools.delegate_tool._load_config", return_value={"max_spawn_depth": 2})
