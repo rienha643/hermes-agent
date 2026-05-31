@@ -26,14 +26,17 @@ def test_queue_nas_sync_hook_launches_and_debounces(monkeypatch, tmp_path):
     script.write_text("print('ok')\n", encoding="utf-8")
 
     launched: list[list[str]] = []
+    launched_envs: list[dict[str, str]] = []
 
     class DummyPopen:
         def __init__(self, cmd, **kwargs):
             launched.append(cmd)
+            launched_envs.append(kwargs["env"])
             self.cmd = cmd
             self.kwargs = kwargs
 
     monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_script", lambda: script)
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_state_dir", lambda: tmp_path / "state" / "nas-sync")
     monkeypatch.setattr(nas_sync_hooks.subprocess, "Popen", DummyPopen)
     monkeypatch.setattr(nas_sync_hooks, "_IN_PROCESS_LAST_LAUNCH", {})
 
@@ -42,6 +45,7 @@ def test_queue_nas_sync_hook_launches_and_debounces(monkeypatch, tmp_path):
     artifact_path = source_root / "artifact.png"
     artifact_path.write_bytes(b"x")
 
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profiles" / "coder"))
     assert nas_sync_hooks.queue_nas_sync_hook(
         category="image",
         scope="task-1",
@@ -60,6 +64,47 @@ def test_queue_nas_sync_hook_launches_and_debounces(monkeypatch, tmp_path):
     assert launched[0][1] == str(script)
     assert launched[0][2:6] == ["--hook", str(source_root), "--category", "image"]
     assert launched[0][6:10] == ["--scope", "task-1", "--artifact-path", str(artifact_path)]
+    assert launched_envs[0]["HERMES_HOME"] == str(tmp_path / "profiles" / "coder")
+    assert launched_envs[0]["HERMES_NAS_HOOK_STATE_DIR"] == str(tmp_path / "state" / "nas-sync")
+
+
+@pytest.mark.parametrize("profile_name", ["coder", "artist"])
+def test_queue_nas_sync_hook_uses_same_standard_state_dir_across_profiles(monkeypatch, tmp_path, profile_name):
+    script = tmp_path / "hermes_nas_backup.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+
+    launched_envs: list[dict[str, str]] = []
+
+    class DummyPopen:
+        def __init__(self, cmd, **kwargs):
+            launched_envs.append(kwargs["env"])
+            self.cmd = cmd
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_script", lambda: script)
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_state_dir", lambda: tmp_path / "state" / "nas-sync")
+    monkeypatch.setattr(nas_sync_hooks.subprocess, "Popen", DummyPopen)
+    monkeypatch.setattr(nas_sync_hooks, "_IN_PROCESS_LAST_LAUNCH", {})
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profiles" / profile_name))
+    source_root = tmp_path / profile_name / "source"
+    source_root.mkdir(parents=True)
+
+    for idx in range(2):
+        artifact_path = source_root / f"artifact-{idx}.png"
+        artifact_path.write_bytes(b"x")
+        assert nas_sync_hooks.queue_nas_sync_hook(
+            category="image",
+            scope=f"task-{idx}",
+            artifact_path=artifact_path,
+            source_root=source_root,
+        )
+
+    assert [env["HERMES_NAS_HOOK_STATE_DIR"] for env in launched_envs] == [
+        str(tmp_path / "state" / "nas-sync"),
+        str(tmp_path / "state" / "nas-sync"),
+    ]
+    assert launched_envs[0]["HERMES_HOME"] == str(tmp_path / "profiles" / profile_name)
 
 
 def test_resolve_nas_hook_script_prefers_env_over_common_and_profile(monkeypatch, tmp_path):
@@ -122,6 +167,13 @@ def test_resolve_nas_hook_script_uses_common_cron_fast_for_non_cron_profiles(mon
     monkeypatch.setattr(nas_sync_hooks, "_resolve_configured_nas_hook_script", lambda: None)
 
     assert nas_sync_hooks._resolve_nas_hook_script() == common_script
+
+
+def test_resolve_nas_hook_state_dir_uses_cron_fast_runner_root(monkeypatch, tmp_path):
+    standard_root = tmp_path / "hermes-root"
+    monkeypatch.setattr(nas_sync_hooks, "get_default_hermes_root", lambda: standard_root)
+
+    assert nas_sync_hooks._resolve_nas_hook_state_dir() == standard_root / "profiles" / "cron-fast" / "state" / "nas-sync"
 
 
 def test_resolve_nas_hook_script_falls_back_to_profile_script(monkeypatch, tmp_path):
@@ -209,6 +261,54 @@ def test_run_artifact_hook_story_uses_canonical_destination(monkeypatch, tmp_pat
     assert captured["src"] == story_root
     assert str(captured["dest"]).lower().endswith("\\hermes\\story")
     assert captured["mirror"] is True
+
+
+def test_hook_state_dir_override_drives_lock_and_state_paths(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    state_dir = tmp_path / "runner-state" / "nas-sync"
+    monkeypatch.setenv("HERMES_NAS_HOOK_STATE_DIR", str(state_dir))
+
+    story_root = tmp_path / "HermesWork" / "Story"
+    source_root = story_root / "reports"
+    source_root.mkdir(parents=True)
+    artifact_path = source_root / "artifact.docx"
+    artifact_path.write_text("payload", encoding="utf-8")
+
+    recorded: dict[str, Path] = {}
+
+    def fake_acquire(lock_path, debounce_seconds):
+        recorded["lock_path"] = lock_path
+        return True
+
+    def fake_release(lock_path):
+        recorded["released_lock_path"] = lock_path
+
+    def fake_atomic_write_text(path, content):
+        recorded["state_path"] = path
+        recorded["state_content"] = content
+
+    monkeypatch.setattr(backup_mod, "_acquire_hook_lock", fake_acquire)
+    monkeypatch.setattr(backup_mod, "_release_hook_lock", fake_release)
+    monkeypatch.setattr(backup_mod, "_atomic_write_text", fake_atomic_write_text)
+    monkeypatch.setattr(backup_mod, "_load_hook_state", lambda *args, **kwargs: {})
+    monkeypatch.setattr(backup_mod, "load_credentials", lambda: backup_mod.Credential(host="hyungwoo", username="user", password="pass"))
+    monkeypatch.setattr(backup_mod, "sync_source_to_share", lambda *args, **kwargs: (3, "synced"))
+
+    ok, summary = backup_mod.run_artifact_hook(
+        category="documents",
+        scope="reports",
+        source_root=source_root,
+        artifact_path=artifact_path,
+    )
+
+    assert ok
+    assert "result=success" in summary
+    assert backup_mod._hook_state_dir() == state_dir
+    assert recorded["lock_path"].parent == state_dir
+    assert recorded["released_lock_path"].parent == state_dir
+    assert recorded["state_path"].parent == state_dir
+    assert backup_mod._hook_lock_path("documents|reports|ignored").parent == state_dir
+    assert backup_mod._hook_state_path("documents|reports|ignored").parent == state_dir
 
 
 @pytest.mark.parametrize(

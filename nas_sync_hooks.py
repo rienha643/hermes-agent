@@ -90,6 +90,11 @@ def _resolve_nas_hook_script() -> Path | None:
     return None
 
 
+def _resolve_nas_hook_state_dir() -> Path:
+    """Return the cron-fast NAS hook state directory used by the runner."""
+    return get_default_hermes_root() / "profiles" / "cron-fast" / "state" / "nas-sync"
+
+
 def _artifact_hook_key(category: str, scope: str, artifact_path: Path) -> str:
     resolved = artifact_path.resolve(strict=False)
     return f"{category}|{scope}|{resolved}"
@@ -170,13 +175,15 @@ def queue_nas_sync_hook(
             str(int(debounce_seconds)),
         ]
         try:
+            env = os.environ.copy()
+            env["HERMES_NAS_HOOK_STATE_DIR"] = str(_resolve_nas_hook_state_dir())
             subprocess.Popen(
                 cmd,
                 start_new_session=True,
                 close_fds=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                env=os.environ.copy(),
+                env=env,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to launch NAS sync hook for %s: %s", key, exc)
