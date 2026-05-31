@@ -57,6 +57,8 @@ class TestForgeLocalImageGenProviderAvailability:
 
 class TestForgeLocalImageGenProviderGenerate:
     def test_generate_calls_txt2img_and_saves_artifact(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
         forge_mod = importlib.import_module("plugins.image_gen.forge-local")
         from hermes_constants import get_hermes_work_dir
 
@@ -104,6 +106,68 @@ class TestForgeLocalImageGenProviderGenerate:
         )
         assert result["image"].startswith(str(get_hermes_work_dir("Image")))
         assert Path(result["image"]).exists()
+
+    def test_generate_publishes_into_provider_prefixed_image_tree_when_metadata_is_missing(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        forge_mod = importlib.import_module("plugins.image_gen.forge-local")
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"images": [TINY_PNG_B64], "parameters": {}, "info": "ok"}
+
+        monkeypatch.setattr(forge_mod.requests, "post", lambda *a, **k: Response())
+        monkeypatch.setattr(forge_mod, "_resolve_base_url", lambda: "http://172.22.224.1:7860")
+        monkeypatch.setattr(forge_mod, "_resolve_model", lambda: "Nullstyle_v20")
+
+        result = ForgeLocalImageGenProvider().generate(
+            "a cute robot on a desk",
+            aspect_ratio="square",
+        )
+
+        assert result["success"] is True
+        assert result["provider"] == "forge-local"
+        assert result["model"] == "Nullstyle_v20"
+        assert result["local_path"] == result["image"]
+        assert result["nas_status"] == "동기화 요청됨"
+        assert result["slack_status"] == "완료"
+        assert result["image"].startswith(str(tmp_path / "HermesWork" / "Image" / "260601_forge_test"))
+        assert Path(result["image"]).name == "forge_test_v1.png"
+
+    def test_generate_publishes_into_project_scoped_image_tree(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        forge_mod = importlib.import_module("plugins.image_gen.forge-local")
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"images": [TINY_PNG_B64], "parameters": {}, "info": "ok"}
+
+        monkeypatch.setattr(forge_mod.requests, "post", lambda *a, **k: Response())
+        monkeypatch.setattr(forge_mod, "_resolve_base_url", lambda: "http://172.22.224.1:7860")
+        monkeypatch.setattr(forge_mod, "_resolve_model", lambda: "Nullstyle_v20")
+
+        result = ForgeLocalImageGenProvider().generate(
+            "a cute robot on a desk",
+            aspect_ratio="square",
+            project_name="망각구역",
+            artifact_name="scene",
+        )
+
+        assert result["success"] is True
+        assert result["provider"] == "forge-local"
+        assert result["model"] == "Nullstyle_v20"
+        assert result["local_path"] == result["image"]
+        assert result["nas_status"] == "동기화 요청됨"
+        assert result["slack_status"] == "완료"
+        assert result["image"].startswith(str(tmp_path / "HermesWork" / "Image" / "260601_망각구역"))
+        assert Path(result["image"]).name == "scene_v1.png"
 
     def test_generate_invalid_prompt(self):
         result = ForgeLocalImageGenProvider().generate("   ")

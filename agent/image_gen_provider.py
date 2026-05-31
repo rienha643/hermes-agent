@@ -38,6 +38,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from gateway.project_registry import next_versioned_child_path, resolve_project_artifact_dir
 from nas_sync_hooks import queue_nas_sync_hook
 
 logger = logging.getLogger(__name__)
@@ -175,20 +176,28 @@ def _images_cache_dir() -> Path:
     return path
 
 
-def _publish_image_artifact(source: Path, *, prefix: str) -> Path:
+def _publish_image_artifact(
+    source: Path,
+    *,
+    prefix: str,
+    project_name: Optional[str] = None,
+    artifact_name: Optional[str] = None,
+) -> Path:
     """Copy an image cache file into the standard HermesWork Image tree.
 
     The cache copy remains the canonical source for internal cleanup, while the
     published copy is what users should keep as their final artifact.
     """
-    from hermes_constants import get_hermes_work_dir
-
-    published_dir = get_hermes_work_dir("Image", prefix)
-    published_path = published_dir / source.name
+    project_key = (project_name or prefix or "image").strip() or "image"
+    artifact_key = (artifact_name or prefix or source.stem or "image").strip() or "image"
+    artifact_key = Path(artifact_key).name
+    _, published_dir = resolve_project_artifact_dir("Image", project_key)
+    published_dir.mkdir(parents=True, exist_ok=True)
+    published_path = next_versioned_child_path(published_dir, f"{artifact_key}{source.suffix}")
     shutil.copyfile(source, published_path)
     queue_nas_sync_hook(
         category="image",
-        scope=prefix,
+        scope=published_path.parent.name,
         artifact_path=published_path,
         source_root=published_dir,
     )
@@ -200,12 +209,14 @@ def save_b64_image(
     *,
     prefix: str = "image",
     extension: str = "png",
+    project_name: Optional[str] = None,
+    artifact_name: Optional[str] = None,
 ) -> Path:
     """Decode base64 image data, cache it, and publish it to HermesWork.
 
     The image is always written under ``$HERMES_HOME/cache/images/`` first so
     internal cleanup stays unchanged. A second copy is then published under
-    ``HermesWork/Image/<prefix>/`` for the final user-visible artifact.
+    ``HermesWork/Image/<project>/`` for the final user-visible artifact.
 
     Returns the published artifact path when the publish step succeeds, or the
     cache path as a safe fallback if publication fails.
@@ -216,7 +227,12 @@ def save_b64_image(
     path = _images_cache_dir() / f"{prefix}_{ts}_{short}.{extension}"
     path.write_bytes(raw)
     try:
-        return _publish_image_artifact(path, prefix=prefix)
+        return _publish_image_artifact(
+            path,
+            prefix=prefix,
+            project_name=project_name,
+            artifact_name=artifact_name,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not publish image artifact to HermesWork: %s", exc)
         return path
@@ -241,6 +257,8 @@ def save_url_image(
     prefix: str = "image",
     timeout: float = 60.0,
     max_bytes: int = 25 * 1024 * 1024,
+    project_name: Optional[str] = None,
+    artifact_name: Optional[str] = None,
 ) -> Path:
     """Download an image URL and write it under ``$HERMES_HOME/cache/images/``.
 
@@ -302,7 +320,12 @@ def save_url_image(
         raise ValueError(f"Image at {url} returned 0 bytes; refusing to cache.")
 
     try:
-        return _publish_image_artifact(path, prefix=prefix)
+        return _publish_image_artifact(
+            path,
+            prefix=prefix,
+            project_name=project_name,
+            artifact_name=artifact_name,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not publish image artifact to HermesWork: %s", exc)
         return path

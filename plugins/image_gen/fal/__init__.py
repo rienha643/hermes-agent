@@ -121,6 +121,8 @@ class FalImageGenProvider(ImageGenProvider):
                 "num_images",
                 "output_format",
                 "seed",
+                "project_name",
+                "artifact_name",
             )
             if key in kwargs and kwargs[key] is not None
         }

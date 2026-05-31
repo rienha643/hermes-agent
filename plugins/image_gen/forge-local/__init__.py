@@ -210,6 +210,8 @@ class ForgeLocalImageGenProvider(ImageGenProvider):
         steps = kwargs.get("steps")
         if not isinstance(steps, int) or steps <= 0:
             steps = DEFAULT_STEPS
+        project_name = kwargs.get("project_name")
+        artifact_name = kwargs.get("artifact_name")
         cfg_scale = kwargs.get("cfg_scale")
         if not isinstance(cfg_scale, (int, float)) or cfg_scale <= 0:
             cfg_scale = DEFAULT_CFG_SCALE
@@ -312,7 +314,12 @@ class ForgeLocalImageGenProvider(ImageGenProvider):
             )
 
         try:
-            saved_path = save_b64_image(b64_image, prefix="forge_test")
+            saved_path = save_b64_image(
+                b64_image,
+                prefix="forge_test",
+                project_name=project_name,
+                artifact_name=artifact_name,
+            )
         except Exception as exc:  # noqa: BLE001
             return error_response(
                 error=f"Could not save Forge image to HermesWork: {exc}",

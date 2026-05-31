@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import gateway.document_artifacts as document_artifacts
+import gateway.project_registry as project_registry
 
 
 _MINIMAL_DOCX_CONTENT_TYPES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -44,12 +45,17 @@ def fake_hermes_work(monkeypatch, tmp_path):
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def fake_resolve_project_artifact_dir(category, project_name, created_on=None, *, work_root=None, registry_path=None):
+        project_id = f"260601_{project_registry.normalize_project_name(project_name)}"
+        return None, fake_get_hermes_work_dir(category) / project_id
+
     hook_calls: list[dict] = []
 
     def fake_queue_nas_sync_hook(**kwargs):
         hook_calls.append(kwargs)
 
     monkeypatch.setattr(document_artifacts, "get_hermes_work_dir", fake_get_hermes_work_dir)
+    monkeypatch.setattr(document_artifacts, "resolve_project_artifact_dir", fake_resolve_project_artifact_dir)
     monkeypatch.setattr(document_artifacts, "queue_nas_sync_hook", fake_queue_nas_sync_hook)
     return work_root, hook_calls
 
@@ -64,14 +70,14 @@ class TestPublishDocumentArtifact:
 
         published = document_artifacts.publish_document_artifact(source, folder_name="reports")
 
-        expected = work_root / "Documents" / "reports" / source.name
+        expected = work_root / "Documents" / "260601_reports" / "lovecomedy-world-setting_v1.docx"
         assert published == expected
         assert published.exists()
         assert hook_calls
         assert hook_calls[0]["category"] == "documents"
         assert hook_calls[0]["artifact_path"] == published
-        assert hook_calls[0]["scope"] == "reports"
-        assert hook_calls[0]["source_root"] == work_root / "Documents" / "reports"
+        assert hook_calls[0]["scope"] == "260601_reports"
+        assert hook_calls[0]["source_root"] == work_root / "Documents" / "260601_reports"
 
         with zipfile.ZipFile(published, "r") as zf:
             names = set(zf.namelist())
@@ -109,14 +115,14 @@ class TestPublishDocumentArtifact:
 
         published = document_artifacts.publish_document_artifact(source, folder_name="worldbuilding")
 
-        expected = work_root / "Story" / "worldbuilding" / source.name
+        expected = work_root / "Story" / "260601_worldbuilding" / "worldbuilding-lore_v1.docx"
         assert published == expected
         assert published.exists()
         assert hook_calls
         assert hook_calls[0]["category"] == "story"
         assert hook_calls[0]["artifact_path"] == published
-        assert hook_calls[0]["scope"] == "worldbuilding"
-        assert hook_calls[0]["source_root"] == work_root / "Story"
+        assert hook_calls[0]["scope"] == "260601_worldbuilding"
+        assert hook_calls[0]["source_root"] == work_root / "Story" / "260601_worldbuilding"
 
     def test_routes_story_title_from_internal_folder_to_story_root(self, fake_hermes_work, tmp_path):
         work_root, hook_calls = fake_hermes_work
@@ -129,11 +135,11 @@ class TestPublishDocumentArtifact:
 
         published = document_artifacts.publish_document_artifact(source, folder_name="hermes-agent")
 
-        expected = work_root / "Story" / source.name
+        expected = work_root / "Story" / "260601_misc" / f"{source.stem}_v1.docx"
         assert published == expected
         assert hook_calls[0]["category"] == "story"
-        assert hook_calls[0]["scope"] == ""
-        assert hook_calls[0]["source_root"] == work_root / "Story"
+        assert hook_calls[0]["scope"] == "260601_misc"
+        assert hook_calls[0]["source_root"] == work_root / "Story" / "260601_misc"
         assert not (work_root / "Documents" / "hermes-agent").exists()
 
     def test_normalizes_internal_document_scope_to_misc(self, fake_hermes_work, tmp_path):
@@ -147,11 +153,11 @@ class TestPublishDocumentArtifact:
 
         published = document_artifacts.publish_document_artifact(source, folder_name="speedy")
 
-        expected = work_root / "Documents" / "misc" / source.name
+        expected = work_root / "Documents" / "260601_misc" / f"{source.stem}_v1.docx"
         assert published == expected
         assert hook_calls[0]["category"] == "documents"
-        assert hook_calls[0]["scope"] == "misc"
-        assert hook_calls[0]["source_root"] == work_root / "Documents" / "misc"
+        assert hook_calls[0]["scope"] == "260601_misc"
+        assert hook_calls[0]["source_root"] == work_root / "Documents" / "260601_misc"
 
     def test_routes_tyr_and_lyra_hints_to_story_root(self, fake_hermes_work, tmp_path):
         work_root, hook_calls = fake_hermes_work
@@ -162,11 +168,11 @@ class TestPublishDocumentArtifact:
                 zf.writestr("word/document.xml", _MINIMAL_DOCX_DOCUMENT)
 
             published = document_artifacts.publish_document_artifact(source, folder_name=folder_name)
-            expected = work_root / "Story" / source.name
+            expected = work_root / "Story" / f"260601_{folder_name}" / f"{source.stem}_v1.docx"
             assert published == expected
             assert hook_calls[-1]["category"] == "story"
-            assert hook_calls[-1]["scope"] == ""
-            assert hook_calls[-1]["source_root"] == work_root / "Story"
+            assert hook_calls[-1]["scope"] == f"260601_{folder_name}"
+            assert hook_calls[-1]["source_root"] == work_root / "Story" / f"260601_{folder_name}"
 
     def test_keeps_story_artifacts_without_ai_agent_subfolder(self, fake_hermes_work):
         work_root, hook_calls = fake_hermes_work

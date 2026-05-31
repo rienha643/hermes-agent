@@ -35,6 +35,7 @@ def _b64_png() -> str:
 @pytest.fixture(autouse=True)
 def _tmp_hermes_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
     yield tmp_path
 
 
@@ -119,10 +120,30 @@ class TestGenerate:
 
         saved = Path(result["image"])
         assert saved.exists()
-        assert saved.parent == tmp_path / "cache" / "images"
+        assert saved.parent == tmp_path / "HermesWork" / "Image" / "260601_openai_codex_gpt_image_2_medium"
         # Filename prefix differs from the API-key plugin so cache audits can
         # tell the two backends apart.
         assert saved.name.startswith("openai_codex_")
+
+    def test_generate_publishes_into_project_scoped_image_tree(self, provider, monkeypatch, tmp_path):
+        monkeypatch.setattr(codex_plugin, "_read_codex_access_token", lambda: "codex-token")
+        monkeypatch.setattr(codex_plugin, "_collect_image_b64", lambda *a, **kw: _b64_png())
+
+        result = provider.generate(
+            "a cat",
+            aspect_ratio="landscape",
+            project_name="망각구역",
+            artifact_name="scene",
+        )
+
+        assert result["success"] is True
+        saved = Path(result["image"])
+        assert saved.exists()
+        assert saved.parent == tmp_path / "HermesWork" / "Image" / "260601_망각구역"
+        assert saved.name == "scene_v1.png"
+        assert result["local_path"] == result["image"]
+        assert result["nas_status"] == "동기화 요청됨"
+        assert result["slack_status"] == "완료"
 
     def test_codex_stream_request_shape(self, provider, monkeypatch):
         monkeypatch.setattr(codex_plugin, "_read_codex_access_token", lambda: "codex-token")

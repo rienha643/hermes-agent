@@ -367,6 +367,8 @@ class OpenAICodexImageGenProvider(ImageGenProvider):
 
         tier_id, meta = _resolve_model()
         size = _SIZES.get(aspect, _SIZES["square"])
+        project_name = kwargs.get("project_name")
+        artifact_name = kwargs.get("artifact_name")
 
         token = _read_codex_access_token()
         if not token:
@@ -411,7 +413,12 @@ class OpenAICodexImageGenProvider(ImageGenProvider):
             )
 
         try:
-            saved_path = save_b64_image(b64, prefix=f"openai_codex_{tier_id}")
+            saved_path = save_b64_image(
+                b64,
+                prefix=f"openai_codex_{tier_id}",
+                project_name=project_name,
+                artifact_name=artifact_name,
+            )
         except Exception as exc:
             return error_response(
                 error=f"Could not save image to cache: {exc}",

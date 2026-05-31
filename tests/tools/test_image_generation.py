@@ -367,7 +367,7 @@ class TestRegistryIntegration:
         """The agent-facing schema must stay tight — model selection is a
         user-level config choice, not an agent-level arg."""
         props = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]
-        assert set(props.keys()) == {"prompt", "aspect_ratio"}
+        assert set(props.keys()) == {"prompt", "aspect_ratio", "project_name", "artifact_name"}
 
     def test_aspect_ratio_enum_is_three_values(self, image_tool):
         enum = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]["aspect_ratio"]["enum"]

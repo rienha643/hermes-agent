@@ -108,8 +108,8 @@ class TestSaveUrlImage:
         cache_dir = tmp_path / ".hermes" / "cache" / "images"
         assert any(p.suffix == ".png" for p in cache_dir.iterdir())
         assert path.suffix == ".png"
-        # Final artifacts are published to HermesWork/Image.
-        assert "/HermesWork/Image/xai_test/" in str(path)
+        # Final artifacts are published to HermesWork/Image/<project_id>/.
+        assert "/HermesWork/Image/260601_xai_test/" in str(path)
 
     def test_extension_inferred_from_content_type(self, http_server):
         base, _ = http_server

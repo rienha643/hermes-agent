@@ -26,6 +26,7 @@ from typing import Optional
 from xml.etree import ElementTree as ET
 
 from hermes_constants import get_hermes_work_dir
+from gateway.project_registry import next_versioned_child_path, resolve_project_artifact_dir
 import nas_sync_hooks
 
 logger = logging.getLogger(__name__)
@@ -657,28 +658,36 @@ def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None
         return source
 
     try:
+        project_name = _normalized_scope_name(folder_name, source=source)
+
         story_root = get_hermes_work_dir("Story")
         resolved_story_root = story_root.resolve(strict=False)
         if _looks_like_story_artifact(source, resolved_story_root, folder_name=folder_name):
             scope = _normalized_story_scope(source, resolved_story_root, folder_name=folder_name)
-            if scope:
-                published_dir = get_hermes_work_dir("Story", scope)
+            if _is_under_root(source, resolved_story_root):
+                canonical_relative = _canonical_story_relative_path(source, resolved_story_root)
+                published_path = resolved_story_root / canonical_relative
+                source_root = story_root
+                _cleanup_story_duplicate_tree(story_root)
             else:
-                published_dir = story_root
-            published_path = published_dir / source.name
-            if published_path.resolve(strict=False) != source:
-                try:
-                    shutil.copy2(source, published_path)
-                except PermissionError as exc:
-                    logger.warning(
-                        "Story artifact metadata copy failed; falling back to content copy: %s",
-                        exc,
-                    )
-                    shutil.copyfile(source, published_path)
-            source_root = story_root
-            if published_path.suffix.lower() == ".docx":
+                _, published_dir = resolve_project_artifact_dir("Story", project_name)
+                published_dir.mkdir(parents=True, exist_ok=True)
+                published_path = next_versioned_child_path(published_dir, source.name)
+                if published_path.resolve(strict=False) != source:
+                    try:
+                        shutil.copy2(source, published_path)
+                    except PermissionError as exc:
+                        logger.warning(
+                            "Story artifact metadata copy failed; falling back to content copy: %s",
+                            exc,
+                        )
+                        shutil.copyfile(source, published_path)
+                source_root = published_dir
+                scope = published_path.parent.name
+
+            if published_path.suffix.lower() == ".docx" and published_path.exists():
                 _modernize_docx_package(published_path)
-            _cleanup_story_duplicate_tree(story_root)
+
             queue_nas_sync_hook(
                 category="story",
                 scope=scope,
@@ -695,9 +704,9 @@ def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None
             scope = "" if str(relative_parent) == "." else str(relative_parent).replace("/", os.sep)
             source_root = published_path.parent
         else:
-            preferred_folder = _normalized_scope_name(folder_name, source=source)
-            published_dir = get_hermes_work_dir("Documents", preferred_folder)
-            published_path = published_dir / source.name
+            _, published_dir = resolve_project_artifact_dir("Documents", project_name)
+            published_dir.mkdir(parents=True, exist_ok=True)
+            published_path = next_versioned_child_path(published_dir, source.name)
             if published_path.resolve(strict=False) != source:
                 try:
                     shutil.copy2(source, published_path)
@@ -707,10 +716,10 @@ def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None
                         exc,
                     )
                     shutil.copyfile(source, published_path)
-            scope = preferred_folder
+            scope = published_path.parent.name
             source_root = published_dir
 
-        if published_path.suffix.lower() == ".docx":
+        if published_path.suffix.lower() == ".docx" and published_path.exists():
             _modernize_docx_package(published_path)
 
         queue_nas_sync_hook(

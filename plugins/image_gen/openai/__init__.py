@@ -212,6 +212,8 @@ class OpenAIImageGenProvider(ImageGenProvider):
 
         tier_id, meta = _resolve_model()
         size = _SIZES.get(aspect, _SIZES["square"])
+        project_name = kwargs.get("project_name")
+        artifact_name = kwargs.get("artifact_name")
 
         # gpt-image-2 returns b64_json unconditionally and REJECTS
         # ``response_format`` as an unknown parameter. Don't send it.
@@ -255,7 +257,12 @@ class OpenAIImageGenProvider(ImageGenProvider):
 
         if b64:
             try:
-                saved_path = save_b64_image(b64, prefix=f"openai_{tier_id}")
+                saved_path = save_b64_image(
+                    b64,
+                    prefix=f"openai_{tier_id}",
+                    project_name=project_name,
+                    artifact_name=artifact_name,
+                )
             except Exception as exc:
                 return error_response(
                     error=f"Could not save image to cache: {exc}",
@@ -272,7 +279,12 @@ class OpenAIImageGenProvider(ImageGenProvider):
             # gateway never tries to fetch an ephemeral / signed URL after
             # it expires — same rationale as the xAI provider (#26942).
             try:
-                saved_path = save_url_image(url, prefix=f"openai_{tier_id}")
+                saved_path = save_url_image(
+                    url,
+                    prefix=f"openai_{tier_id}",
+                    project_name=project_name,
+                    artifact_name=artifact_name,
+                )
             except Exception as exc:
                 logger.warning(
                     "OpenAI image URL %s could not be cached (%s); falling back to bare URL.",

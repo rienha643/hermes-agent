@@ -658,6 +658,8 @@ def image_generate_tool(
     num_images: Optional[int] = None,
     output_format: Optional[str] = None,
     seed: Optional[int] = None,
+    project_name: Optional[str] = None,
+    artifact_name: Optional[str] = None,
 ) -> str:
     """Generate an image from a text prompt using the configured FAL model.
 
@@ -681,6 +683,8 @@ def image_generate_tool(
             "num_images": num_images,
             "output_format": output_format,
             "seed": seed,
+            "project_name": project_name,
+            "artifact_name": artifact_name,
         },
         "error": None,
         "success": False,
@@ -704,6 +708,12 @@ def image_generate_tool(
                 aspect_ratio, DEFAULT_ASPECT_RATIO,
             )
             aspect_lc = DEFAULT_ASPECT_RATIO
+
+        project_name, artifact_name = _infer_image_project_metadata(
+            prompt,
+            project_name=project_name,
+            artifact_name=artifact_name,
+        )
 
         overrides: Dict[str, Any] = {}
         if num_inference_steps is not None:
@@ -967,10 +977,41 @@ IMAGE_GENERATE_SCHEMA = {
                 "description": "The aspect ratio of the generated image. 'landscape' is 16:9 wide, 'portrait' is 16:9 tall, 'square' is 1:1.",
                 "default": DEFAULT_ASPECT_RATIO,
             },
+            "project_name": {
+                "type": "string",
+                "description": "Optional project name used to publish the image into the matching HermesWork/Image project folder.",
+            },
+            "artifact_name": {
+                "type": "string",
+                "description": "Optional artifact base name used for the published filename.",
+            },
         },
         "required": ["prompt"],
     },
 }
+
+
+def _infer_image_project_metadata(
+    prompt: str,
+    project_name: Optional[str] = None,
+    artifact_name: Optional[str] = None,
+) -> tuple[str | None, str | None]:
+    """Best-effort project routing for image worker calls.
+
+    The worker path may omit project metadata entirely. When that happens, we
+    infer the project and artifact names from the prompt using the minimal
+    rules requested by the image routing workflow.
+    """
+    prompt_text = str(prompt or "").strip()
+    resolved_project = str(project_name).strip() if isinstance(project_name, str) else ""
+    resolved_artifact = str(artifact_name).strip() if isinstance(artifact_name, str) else ""
+
+    if not resolved_project and "망각구역" in prompt_text:
+        resolved_project = "망각구역"
+    if not resolved_artifact:
+        resolved_artifact = "주인공" if "주인공" in prompt_text else "이미지"
+
+    return (resolved_project or None, resolved_artifact or None)
 
 
 def _read_configured_image_model():
@@ -1012,7 +1053,13 @@ def _read_configured_image_provider():
     return None
 
 
-def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str, task_id: str | None = None):
+def _dispatch_to_plugin_provider(
+    prompt: str,
+    aspect_ratio: str,
+    task_id: str | None = None,
+    project_name: str | None = None,
+    artifact_name: str | None = None,
+):
     """Route the call to a plugin-registered provider when one is selected.
 
     Returns a JSON string on dispatch, or ``None`` to fall through to the
@@ -1090,6 +1137,10 @@ def _dispatch_to_plugin_provider(prompt: str, aspect_ratio: str, task_id: str | 
 
     try:
         kwargs = {"prompt": prompt, "aspect_ratio": aspect_ratio}
+        if project_name is not None:
+            kwargs["project_name"] = project_name
+        if artifact_name is not None:
+            kwargs["artifact_name"] = artifact_name
         if configured_model:
             kwargs["model"] = configured_model
         result = provider.generate(**kwargs)
@@ -1126,17 +1177,33 @@ def _handle_image_generate(args, **kw):
     if not prompt:
         return tool_error("prompt is required for image generation")
     aspect_ratio = args.get("aspect_ratio", DEFAULT_ASPECT_RATIO)
+    project_name = args.get("project_name")
+    artifact_name = args.get("artifact_name")
     task_id = kw.get("task_id")
+
+    project_name, artifact_name = _infer_image_project_metadata(
+        prompt,
+        project_name=project_name,
+        artifact_name=artifact_name,
+    )
 
     # Route to a plugin-registered provider if one is active (and it's
     # not the in-tree FAL path).
-    dispatched = _dispatch_to_plugin_provider(prompt, aspect_ratio, task_id=task_id)
+    dispatched = _dispatch_to_plugin_provider(
+        prompt,
+        aspect_ratio,
+        task_id=task_id,
+        project_name=project_name,
+        artifact_name=artifact_name,
+    )
     if dispatched is not None:
         return dispatched
 
     return image_generate_tool(
         prompt=prompt,
         aspect_ratio=aspect_ratio,
+        project_name=project_name,
+        artifact_name=artifact_name,
     )
 
 

@@ -32,6 +32,7 @@ def _fake_response(*, b64=None, url=None, revised_prompt=None):
 @pytest.fixture(autouse=True)
 def _tmp_hermes_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
     yield tmp_path
 
 
@@ -170,6 +171,22 @@ class TestGenerate:
         assert call_kwargs["size"] == "1536x1024"
         # gpt-image-2 rejects response_format — we must NOT send it.
         assert "response_format" not in call_kwargs
+
+    def test_b64_publishes_into_provider_prefixed_image_tree_when_metadata_is_missing(self, provider, tmp_path):
+        fake_client = MagicMock()
+        fake_client.images.generate.return_value = _fake_response(b64=_b64_png())
+
+        with _patched_openai(fake_client):
+            result = provider.generate("a cat", aspect_ratio="landscape")
+
+        assert result["success"] is True
+        saved = Path(result["image"])
+        assert saved.exists()
+        assert saved.parent == tmp_path / "HermesWork" / "Image" / "260601_openai_gpt_image_2_medium"
+        assert saved.name == "openai_gpt-image-2-medium_v1.png"
+        assert result["local_path"] == result["image"]
+        assert result["nas_status"] == "동기화 요청됨"
+        assert result["slack_status"] == "완료"
 
     @pytest.mark.parametrize("tier,expected_quality", [
         ("gpt-image-2-low", "low"),

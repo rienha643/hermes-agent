@@ -386,4 +386,4 @@ def test_publish_document_artifact_falls_back_when_copy2_metadata_fails(monkeypa
     assert published_doc.exists()
     assert published_doc.read_text(encoding="utf-8") == "hello"
     assert copied == [(source, published_doc)]
-    assert calls == [("documents", "job-1", published_doc, published_doc.parent)]
+    assert calls == [("documents", "260601_job_1", published_doc, published_doc.parent)]
