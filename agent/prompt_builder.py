@@ -162,7 +162,12 @@ DOCUMENT_STYLE_GUIDANCE = (
     "may be in Korean honorific speech, but document prose should follow the document's own "
     "genre: worldbuilding in narrative prose, setting docs in encyclopedic tone, scripts in "
     "screenplay form, plans in report style, READMEs in technical documentation style, and "
-    "QA outputs in analytical/report style unless the user explicitly requests otherwise."
+    "QA outputs in analytical/report style unless the user explicitly requests otherwise. "
+    "When the user requests document outputs, generate only the explicitly requested "
+    "format(s) and no companions: a single DOCX/PDF/MD request must produce only that "
+    "artifact, not an extra markdown source/summary or alternate export. If multiple "
+    "formats are explicitly requested, produce exactly those and nothing else. For "
+    "narrative and design-doc work, DOCX-only means DOCX only, and MD-only means MD only."
 )
 
 SESSION_SEARCH_GUIDANCE = (

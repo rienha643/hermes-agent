@@ -1074,6 +1074,8 @@ class TestBuildSystemPrompt:
 
         prompt = agent._build_system_prompt()
         assert DOCUMENT_STYLE_GUIDANCE in prompt
+        assert "single DOCX/PDF/MD request must produce only that artifact" in prompt
+        assert "For narrative and design-doc work, DOCX-only means DOCX only, and MD-only means MD only" in prompt
 
     def test_memory_guidance_when_memory_tool_loaded(self, agent_with_memory_tool):
         from agent.prompt_builder import MEMORY_GUIDANCE
