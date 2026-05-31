@@ -522,7 +522,7 @@ class TestDelegateTask(unittest.TestCase):
 
         published = Path(result["artifacts"][0])
         self.assertTrue(published.exists())
-        self.assertTrue(str(published).startswith("/mnt/c/Users/AI_Agent/HermesWork/Documents/worker/"))
+        self.assertTrue(str(published).startswith("/mnt/c/Users/AI_Agent/HermesWork/Documents/260601_worker/"))
         self.assertEqual(published.read_text(encoding="utf-8"), "hello")
         self.assertEqual(result["results"][0]["artifacts"], [str(published)])
         mock_hook.assert_called_once()
