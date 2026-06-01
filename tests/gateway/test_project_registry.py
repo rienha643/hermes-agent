@@ -104,6 +104,22 @@ def test_create_games_project_tree_reuses_registry_entry_for_later_dates(monkeyp
     assert registry["project_alpha"].project_id == "260601_Project_Alpha"
 
 
+def test_create_games_project_tree_accepts_pre_registered_project_record(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profiles" / "qa"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+
+    record = project_registry.register_project("Project Alpha", "2026-06-01")
+    project_root = project_registry.create_games_project_tree(
+        "Project Alpha",
+        "2026-07-04",
+        project_record=record,
+    )
+
+    assert project_root.name == record.project_id == "260601_Project_Alpha"
+    registry = project_registry.load_project_registry()
+    assert registry["project_alpha"].project_id == "260601_Project_Alpha"
+
+
 def test_next_versioned_child_path_advances_from_existing_and_versioned_sources(tmp_path):
     directory = tmp_path / "out"
     directory.mkdir()

@@ -199,9 +199,10 @@ def create_games_project_tree(
     *,
     work_root: Path | None = None,
     registry_path: Path | None = None,
+    project_record: ProjectRecord | None = None,
 ) -> Path:
     """Create the canonical Games project folder tree and return its root."""
-    record = register_project(project_name, created_on, registry_path=registry_path)
+    record = project_record or register_project(project_name, created_on, registry_path=registry_path)
     games_root = (work_root or get_hermes_work_dir("Games")).resolve(strict=False)
     project_root = games_root / record.project_id
 
