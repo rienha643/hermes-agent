@@ -40,7 +40,48 @@ def test_register_project_reuses_existing_project_id_across_dates(monkeypatch, t
     assert "260601_망각_구역" in saved
 
 
-def test_register_project_reuses_same_project_id_across_profiles(monkeypatch, tmp_path):
+def test_remove_project_registry_entry_requires_proof_and_preserves_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profiles" / "coder"))
+    record = project_registry.register_project("Project Alpha", date(2026, 6, 1))
+    registry_path = tmp_path / "state" / "project_registry.json"
+
+    blocked = project_registry.remove_project_registry_entry(
+        project_name="Project Alpha",
+        registry_path=registry_path,
+    )
+    assert blocked["registry_cleanup_status"] == "approval_required"
+    assert blocked["registry_entry_removed"] is False
+    assert registry_path.exists()
+    assert project_registry.load_project_registry(registry_path=registry_path)["project_alpha"].project_id == record.project_id
+
+    allowed = project_registry.remove_project_registry_entry(
+        project_id=record.project_id,
+        approval_proof={"user_approved": True, "approval_id": "proof-1"},
+        registry_path=registry_path,
+    )
+    assert allowed["registry_cleanup_status"] == "removed"
+    assert allowed["registry_entry_removed"] is True
+    assert allowed["registry_file_removed"] is False
+    assert registry_path.exists()
+    assert project_registry.load_project_registry(registry_path=registry_path) == {}
+
+
+def test_remove_project_registry_entry_rejects_false_proof(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profiles" / "coder"))
+    record = project_registry.register_project("Project Alpha", date(2026, 6, 1))
+    registry_path = tmp_path / "state" / "project_registry.json"
+
+    blocked = project_registry.remove_project_registry_entry(
+        project_id=record.project_id,
+        approval_proof={"user_approved": False},
+        registry_path=registry_path,
+    )
+    assert blocked["registry_cleanup_status"] == "approval_required"
+    assert blocked["registry_entry_removed"] is False
+    assert project_registry.load_project_registry(registry_path=registry_path)["project_alpha"].project_id == record.project_id
+
+
+def test_register_project_reuses_existing_project_id_across_profiles(monkeypatch, tmp_path):
     shared_root = tmp_path / "shared-root"
 
     monkeypatch.setenv("HERMES_HOME", str(shared_root / "profiles" / "coder"))

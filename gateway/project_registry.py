@@ -193,6 +193,71 @@ def register_project(
     return record
 
 
+def _approval_proof_allows_registry_cleanup(approval_proof: Mapping[str, Any] | None) -> bool:
+    return isinstance(approval_proof, Mapping) and approval_proof.get("user_approved") is True
+
+
+def remove_project_registry_entry(
+    project_name: str | None = None,
+    *,
+    project_id: str | None = None,
+    approval_proof: Mapping[str, Any] | None = None,
+    registry_path: Path | None = None,
+) -> dict[str, Any]:
+    """Remove a project registry entry only when the approval proof is present.
+
+    The registry JSON file itself is never deleted; the helper only removes the
+    matching entry and rewrites the file in place.
+    """
+    path = registry_path or project_registry_path()
+    registry = load_project_registry(registry_path=path)
+    if not _approval_proof_allows_registry_cleanup(approval_proof):
+        return {
+            "registry_cleanup_status": "approval_required",
+            "registry_entry_removed": False,
+            "registry_file_removed": False,
+            "registry_file_path": str(path),
+            "registry_file_exists_after": path.exists(),
+            "approval_proof": dict(approval_proof) if isinstance(approval_proof, Mapping) else None,
+        }
+
+    lookup_key = _project_lookup_key(project_name) if project_name is not None else None
+    removed_key: str | None = None
+    removed_record: ProjectRecord | None = None
+    if lookup_key is not None and lookup_key in registry:
+        removed_key = lookup_key
+        removed_record = registry.pop(lookup_key)
+    elif project_id:
+        for key, record in list(registry.items()):
+            if record.project_id == project_id:
+                removed_key = key
+                removed_record = registry.pop(key)
+                break
+
+    if removed_record is None:
+        return {
+            "registry_cleanup_status": "not_found",
+            "registry_entry_removed": False,
+            "registry_file_removed": False,
+            "registry_file_path": str(path),
+            "registry_file_exists_after": path.exists(),
+            "removed_key": removed_key,
+        }
+
+    _write_project_registry(registry, registry_path=path)
+    return {
+        "registry_cleanup_status": "removed",
+        "registry_entry_removed": True,
+        "registry_file_removed": False,
+        "registry_file_path": str(path),
+        "registry_file_exists_after": path.exists(),
+        "removed_key": removed_key,
+        "removed_project_id": removed_record.project_id,
+        "removed_project_name": removed_record.project_name,
+        "approval_proof": dict(approval_proof) if isinstance(approval_proof, Mapping) else None,
+    }
+
+
 def create_games_project_tree(
     project_name: str,
     created_on: date | datetime | str,
