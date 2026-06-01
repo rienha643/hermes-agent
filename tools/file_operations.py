@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 from tools.binary_extensions import BINARY_EXTENSIONS
+from gateway.artifact_delete import build_delete_dry_run, execute_approved_local_delete
 
 from agent.file_safety import (
     build_write_denied_paths,
@@ -128,6 +129,28 @@ def _get_safe_write_root() -> Optional[str]:
 def _is_write_denied(path: str) -> bool:
     """Return True if path is on the write deny list."""
     return _shared_is_write_denied(path)
+
+
+def plan_hermes_artifact_delete(
+    path: str | Path,
+    *,
+    category: Optional[str] = None,
+    mirror: Optional[bool] = None,
+    local_root: str | Path | None = None,
+    nas_root: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return a P1 dry-run delete plan for HermesWork artifacts.
+
+    Returns ``None`` when ``path`` is outside the supported HermesWork
+    artifact roots. The helper never performs deletion.
+    """
+    return build_delete_dry_run(
+        path,
+        category=category,
+        mirror=mirror,
+        local_root=local_root,
+        nas_root=nas_root,
+    )
 
 
 # =============================================================================
@@ -331,7 +354,15 @@ class FileOperations(ABC):
         ...
 
     @abstractmethod
-    def delete_file(self, path: str) -> WriteResult:
+    def delete_file(
+        self,
+        path: str,
+        *,
+        category: Optional[str] = None,
+        mirror: Optional[bool] = None,
+        dry_run: bool = True,
+        approved: Optional[bool] = None,
+    ) -> WriteResult:
         """Delete a file. Returns WriteResult with .error set on failure."""
         ...
 
@@ -952,9 +983,46 @@ class ShellFileOperations(FileOperations):
             file_size=file_size,
         )
 
-    def delete_file(self, path: str) -> WriteResult:
-        """Delete a file via rm."""
+    def delete_file(
+        self,
+        path: str,
+        *,
+        category: Optional[str] = None,
+        mirror: Optional[bool] = None,
+        dry_run: bool = True,
+        approved: Optional[bool] = None,
+    ) -> WriteResult:
+        """Delete a file via rm, or route HermesWork artifacts through the delete workflow."""
         path = self._expand_path(path)
+
+        plan = plan_hermes_artifact_delete(path, category=category, mirror=mirror)
+        if plan is not None:
+            if approved is True and not dry_run:
+                result = execute_approved_local_delete(
+                    path,
+                    category=category,
+                    mirror=mirror,
+                    approved=approved,
+                )
+                if result is None:
+                    return WriteResult(error="Failed to build approved HermesWork delete result")
+                warning = None
+                if not result.get("local_delete_verified", False):
+                    warning = "HermesWork artifact local delete executed but verification failed."
+                lint_payload: Dict[str, Any] = result.copy()
+                lint_payload["artifact_delete_plan"] = result
+                return WriteResult(lint=lint_payload, warning=warning)
+
+            warning = "HermesWork artifact delete routed to dry-run orchestrator; actual deletion skipped."
+            if not plan.get("will_delete_local", True) or not plan.get("will_delete_nas", True):
+                warning = "HermesWork artifact delete blocked by dry-run plan; actual deletion skipped."
+            lint_payload: Dict[str, Any] = plan.copy()
+            lint_payload["artifact_delete_plan"] = plan
+            return WriteResult(
+                lint=lint_payload,
+                warning=warning,
+            )
+
         if _is_write_denied(path):
             return WriteResult(error=f"Delete denied: {path} is a protected path")
         result = self._exec(f"rm -f {self._escape_shell_arg(path)}")
