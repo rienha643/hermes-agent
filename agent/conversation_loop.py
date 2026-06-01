@@ -362,9 +362,10 @@ _KICKOFF_GAME_RE = re.compile(
 )
 _PROJECT_NAME_QUOTED_RE = re.compile(r"[\"'“”‘’「『](?P<name>.+?)[\"'”’」』]")
 _PROJECT_NAME_MARKED_RE = re.compile(
-    r"(?:프로젝트명|프로젝트\s*이름|이름|project\s*name)\s*(?:(?:은|는)(?=\s)|:|=|is)?\s*(?P<name>.+)",
+    r"(?:프로젝트명|프로젝트\s*이름|이름|project\s*name)\s*(?:(?:은|는)(?=\s)|:|=|is)?\s*(?P<name>[^\r\n]+)",
     re.IGNORECASE,
 )
+_PROJECT_KICKOFF_CONTEXT_RE = re.compile(r"(?:project\s*kickoff|registry|scaffold)", re.IGNORECASE)
 _PROJECT_NAME_PREFIX_RE = re.compile(
     r"(?P<name>.+?)(?:\s*(?:게임\s*제작|게임\s*개발|게임\s*프로젝트|게임\s*기획|game\s*project|game\s*development|game\s*dev))",
     re.IGNORECASE,
@@ -401,10 +402,16 @@ def _normalize_kickoff_text(text: str) -> str:
 
 def _has_project_kickoff_intent(user_message: str) -> bool:
     message = _normalize_kickoff_text(user_message)
-    return bool(message and _KICKOFF_START_RE.search(message) and _KICKOFF_GAME_RE.search(message))
+    if not message:
+        return False
+
+    has_marker = bool(_PROJECT_NAME_MARKED_RE.search(message))
+    has_game_kickoff = bool(_KICKOFF_START_RE.search(message) and _KICKOFF_GAME_RE.search(message))
+    has_project_kickoff_context = bool(has_marker and (_KICKOFF_START_RE.search(message) or _PROJECT_KICKOFF_CONTEXT_RE.search(message)))
+    return has_game_kickoff or has_project_kickoff_context
 
 
-def _clean_project_name_candidate(candidate: str) -> str | None:
+def _clean_project_name_candidate(candidate: str, *, strip_case_particles: bool = True) -> str | None:
     normalized = _normalize_kickoff_text(candidate).strip(" \t\r\n-–—:：,，.。!?？")
     if not normalized:
         return None
@@ -414,10 +421,11 @@ def _clean_project_name_candidate(candidate: str) -> str | None:
         maxsplit=1,
     )[0].strip(" \t\r\n-–—:：,，.。!?？")
     normalized = re.split(r"[\n\r,，.。!?？]", normalized, maxsplit=1)[0].strip(" \t\r\n-–—:：,，.。!?？")
-    for suffix in ("입니다", "이에요", "예요", "으로", "이다", "로", "을", "를", "은", "는", "이", "가"):
-        if normalized.endswith(suffix):
-            normalized = normalized[: -len(suffix)].rstrip(" \t\r\n-–—:：,，.。!?？")
-            break
+    if strip_case_particles:
+        for suffix in ("입니다", "이에요", "예요", "이다", "으로", "로", "을", "를", "은", "는", "이", "가"):
+            if normalized.endswith(suffix):
+                normalized = normalized[: -len(suffix)].rstrip(" \t\r\n-–—:：,，.。!?？")
+                break
     if not normalized:
         return None
     if normalized in _PROJECT_NAME_GENERIC_PREFIXES:
@@ -433,16 +441,36 @@ def _extract_project_name_from_kickoff_message(user_message: str) -> str | None:
     if not _has_project_kickoff_intent(user_message):
         return None
 
+    raw_message = unicodedata.normalize("NFKC", str(user_message))
+    if not raw_message:
+        return None
+
+    # Explicit name markers should be line-scoped so trailing instructions on
+    # the following line cannot be consumed by a greedy match.
+    for raw_line in raw_message.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        match = _PROJECT_NAME_MARKED_RE.search(line)
+        if match:
+            strip_case_particles = bool(
+                _KICKOFF_GAME_RE.search(line)
+                or _PROJECT_KICKOFF_CONTEXT_RE.search(line)
+                or re.search(r"(?:입니다|이에요|예요|이다)\b", line)
+            )
+            candidate = _clean_project_name_candidate(
+                match.group("name"),
+                strip_case_particles=strip_case_particles,
+            )
+            if candidate:
+                return candidate
+
     message = _normalize_kickoff_text(user_message)
     if not message:
         return None
 
     # Explicit name markers must win over reply-context quotes so the actual
     # requested project name is preserved in thread replies.
-    match = _PROJECT_NAME_MARKED_RE.search(message)
-    if match:
-        return _clean_project_name_candidate(match.group("name"))
-
     if _REPLY_CONTEXT_PREFIX_RE.search(message):
         return None
 

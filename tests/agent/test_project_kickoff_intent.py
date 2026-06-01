@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -66,6 +67,10 @@ def test_positive_project_name_extraction_from_explicit_project_name_sentence():
         (
             '[Replying to: "서브컬쳐 게임 프로젝트"]\n\n프로젝트명 은하성역으로 게임 개발을 시작합니다',
             "은하성역",
+        ),
+        (
+            '프로젝트명: 이세계항로\n현재 Hermes의 project kickoff / registry / scaffold 체인이 안정화된 상태라고 가정하고 진행해주세요',
+            "이세계항로",
         ),
     ],
 )
@@ -148,6 +153,48 @@ def test_bootstrap_explicitly_creates_registry_and_games_scaffold(monkeypatch):
     assert observed["registry"]["project_name"] == "2D 서브컬쳐 턴제 RPG"
     assert observed["scaffold"]["project_record"] is record
     assert observed["scaffold"]["project_name"] == "2D 서브컬쳐 턴제 RPG"
+
+
+def test_bootstrap_supports_multiline_project_name_marker_and_persists_clean_project_id(monkeypatch):
+    observed = {}
+    record = SimpleNamespace(
+        project_name="이세계항로",
+        normalized_name="이세계항로",
+        project_id="260602_이세계항로",
+        created_on="2026-06-02",
+    )
+
+    def fake_get_or_create_project_record(project_name, created_on, *, registry_path=None):
+        observed["registry"] = {
+            "project_name": project_name,
+            "created_on": str(created_on),
+            "registry_path": registry_path,
+        }
+        return record
+
+    def fake_create_games_project_tree(project_name, created_on, *, work_root=None, registry_path=None, project_record=None):
+        observed["scaffold"] = {
+            "project_name": project_name,
+            "created_on": str(created_on),
+            "work_root": work_root,
+            "registry_path": registry_path,
+            "project_record": project_record,
+        }
+        return f"/tmp/Games/{record.project_id}"
+
+    monkeypatch.setattr("gateway.project_registry.get_or_create_project_record", fake_get_or_create_project_record)
+    monkeypatch.setattr("gateway.project_registry.create_games_project_tree", fake_create_games_project_tree)
+
+    result = _bootstrap_games_project_kickoff(
+        '프로젝트명: 이세계항로\n현재 Hermes의 project kickoff / registry / scaffold 체인이 안정화된 상태라고 가정하고 진행해주세요',
+        created_on=date(2026, 6, 2),
+    )
+
+    assert result == (record, f"/tmp/Games/{record.project_id}")
+    assert observed["registry"]["project_name"] == "이세계항로"
+    assert observed["scaffold"]["project_name"] == "이세계항로"
+    assert observed["scaffold"]["project_record"] is record
+    assert observed["scaffold"]["project_record"].project_id == "260602_이세계항로"
 
 
 def test_bootstrap_supports_project_name_marker_phrase(monkeypatch):
