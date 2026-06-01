@@ -362,7 +362,7 @@ _KICKOFF_GAME_RE = re.compile(
 )
 _PROJECT_NAME_QUOTED_RE = re.compile(r"[\"'“”‘’「『](?P<name>.+?)[\"'”’」』]")
 _PROJECT_NAME_MARKED_RE = re.compile(
-    r"(?:프로젝트명|프로젝트\s*이름|이름|project\s*name)\s*(?:(?:은|는)(?=\s)|:|=|is)?\s*(?P<name>[^\r\n]+)",
+    r"(?:프로젝트명|프로젝트\s*이름|이름|project[_\s]*name)\s*(?:(?:은|는)(?=\s)|:|=|is)?\s*(?P<name>[^\r\n]+)",
     re.IGNORECASE,
 )
 _PROJECT_KICKOFF_CONTEXT_RE = re.compile(r"(?:project\s*kickoff|registry|scaffold)", re.IGNORECASE)
@@ -394,10 +394,51 @@ _PROJECT_NAME_EXCLUDED_TOKENS = (
     "설정집",
     "초기 자산",
 )
+_PROJECT_NAME_TRAILING_CUE_PREFIXES = (
+    "현재",
+    "이후",
+    "다음",
+    "그리고",
+    "그러나",
+    "그러면",
+    "가정하고",
+    "진행",
+    "작성",
+    "다듬",
+    "검토",
+    "확인",
+    "구현",
+    "목적",
+    "요구사항",
+    "완료",
+    "주의",
+    "반드시",
+    "게임",
+    "프로토타입",
+    "개발",
+    "제작",
+    "프로젝트",
+    "Eclipse가",
+    "Eclipse는",
+    "Eclipse에게",
+)
 
 
 def _normalize_kickoff_text(text: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(text))).strip()
+
+
+def _strip_trailing_project_instruction(candidate: str) -> str:
+    parts = _normalize_kickoff_text(candidate).split()
+    if len(parts) <= 1:
+        return " ".join(parts)
+
+    cut_at = len(parts)
+    for index, token in enumerate(parts[1:], start=1):
+        if any(token.startswith(prefix) for prefix in _PROJECT_NAME_TRAILING_CUE_PREFIXES):
+            cut_at = index
+            break
+    return " ".join(parts[:cut_at]).strip()
 
 
 def _has_project_kickoff_intent(user_message: str) -> bool:
@@ -463,7 +504,9 @@ def _extract_project_name_from_kickoff_message(user_message: str) -> str | None:
                 strip_case_particles=strip_case_particles,
             )
             if candidate:
-                return candidate
+                candidate = _strip_trailing_project_instruction(candidate)
+                if candidate:
+                    return candidate
 
     message = _normalize_kickoff_text(user_message)
     if not message:

@@ -72,6 +72,18 @@ def test_positive_project_name_extraction_from_explicit_project_name_sentence():
             '프로젝트명: 이세계항로\n현재 Hermes의 project kickoff / registry / scaffold 체인이 안정화된 상태라고 가정하고 진행해주세요',
             "이세계항로",
         ),
+        (
+            '프로젝트명: 이세계항로 Eclipse가 바로 Unity 프로토타입 구현에 착수할 수 있도록 구현용 최소 명세를 작성해주세요.',
+            "이세계항로",
+        ),
+        (
+            'project_name: 이세계항로 Eclipse가 바로 Unity 프로토타입 구현에 착수할 수 있도록 구현용 최소 명세를 작성해주세요',
+            "이세계항로",
+        ),
+        (
+            '[Replying to: "서브컬쳐 게임 프로젝트"]\n프로젝트명: 이세계항로\nEclipse가 바로 Unity 프로토타입 구현에 착수할 수 있도록 구현용 최소 명세를 작성해주세요.',
+            "이세계항로",
+        ),
     ],
 )
 def test_explicit_project_name_markers_override_reply_context_quotes(message, expected):
