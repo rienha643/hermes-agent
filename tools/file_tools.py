@@ -7,21 +7,43 @@ import logging
 import os
 import threading
 from pathlib import Path
+from typing import Any
 
 from agent.file_safety import get_read_block_error
+from agent.redact import redact_sensitive_text
+from tools import file_state
+from tools.approval import normalize_approval_proof
 from tools.binary_extensions import has_binary_extension
 from tools.file_operations import (
     ShellFileOperations,
     normalize_read_pagination,
     normalize_search_pagination,
 )
-from tools import file_state
-from agent.redact import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
 
 
 _EXPECTED_WRITE_ERRNOS = {errno.EACCES, errno.EPERM, errno.EROFS}
+
+
+def _normalize_tool_approval_proof(approval_proof: Any | None) -> dict[str, Any] | None:
+    if approval_proof is None:
+        return None
+    normalized = normalize_approval_proof(approval_proof)
+    return normalized if isinstance(normalized, dict) else None
+
+
+def _approval_proof_allows_replay(approval_proof: Any | None) -> bool:
+    return isinstance(approval_proof, dict) and approval_proof.get("user_approved") is True
+
+
+def _approval_proof_denied(approval_proof: Any | None) -> bool:
+    return isinstance(approval_proof, dict) and approval_proof.get("user_approved") is False
+
+
+def _approval_replay_denied_result(action: str) -> str:
+    return tool_error(f"{action}: approval denied")
+
 
 # ---------------------------------------------------------------------------
 # Read-size guard: cap the character count returned to the model.
@@ -952,7 +974,8 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
 
 def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                new_string: str = None, replace_all: bool = False, patch: str = None,
-               task_id: str = "default", cross_profile: bool = False) -> str:
+               task_id: str = "default", cross_profile: bool = False,
+               approval_proof: Any | None = None) -> str:
     """Patch a file using replace mode or V4A patch format.
 
     ``cross_profile`` opts out of the soft cross-Hermes-profile guard for
@@ -991,6 +1014,9 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
             cross_warning = _check_cross_profile_path(_p, task_id)
             if cross_warning:
                 return tool_error(cross_warning)
+    normalized_approval_proof = _normalize_tool_approval_proof(approval_proof)
+    if _approval_proof_denied(normalized_approval_proof):
+        return _approval_replay_denied_result("patch")
     try:
         # Resolve paths for locking.  Ordered + deduplicated so concurrent
         # callers lock in the same order — prevents deadlock on overlapping
@@ -1041,7 +1067,13 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
             elif mode == "patch":
                 if not patch:
                     return tool_error("patch content required")
-                result = file_ops.patch_v4a(patch)
+                if _approval_proof_allows_replay(normalized_approval_proof):
+                    try:
+                        result = file_ops.patch_v4a(patch, approval_proof=normalized_approval_proof)
+                    except TypeError:
+                        result = file_ops.patch_v4a(patch)
+                else:
+                    result = file_ops.patch_v4a(patch)
             else:
                 return tool_error(f"Unknown mode: {mode}")
 
@@ -1263,6 +1295,10 @@ PATCH_SCHEMA = {
                 "description": "Opt out of the cross-profile soft guard. Defaults to false. Set true ONLY after explicit user direction to edit another Hermes profile's skills/plugins/cron/memories.",
                 "default": False,
             },
+            "approval_proof": {
+                "type": "object",
+                "description": "Approval proof payload to replay the original patch after approval. When user_approved is true, the patch is re-run with the proof attached; deny-style proofs block replay.",
+            },
         },
         "required": ["mode"],
     },
@@ -1326,6 +1362,7 @@ def _handle_patch(args, **kw):
         old_string=args.get("old_string"), new_string=args.get("new_string"),
         replace_all=args.get("replace_all", False), patch=args.get("patch"), task_id=tid,
         cross_profile=bool(args.get("cross_profile", False)),
+        approval_proof=args.get("approval_proof"),
     )
 
 

@@ -183,7 +183,51 @@ class TestPatchHandler:
         assert "error" in result
 
     @patch("tools.file_tools._get_file_ops")
-    def test_patch_mode_calls_patch_v4a(self, mock_get):
+    def test_patch_mode_replays_approval_proof_into_patch_v4a(self, mock_get):
+        mock_ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"status": "ok", "operations": 1}
+        mock_ops.patch_v4a.return_value = result_obj
+        mock_get.return_value = mock_ops
+
+        approval_proof = {"user_approved": True, "approval_id": "approval-1"}
+
+        from tools.file_tools import patch_tool
+        result = json.loads(
+            patch_tool(
+                mode="patch",
+                patch="*** Begin Patch\n*** Delete File: old/stuff.py\n*** End Patch",
+                approval_proof=approval_proof,
+            )
+        )
+
+        assert result["status"] == "ok"
+        mock_ops.patch_v4a.assert_called_once_with(
+            "*** Begin Patch\n*** Delete File: old/stuff.py\n*** End Patch",
+            approval_proof=approval_proof,
+        )
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_patch_mode_denied_approval_proof_skips_replay(self, mock_get):
+        mock_ops = MagicMock()
+        mock_get.return_value = mock_ops
+
+        from tools.file_tools import patch_tool
+        result = json.loads(
+            patch_tool(
+                mode="patch",
+                patch="*** Begin Patch\n*** Delete File: old/stuff.py\n*** End Patch",
+                approval_proof={"user_approved": False},
+            )
+        )
+
+        assert "error" in result
+        assert "approval denied" in result["error"].lower()
+        mock_get.assert_not_called()
+        mock_ops.patch_v4a.assert_not_called()
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_patch_mode_string_approval_verdict_is_normalized(self, mock_get):
         mock_ops = MagicMock()
         result_obj = MagicMock()
         result_obj.to_dict.return_value = {"status": "ok", "operations": 1}
@@ -191,10 +235,18 @@ class TestPatchHandler:
         mock_get.return_value = mock_ops
 
         from tools.file_tools import patch_tool
-        result = json.loads(patch_tool(mode="patch", patch="*** Begin Patch\n..."))
+        result = json.loads(
+            patch_tool(
+                mode="patch",
+                patch="*** Begin Patch\n*** Delete File: old/stuff.py\n*** End Patch",
+                approval_proof="once",
+            )
+        )
+
         assert result["status"] == "ok"
         mock_ops.patch_v4a.assert_called_once()
-
+        _, kwargs = mock_ops.patch_v4a.call_args
+        assert kwargs["approval_proof"]["user_approved"] is True
     @patch("tools.file_tools._get_file_ops")
     def test_patch_mode_missing_content_errors(self, mock_get):
         from tools.file_tools import patch_tool

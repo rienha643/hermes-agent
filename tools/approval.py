@@ -75,6 +75,103 @@ def _normalize_approval_metadata(metadata: Optional[dict]) -> dict:
     return merged
 
 
+def _coerce_approval_verdict(value: Any) -> Optional[bool]:
+    """Normalize approve/deny-style inputs to a boolean verdict.
+
+    Returns ``True`` for approve/allow/yes-style values, ``False`` for
+    deny/reject/no-style values, and ``None`` when the input is not
+    verdict-like.  This keeps the proof builder tolerant of both UI choice
+    strings (``once``/``session``/``always``/``deny``) and direct boolean
+    inputs from higher-level flows.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in {"approve", "approved", "allow", "allowed", "yes", "y", "true", "1", "once", "session", "always"}:
+        return True
+    if text in {"deny", "denied", "reject", "rejected", "no", "n", "false", "0"}:
+        return False
+    return None
+
+
+def _normalize_existing_approval_proof(approval_proof: dict[str, Any]) -> dict[str, Any]:
+    proof = {key: value for key, value in approval_proof.items() if value is not None and value != ""}
+    metadata = _normalize_approval_metadata(proof.get("approval_metadata"))
+    if metadata:
+        proof["approval_metadata"] = metadata
+        for key in ("purpose", "work"):
+            value = metadata.get(key)
+            if value not in (None, ""):
+                proof.setdefault(key, value)
+
+    user_approved = proof.get("user_approved")
+    if user_approved is None:
+        for key in ("approved", "choice", "verdict", "approval_result", "approval_choice"):
+            user_approved = _coerce_approval_verdict(proof.get(key))
+            if user_approved is not None:
+                break
+    proof["user_approved"] = user_approved is True
+    return proof
+
+
+def build_approval_proof(
+    approved: bool | str | None = None,
+    *,
+    approval_id: str | None = None,
+    approval_metadata: Optional[dict] = None,
+    choice: str | None = None,
+    surface: str | None = None,
+) -> dict[str, Any]:
+    """Return a normalized approval_proof dictionary.
+
+    The proof keeps the durable approval verdict plus any traceability fields
+    that are safe to carry downstream.  ``approval_metadata`` is flattened so
+    purpose/work survive through delete sinks, while the original metadata is
+    also retained under ``approval_metadata`` for callers that want the full
+    context.
+    """
+    metadata = _normalize_approval_metadata(approval_metadata)
+    user_approved = _coerce_approval_verdict(approved)
+    if user_approved is None:
+        user_approved = _coerce_approval_verdict(choice)
+
+    proof: dict[str, Any] = {
+        "user_approved": user_approved is True,
+    }
+
+    if approval_id is not None and str(approval_id).strip():
+        proof["approval_id"] = str(approval_id).strip()
+    if choice is not None and str(choice).strip():
+        proof["choice"] = str(choice).strip()
+    if surface is not None and str(surface).strip():
+        proof["surface"] = str(surface).strip()
+
+    if metadata:
+        proof["approval_metadata"] = metadata
+        for key in ("purpose", "work"):
+            value = metadata.get(key)
+            if value not in (None, ""):
+                proof[key] = value
+
+    return proof
+
+
+def normalize_approval_proof(*args, **kwargs) -> dict[str, Any]:
+    """Normalize an approval proof or build one from a verdict.
+
+    ``normalize_approval_proof({...})`` preserves existing proof payloads,
+    while non-dict inputs continue to flow through
+    :func:`build_approval_proof` for verdict-to-proof conversion.
+    """
+    if args and len(args) == 1 and not kwargs and isinstance(args[0], dict):
+        return _normalize_existing_approval_proof(args[0])
+    return build_approval_proof(*args, **kwargs)
+
+
 def summarize_approval_intent(command: str, description: str = "", metadata: Optional[dict] = None) -> dict[str, str]:
     """Return a short Korean purpose/work summary for an approval prompt.
 

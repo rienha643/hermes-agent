@@ -1295,7 +1295,7 @@ class ShellFileOperations(FileOperations):
             lsp_diagnostics=write_result.lsp_diagnostics,
         )
     
-    def patch_v4a(self, patch_content: str) -> PatchResult:
+    def patch_v4a(self, patch_content: str, approval_proof: Optional[Dict[str, Any]] = None) -> PatchResult:
         """
         Apply a V4A format patch.
         
@@ -1322,7 +1322,7 @@ class ShellFileOperations(FileOperations):
             return PatchResult(error=f"Failed to parse patch: {parse_error}")
         
         # Apply operations
-        result = apply_v4a_operations(operations, self)
+        result = apply_v4a_operations(operations, self, approval_proof=approval_proof)
         return result
     
     def _check_lint(self, path: str, content: Optional[str] = None) -> LintResult:

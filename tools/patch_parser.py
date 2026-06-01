@@ -329,7 +329,8 @@ def _validate_operations(
 
 
 def apply_v4a_operations(operations: List[PatchOperation],
-                          file_ops: Any) -> 'PatchResult':
+                          file_ops: Any,
+                          approval_proof: Any = None) -> 'PatchResult':
     """Apply V4A patch operations using a file operations interface.
 
     Uses a two-phase validate-then-apply approach:
@@ -384,7 +385,7 @@ def apply_v4a_operations(operations: List[PatchOperation],
                     errors.append(f"Failed to add {op.file_path}: {result[1]}")
 
             elif op.operation == OperationType.DELETE:
-                result = _apply_delete(op, file_ops)
+                result = _apply_delete(op, file_ops, approval_proof=approval_proof)
                 if result[0]:
                     files_deleted.append(op.file_path)
                     all_diffs.append(result[1])
@@ -514,7 +515,7 @@ def _delete_result_status(result: Any) -> str:
     return "approval_required"
 
 
-def _apply_delete(op: PatchOperation, file_ops: Any) -> Tuple[bool, str]:
+def _apply_delete(op: PatchOperation, file_ops: Any, approval_proof: Any = None) -> Tuple[bool, str]:
     """Apply a delete file operation."""
     # Read before deleting so we can produce a real unified diff.
     # Validation already confirmed existence; this guards against races.
@@ -522,7 +523,20 @@ def _apply_delete(op: PatchOperation, file_ops: Any) -> Tuple[bool, str]:
     if read_result.error:
         return False, f"Cannot delete {op.file_path}: file not found"
 
-    result = file_ops.delete_file(op.file_path)
+    if approval_proof is None:
+        approval_proof = getattr(file_ops, "approval_proof", None)
+
+    delete_kwargs = {}
+    if approval_proof is not None:
+        delete_kwargs["approval_proof"] = approval_proof
+
+    try:
+        result = file_ops.delete_file(op.file_path, **delete_kwargs)
+    except TypeError:
+        if delete_kwargs:
+            result = file_ops.delete_file(op.file_path)
+        else:
+            raise
     if result.error:
         return False, result.error
 
