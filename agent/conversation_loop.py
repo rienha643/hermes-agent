@@ -25,6 +25,8 @@ import ssl
 import threading
 import time
 import uuid
+import unicodedata
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from agent.codex_responses_adapter import _summarize_user_message_for_log
@@ -350,6 +352,142 @@ def _get_continuation_prompt(is_partial_stub: bool, dropped_tools: Optional[List
         )
 
 
+_KICKOFF_START_RE = re.compile(
+    r"(?:\b(?:start|begin|create|kick\s*off|kickoff|launch|initiate)\b|시작|생성|만들|착수|개시)",
+    re.IGNORECASE,
+)
+_KICKOFF_GAME_RE = re.compile(
+    r"(?:게임\s*프로젝트|게임\s*제작|게임\s*개발|게임\s*기획|game\s*project|game\s*development|game\s*dev)",
+    re.IGNORECASE,
+)
+_PROJECT_NAME_QUOTED_RE = re.compile(r"[\"'“”‘’「『](?P<name>.+?)[\"'”’」』]")
+_PROJECT_NAME_MARKED_RE = re.compile(
+    r"(?:프로젝트명|프로젝트\s*이름|이름|project\s*name)\s*(?:은|는|:|=|is)?\s*(?P<name>.+)",
+    re.IGNORECASE,
+)
+_PROJECT_NAME_PREFIX_RE = re.compile(
+    r"(?P<name>.+?)(?:\s*(?:게임\s*제작|게임\s*개발|게임\s*프로젝트|게임\s*기획|game\s*project|game\s*development|game\s*dev))",
+    re.IGNORECASE,
+)
+_PROJECT_NAME_GENERIC_PREFIXES = {
+    "신규",
+    "새",
+    "새로운",
+    "새로",
+    "게임",
+    "프로젝트",
+    "게임 프로젝트",
+    "게임 제작",
+    "게임 개발",
+    "게임 기획",
+}
+_PROJECT_NAME_EXCLUDED_TOKENS = (
+    "프로젝트",
+    "게임",
+    "게임 제작",
+    "게임 개발",
+    "기획서",
+    "문서",
+    "초안",
+    "설정집",
+    "초기 자산",
+)
+
+
+def _normalize_kickoff_text(text: str) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(text))).strip()
+
+
+def _has_project_kickoff_intent(user_message: str) -> bool:
+    message = _normalize_kickoff_text(user_message)
+    return bool(message and _KICKOFF_START_RE.search(message) and _KICKOFF_GAME_RE.search(message))
+
+
+def _clean_project_name_candidate(candidate: str) -> str | None:
+    normalized = _normalize_kickoff_text(candidate).strip(" \t\r\n-–—:：,，.。!?？")
+    if not normalized:
+        return None
+    normalized = re.split(
+        r"(?:게임\s*제작|게임\s*개발|게임\s*프로젝트|게임\s*기획|game\s*project|game\s*development|game\s*dev)",
+        normalized,
+        maxsplit=1,
+    )[0].strip(" \t\r\n-–—:：,，.。!?？")
+    normalized = re.split(r"[\n\r,，.。!?？]", normalized, maxsplit=1)[0].strip(" \t\r\n-–—:：,，.。!?？")
+    for suffix in ("입니다", "이에요", "예요", "으로", "이다", "로", "을", "를", "은", "는", "이", "가"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)].rstrip(" \t\r\n-–—:：,，.。!?？")
+            break
+    if not normalized:
+        return None
+    if normalized in _PROJECT_NAME_GENERIC_PREFIXES:
+        return None
+    if any(token in normalized for token in _PROJECT_NAME_EXCLUDED_TOKENS):
+        return None
+    if len(normalized) < 2:
+        return None
+    return normalized
+
+
+def _extract_project_name_from_kickoff_message(user_message: str) -> str | None:
+    if not _has_project_kickoff_intent(user_message):
+        return None
+
+    message = _normalize_kickoff_text(user_message)
+    if not message:
+        return None
+
+    for pattern in (_PROJECT_NAME_QUOTED_RE, _PROJECT_NAME_MARKED_RE, _PROJECT_NAME_PREFIX_RE):
+        match = pattern.search(message)
+        if not match:
+            continue
+        candidate = _clean_project_name_candidate(match.group("name"))
+        if candidate:
+            return candidate
+    return None
+
+
+def _bootstrap_games_project_kickoff(
+    user_message: str,
+    *,
+    work_root=None,
+    registry_path=None,
+    created_on: date | None = None,
+):
+    if not _has_project_kickoff_intent(user_message):
+        return None
+
+    project_name = _extract_project_name_from_kickoff_message(user_message)
+    if not project_name:
+        return None
+
+    try:
+        import gateway.project_registry as project_registry
+
+        kickoff_date = created_on or date.today()
+        project_record = project_registry.get_or_create_project_record(
+            project_name,
+            kickoff_date,
+            registry_path=registry_path,
+        )
+        project_root = project_registry.create_games_project_tree(
+            project_name,
+            kickoff_date,
+            work_root=work_root,
+            registry_path=registry_path,
+            project_record=project_record,
+        )
+        logger.info(
+            "bootstrapped kickoff game project: project_name=%r project_id=%s project_root=%s",
+            project_record.project_name,
+            project_record.project_id,
+            project_root,
+        )
+        return project_record, project_root
+    except Exception as exc:
+        logger.warning("project kickoff bootstrap failed for %r: %s", project_name, exc)
+        return None
+
+
 def run_conversation(
     agent,
     user_message: str,
@@ -422,6 +560,9 @@ def run_conversation(
         user_message = _sanitize_surrogates(user_message)
     if isinstance(persist_user_message, str):
         persist_user_message = _sanitize_surrogates(persist_user_message)
+
+    # Auto-create the Games project scaffold on explicit kickoff requests.
+    _bootstrap_games_project_kickoff(user_message)
 
     # Store stream callback for _interruptible_api_call to pick up
     agent._stream_callback = stream_callback
