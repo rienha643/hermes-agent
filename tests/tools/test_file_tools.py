@@ -247,6 +247,81 @@ class TestPatchHandler:
         mock_ops.patch_v4a.assert_called_once()
         _, kwargs = mock_ops.patch_v4a.call_args
         assert kwargs["approval_proof"]["user_approved"] is True
+
+    @patch("tools.file_tools._get_file_ops")
+    def test_patch_mode_delete_file_replays_approval_proof_into_actual_delete(self, mock_get, tmp_path, monkeypatch):
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from tools.file_operations import execute_approved_local_delete
+        from tools.patch_parser import apply_v4a_operations, parse_v4a_patch
+
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        monkeypatch.setenv("HERMESWORK_NAS_ROOT", r"\\test-nas\\Hermes")
+        target = root / "Documents" / "draft.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("hello", encoding="utf-8")
+
+        class FakeFileOps:
+            def __init__(self):
+                self.last_delete_plan = None
+
+            def read_file_raw(self, path):
+                file_path = Path(path)
+                if not file_path.exists():
+                    return SimpleNamespace(content="", error="not found")
+                return SimpleNamespace(content=file_path.read_text(encoding="utf-8"), error=None)
+
+            def delete_file(self, path, approval_proof=None):
+                approved = isinstance(approval_proof, dict) and approval_proof.get("user_approved") is True
+                result = execute_approved_local_delete(
+                    path,
+                    approved=approved,
+                    approval_proof=approval_proof,
+                    local_root=root,
+                )
+                self.last_delete_plan = result
+                return SimpleNamespace(
+                    error=None if result is not None else "failed",
+                    warning=None,
+                    lint={"artifact_delete_plan": result} if result is not None else None,
+                )
+
+            def patch_v4a(self, patch, approval_proof=None):
+                ops, err = parse_v4a_patch(patch)
+                assert err is None
+                return apply_v4a_operations(ops, self, approval_proof=approval_proof)
+
+        fake_ops = FakeFileOps()
+        mock_get.return_value = fake_ops
+
+        approval_proof = {"user_approved": True, "approval_id": "approval-1"}
+        patch_content = "*** Begin Patch\n*** Delete File: {path}\n*** End Patch".format(path=str(target))
+
+        from tools.file_tools import patch_tool
+        result = json.loads(
+            patch_tool(
+                mode="patch",
+                patch=patch_content,
+                approval_proof=approval_proof,
+            )
+        )
+
+        assert result["success"] is True
+        plan = fake_ops.last_delete_plan
+        assert plan is not None
+        assert plan["approved"] is True
+        assert plan["approval_proof"]["user_approved"] is True
+        assert plan["delete_mode"] == "actual_delete"
+        assert plan["deletion_executed"] is True
+        assert plan["local_delete_executed"] is True
+        assert plan["local_delete_verified"] is True
+        assert plan["registry_cleanup_attempted"] is False
+        assert plan["registry_cleanup_executed"] is False
+        assert plan["registry_cleanup_status"] == "skipped_not_project_root"
+        assert not target.exists()
+
     @patch("tools.file_tools._get_file_ops")
     def test_patch_mode_missing_content_errors(self, mock_get):
         from tools.file_tools import patch_tool

@@ -999,12 +999,13 @@ class ShellFileOperations(FileOperations):
 
         plan = plan_hermes_artifact_delete(path, category=category, mirror=mirror)
         if plan is not None:
-            if approved is True and not dry_run:
+            proof_allows_replay = isinstance(approval_proof, dict) and approval_proof.get("user_approved") is True
+            if proof_allows_replay or (approved is True and not dry_run):
                 result = execute_approved_local_delete(
                     path,
                     category=category,
                     mirror=mirror,
-                    approved=approved,
+                    approved=True if proof_allows_replay else approved,
                     approval_proof=approval_proof,
                 )
                 if result is None:
