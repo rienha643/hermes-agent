@@ -68,6 +68,19 @@ class TestApprovalIntro:
             assert "승인 필요: 예" in intro
             assert "Command Approval Required" in intro
 
+    def test_metadata_or_fallback_never_renders_empty_purpose(self):
+        intro = build_approval_intro(
+            "rm -rf /tmp/test",
+            description="",
+            metadata={"purpose": "", "work": ""},
+        )
+
+        assert "목적: " in intro
+        assert "작업: " in intro
+        assert "목적:  " not in intro
+        assert "작업:  " not in intro
+        assert "승인 필요: 예" in intro
+
     def test_metadata_overrides_command_classifier(self):
         summary = summarize_approval_intent(
             "git push origin main",
@@ -603,6 +616,27 @@ class TestFullCommandAlwaysShown:
     command is always displayed. These tests verify the basic approval flow
     still works with long commands. (#1553)
     """
+
+    def test_prompt_callback_receives_metadata(self):
+        captured = {}
+
+        def cb(command, description, *, allow_permanent=True, approval_metadata=None):
+            captured["command"] = command
+            captured["description"] = description
+            captured["approval_metadata"] = approval_metadata
+            return "once"
+
+        with mock_patch("builtins.input", return_value="o"):
+            result = prompt_dangerous_approval(
+                "rm -rf /tmp/test",
+                "recursive delete",
+                approval_callback=cb,
+                approval_metadata={"purpose": "Hermes 아티팩트 삭제", "work": "로컬 및 NAS 산출물 삭제 계획 확인"},
+            )
+
+        assert result == "once"
+        assert captured["approval_metadata"]["purpose"] == "Hermes 아티팩트 삭제"
+        assert "NAS 산출물 삭제 계획 확인" in captured["approval_metadata"]["work"]
 
     def test_once_with_long_command(self):
         """Pressing 'o' approves once even for very long commands."""

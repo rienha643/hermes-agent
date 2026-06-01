@@ -9,6 +9,7 @@ This module is the single source of truth for the dangerous command system:
 """
 
 import contextvars
+import inspect
 import logging
 import os
 import re
@@ -62,6 +63,18 @@ def _clean_approval_text(value: Any) -> str:
     return text
 
 
+def _normalize_approval_metadata(metadata: Optional[dict]) -> dict:
+    """Flatten and clean approval metadata for downstream UI consumers."""
+    if not isinstance(metadata, dict):
+        return {}
+    merged: dict = {}
+    nested = metadata.get("approval_metadata")
+    if isinstance(nested, dict):
+        merged.update({k: v for k, v in nested.items() if v not in (None, "")})
+    merged.update({k: v for k, v in metadata.items() if k != "approval_metadata" and v not in (None, "")})
+    return merged
+
+
 def summarize_approval_intent(command: str, description: str = "", metadata: Optional[dict] = None) -> dict[str, str]:
     """Return a short Korean purpose/work summary for an approval prompt.
 
@@ -70,7 +83,7 @@ def summarize_approval_intent(command: str, description: str = "", metadata: Opt
     purpose/work block even when no tool metadata is propagated through the
     approval pipeline.
     """
-    meta = metadata if isinstance(metadata, dict) else {}
+    meta = _normalize_approval_metadata(metadata)
     purpose = _clean_approval_text(
         meta.get("purpose") or meta.get("objective") or meta.get("goal") or meta.get("summary")
     )
@@ -119,6 +132,31 @@ def build_approval_intro(command: str, description: str = "", metadata: Optional
         "승인 필요: 예",
         "Command Approval Required",
     ])
+
+
+def _invoke_approval_callback(callback, command: str, description: str, *, allow_permanent: bool, approval_metadata: Optional[dict] = None):
+    """Invoke approval callbacks without dropping metadata for newer callers.
+
+    Older callbacks may not accept ``approval_metadata`` yet, so inspect the
+    signature and fall back to the legacy call shape when necessary.
+    """
+    try:
+        signature = inspect.signature(callback)
+        accepts_metadata = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD or name == "approval_metadata"
+            for name, param in signature.parameters.items()
+        )
+    except (TypeError, ValueError):
+        accepts_metadata = True
+
+    if accepts_metadata:
+        return callback(
+            command,
+            description,
+            allow_permanent=allow_permanent,
+            approval_metadata=approval_metadata,
+        )
+    return callback(command, description, allow_permanent=allow_permanent)
 
 # Freeze YOLO mode at module import time. Reading os.environ on every call
 # would allow any skill running inside the process to set this variable and
@@ -826,8 +864,13 @@ def prompt_dangerous_approval(command: str, description: str,
 
     if approval_callback is not None:
         try:
-            return approval_callback(command, description,
-                                     allow_permanent=allow_permanent)
+            return _invoke_approval_callback(
+                approval_callback,
+                command,
+                description,
+                allow_permanent=allow_permanent,
+                approval_metadata=_normalize_approval_metadata(approval_metadata),
+            )
         except Exception as e:
             logger.error("Approval callback failed: %s", e, exc_info=True)
             return "deny"
@@ -1095,6 +1138,7 @@ def check_dangerous_command(command: str, env_type: str,
             "command": command,
             "pattern_key": pattern_key,
             "description": description,
+            "approval_metadata": _normalize_approval_metadata(approval_metadata),
         })
         intro = build_approval_intro(command, description, approval_metadata)
         return {
@@ -1326,6 +1370,7 @@ def check_all_command_guards(command: str, env_type: str,
                 "pattern_key": primary_key,
                 "pattern_keys": all_keys,
                 "description": combined_desc,
+                "approval_metadata": _normalize_approval_metadata(approval_metadata),
             }
             entry = _ApprovalEntry(approval_data)
             with _lock:
@@ -1479,6 +1524,7 @@ def check_all_command_guards(command: str, env_type: str,
                 "pattern_key": primary_key,
                 "pattern_keys": all_keys,
                 "description": combined_desc,
+                "approval_metadata": _normalize_approval_metadata(approval_metadata),
             })
             intro = build_approval_intro(command, combined_desc, approval_metadata)
             return {

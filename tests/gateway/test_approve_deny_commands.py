@@ -367,6 +367,56 @@ class TestBlockingApprovalE2E:
         os.environ.pop("HERMES_EXEC_ASK", None)
         os.environ.pop("HERMES_SESSION_KEY", None)
 
+    def test_blocking_approval_includes_metadata_in_gateway_payload(self):
+        from tools.approval import (
+            register_gateway_notify, unregister_gateway_notify,
+            resolve_gateway_approval, check_all_command_guards,
+        )
+
+        session_key = "e2e-metadata"
+        notified = []
+        register_gateway_notify(session_key, lambda d: notified.append(d))
+
+        result_holder = [None]
+
+        def agent_thread():
+            from tools.approval import reset_current_session_key, set_current_session_key
+
+            token = set_current_session_key(session_key)
+            os.environ["HERMES_GATEWAY_SESSION"] = "1"
+            os.environ["HERMES_EXEC_ASK"] = "1"
+            os.environ["HERMES_SESSION_KEY"] = session_key
+            try:
+                result_holder[0] = check_all_command_guards(
+                    "rm -rf /important",
+                    "local",
+                    approval_metadata={"purpose": "Hermes 아티팩트 삭제", "work": "로컬 및 NAS 산출물 삭제 계획 확인"},
+                )
+            finally:
+                os.environ.pop("HERMES_GATEWAY_SESSION", None)
+                os.environ.pop("HERMES_EXEC_ASK", None)
+                os.environ.pop("HERMES_SESSION_KEY", None)
+                reset_current_session_key(token)
+
+        t = threading.Thread(target=agent_thread)
+        t.start()
+
+        for _ in range(50):
+            if notified:
+                break
+            time.sleep(0.05)
+
+        assert len(notified) == 1
+        assert notified[0]["approval_metadata"]["purpose"] == "Hermes 아티팩트 삭제"
+        assert "NAS 산출물 삭제 계획 확인" in notified[0]["approval_metadata"]["work"]
+
+        resolve_gateway_approval(session_key, "once")
+        t.join(timeout=5)
+
+        assert result_holder[0] is not None
+        assert result_holder[0]["approved"] is True
+        unregister_gateway_notify(session_key)
+
     def test_blocking_approval_approve_once(self):
         """check_all_command_guards blocks until resolve_gateway_approval is called."""
         from tools.approval import (

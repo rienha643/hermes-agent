@@ -96,6 +96,32 @@ class TestCliApprovalUi:
         assert cli._app.current_buffer.text == "draft command"
         assert cli._app.current_buffer.cursor_position == 5
 
+    def test_approval_callback_persists_metadata_in_state(self):
+        cli = _make_cli_stub()
+        result = {}
+
+        def _run_callback():
+            result["value"] = cli._approval_callback(
+                "rm -rf /tmp/test",
+                "recursive delete",
+                approval_metadata={"purpose": "Hermes 아티팩트 삭제", "work": "로컬 및 NAS 산출물 삭제 계획 확인"},
+            )
+
+        thread = threading.Thread(target=_run_callback, daemon=True)
+        thread.start()
+
+        deadline = time.time() + 2
+        while cli._approval_state is None and time.time() < deadline:
+            time.sleep(0.01)
+
+        assert cli._approval_state is not None
+        assert cli._approval_state["approval_metadata"]["purpose"] == "Hermes 아티팩트 삭제"
+        assert "NAS 산출물 삭제 계획 확인" in cli._approval_state["approval_metadata"]["work"]
+
+        cli._approval_state["response_queue"].put("deny")
+        thread.join(timeout=2)
+        assert result["value"] == "deny"
+
     def test_approval_callback_includes_view_for_long_commands(self):
         cli = _make_cli_stub()
         command = "sudo dd if=/tmp/githubcli-keyring.gpg of=/usr/share/keyrings/githubcli-archive-keyring.gpg bs=4M status=progress"

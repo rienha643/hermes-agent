@@ -24,6 +24,7 @@ call is synchronous and behaves like AIAgent's existing chat_completions loop.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import threading
@@ -702,8 +703,18 @@ class CodexAppServerSession:
             description += f" — {reason}"
         if self._approval_callback is not None:
             try:
-                choice = self._approval_callback(
-                    command, description, allow_permanent=False
+                approval_metadata = {
+                    "purpose": "코덱스 실행 승인",
+                    "work": description,
+                    "reason": reason,
+                    "command": command,
+                }
+                choice = _invoke_approval_callback(
+                    self._approval_callback,
+                    command,
+                    description,
+                    allow_permanent=False,
+                    approval_metadata=approval_metadata,
                 )
                 return _approval_choice_to_codex_decision(choice)
             except Exception:
@@ -740,11 +751,20 @@ class CodexAppServerSession:
                 else f"apply_patch: {reason}" if reason
                 else "apply_patch"
             )
+            approval_metadata = {
+                "purpose": "패치 적용 승인",
+                "work": description,
+                "reason": reason,
+                "grant_root": grant_root,
+                "command": command_label,
+            }
             try:
-                choice = self._approval_callback(
+                choice = _invoke_approval_callback(
+                    self._approval_callback,
                     command_label,
                     description,
                     allow_permanent=False,
+                    approval_metadata=approval_metadata,
                 )
                 return _approval_choice_to_codex_decision(choice)
             except Exception:
@@ -800,6 +820,26 @@ class CodexAppServerSession:
         if not cached:
             return None
         return cached
+
+
+def _invoke_approval_callback(callback, command: str, description: str, *, allow_permanent: bool, approval_metadata: dict | None = None):
+    try:
+        signature = inspect.signature(callback)
+        accepts_metadata = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD or name == "approval_metadata"
+            for name, param in signature.parameters.items()
+        )
+    except (TypeError, ValueError):
+        accepts_metadata = True
+
+    if accepts_metadata:
+        return callback(
+            command,
+            description,
+            allow_permanent=allow_permanent,
+            approval_metadata=approval_metadata,
+        )
+    return callback(command, description, allow_permanent=allow_permanent)
 
 
 def _approval_choice_to_codex_decision(choice: str) -> str:

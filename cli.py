@@ -11294,7 +11294,8 @@ class HermesCLI:
         return ""
 
     def _approval_callback(self, command: str, description: str,
-                           *, allow_permanent: bool = True) -> str:
+                           *, allow_permanent: bool = True,
+                           approval_metadata: dict | None = None) -> str:
         """
         Prompt for dangerous command approval through the prompt_toolkit UI.
 
@@ -11317,6 +11318,7 @@ class HermesCLI:
             self._approval_state = {
                 "command": command,
                 "description": description,
+                "approval_metadata": approval_metadata,
                 "choices": self._approval_choices(command, allow_permanent=allow_permanent),
                 "selected": 0,
                 "response_queue": response_queue,

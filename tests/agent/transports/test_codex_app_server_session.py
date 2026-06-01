@@ -428,14 +428,17 @@ class TestServerRequestRouting:
 
         captured: dict = {}
 
-        def cb(command, description, *, allow_permanent=True):
+        def cb(command, description, *, allow_permanent=True, approval_metadata=None):
             captured["command"] = command
             captured["description"] = description
+            captured["approval_metadata"] = approval_metadata
             return "once"
 
         s = make_session(client, approval_callback=cb)
         s.run_turn("hi", turn_timeout=1.0)
         assert captured["command"] == "ls /tmp"
+        assert captured["approval_metadata"]["purpose"] == "코덱스 실행 승인"
+        assert captured["approval_metadata"]["reason"] is None
         # The session must have responded to the server request with "accept"
         assert ("req-1", {"decision": "accept"}) in client.responses
 
@@ -613,15 +616,18 @@ class TestApprovalPromptEnrichment:
             turn={"id": "tu1", "status": "completed", "error": None},
         )
         captured = {}
-        def cb(command, description, *, allow_permanent=True):
+        def cb(command, description, *, allow_permanent=True, approval_metadata=None):
             captured["command"] = command
             captured["description"] = description
+            captured["approval_metadata"] = approval_metadata
             return "once"
         s = make_session(client, approval_callback=cb)
         s.run_turn("hi", turn_timeout=1.0)
         # Both add and update kinds should be in the summary
         assert "1 add" in captured["command"] or "1 add" in captured["description"]
         assert "1 update" in captured["command"] or "1 update" in captured["description"]
+        assert captured["approval_metadata"]["purpose"] == "패치 적용 승인"
+        assert captured["approval_metadata"]["grant_root"] is None
         # And at least one of the paths
         joined = captured["command"] + " " + captured["description"]
         assert "/tmp/new.py" in joined or "/tmp/old.py" in joined
