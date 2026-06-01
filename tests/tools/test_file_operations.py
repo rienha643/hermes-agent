@@ -18,6 +18,7 @@ from tools.file_operations import (
     MAX_LINE_LENGTH,
     normalize_read_pagination,
     normalize_search_pagination,
+    plan_hermes_artifact_delete,
 )
 
 
@@ -105,6 +106,86 @@ class TestIsWriteDenied:
     def test_standard_paths_allowed(self, path):
         """Unrelated paths must still be allowed."""
         assert _is_write_denied(path) is False
+
+
+class TestHermesArtifactDeletePlanning:
+    def test_documents_dry_run_returns_approval_metadata(self, tmp_path, monkeypatch):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        monkeypatch.setenv("HERMESWORK_NAS_ROOT", r"\\test-nas\\Hermes")
+        artifact = root / "Documents" / "article.md"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("hello", encoding="utf-8")
+
+        plan = plan_hermes_artifact_delete(artifact, category="documents")
+        assert plan is not None
+        assert plan["category"] == "documents"
+        assert plan["local_path"] == str(artifact.resolve(strict=False))
+        assert plan["nas_path"].endswith(r"\Documents\article.md")
+        assert plan["will_delete_local"] is True
+        assert plan["will_delete_nas"] is True
+        assert plan["approval_purpose"] == "Hermes 아티팩트 삭제"
+        assert plan["approval_work"] == "로컬 및 NAS 산출물 삭제 계획 확인"
+        assert plan["requires_approval"] is True
+        assert plan["warnings"] == []
+
+    def test_story_dry_run_uses_same_plan_regardless_of_mirror_flag(self, tmp_path, monkeypatch):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        monkeypatch.setenv("HERMESWORK_NAS_ROOT", r"\\test-nas\\Hermes")
+        artifact = root / "Story" / "chapter-1.md"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("hello", encoding="utf-8")
+
+        no_mirror = plan_hermes_artifact_delete(artifact, category="story", mirror=False)
+        yes_mirror = plan_hermes_artifact_delete(artifact, category="story", mirror=True)
+        assert no_mirror == yes_mirror
+        assert no_mirror is not None
+        assert no_mirror["category"] == "story"
+
+    def test_protected_assets_are_blocked(self, tmp_path, monkeypatch):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        artifact = root / "Documents" / "SOUL.md"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("keep", encoding="utf-8")
+
+        plan = plan_hermes_artifact_delete(artifact, category="documents")
+        assert plan is not None
+        assert plan["will_delete_local"] is False
+        assert plan["will_delete_nas"] is False
+        assert plan["warnings"]
+        assert any("protected asset blocked" in warning for warning in plan["warnings"])
+
+    def test_outside_hermeswork_returns_none(self, tmp_path):
+        artifact = tmp_path / "outside.txt"
+        artifact.write_text("hello", encoding="utf-8")
+        assert plan_hermes_artifact_delete(artifact) is None
+
+    def test_approval_purpose_is_never_blank(self, tmp_path, monkeypatch):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        artifact = root / "Games" / "save.dat"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("hello", encoding="utf-8")
+
+        plan = plan_hermes_artifact_delete(artifact, category="games")
+        assert plan is not None
+        assert plan["approval_purpose"].strip() != ""
+        assert plan["approval_work"].strip() != ""
+        assert plan["requires_approval"] is True
+
+    @pytest.mark.parametrize("category,folder", [("documents", "Documents"), ("image", "Image"), ("games", "Games")])
+    def test_category_paths_are_derived(self, tmp_path, monkeypatch, category, folder):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        artifact = root / folder / "item.txt"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("hello", encoding="utf-8")
+        plan = plan_hermes_artifact_delete(artifact, category=category)
+        assert plan is not None
+        assert plan["category"] == category
+        assert plan["nas_path"].endswith(fr"\{folder}\item.txt")
 
     @pytest.mark.parametrize(
         "name",
@@ -298,6 +379,120 @@ def mock_env():
 @pytest.fixture()
 def file_ops(mock_env):
     return ShellFileOperations(mock_env)
+
+
+class TestShellFileOpsDeleteRouting:
+    def test_delete_file_routes_hermeswork_artifacts_to_dry_run_plan(self, mock_env, tmp_path, monkeypatch):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        monkeypatch.setenv("HERMESWORK_NAS_ROOT", r"\\test-nas\\Hermes")
+        artifact = root / "Documents" / "note.txt"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("hello", encoding="utf-8")
+
+        ops = ShellFileOperations(mock_env)
+        result = ops.delete_file(str(artifact))
+
+        assert result.error is None
+        assert result.warning is not None
+        assert "dry-run" in result.warning.lower()
+        assert result.lint is not None
+        assert result.lint["deletion_executed"] is False
+        assert result.lint["delete_mode"] == "dry-run"
+        assert result.lint["artifact_delete_plan"]["category"] == "documents"
+        assert result.lint["artifact_delete_plan"]["approval_purpose"] == "Hermes 아티팩트 삭제"
+        assert result.lint["artifact_delete_plan"]["approval_work"] == "로컬 및 NAS 산출물 삭제 계획 확인"
+        mock_env.execute.assert_not_called()
+
+    def test_delete_file_routes_blocked_hermeswork_assets_to_dry_run_plan(self, mock_env, tmp_path, monkeypatch):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        monkeypatch.setenv("HERMESWORK_NAS_ROOT", r"\\test-nas\\Hermes")
+        artifact = root / "Documents" / "SOUL.md"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("keep", encoding="utf-8")
+
+        ops = ShellFileOperations(mock_env)
+        result = ops.delete_file(str(artifact))
+
+        assert result.error is None
+        assert result.warning is not None
+        assert "blocked" in result.warning.lower()
+        assert result.lint is not None
+        assert result.lint["deletion_executed"] is False
+        assert result.lint["artifact_delete_plan"]["will_delete_local"] is False
+        assert result.lint["artifact_delete_plan"]["will_delete_nas"] is False
+        assert any("protected asset blocked" in warning for warning in result.lint["artifact_delete_plan"]["warnings"])
+        mock_env.execute.assert_not_called()
+
+    def test_delete_file_non_hermeswork_still_uses_shell_rm(self, mock_env):
+        mock_env.execute.return_value = {"output": "", "returncode": 0}
+        ops = ShellFileOperations(mock_env)
+
+        result = ops.delete_file("/tmp/outside.txt")
+
+        assert result.error is None
+        assert result.warning is None
+        assert result.lint is None
+        mock_env.execute.assert_called_once()
+        assert "rm -f" in mock_env.execute.call_args.args[0]
+
+    @pytest.mark.parametrize(
+        ("category", "relative", "is_dir"),
+        [
+            ("documents", "doc.txt", False),
+            ("story", "chapter-1", True),
+            ("image", "cover.png", False),
+            ("games", "save-slot", True),
+        ],
+    )
+    def test_delete_file_approved_true_executes_local_delete_for_hermeswork(self, mock_env, tmp_path, monkeypatch, category, relative, is_dir):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        monkeypatch.setenv("HERMESWORK_NAS_ROOT", r"\\test-nas\\Hermes")
+        category_dir = root / {"documents": "Documents", "story": "Story", "image": "Image", "games": "Games"}[category]
+        target = category_dir / relative
+        if is_dir:
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("hello", encoding="utf-8")
+
+        ops = ShellFileOperations(mock_env)
+        result = ops.delete_file(str(target), category=category, dry_run=False, approved=True)
+
+        assert result.error is None
+        assert result.lint is not None
+        plan = result.lint["artifact_delete_plan"]
+        assert plan["approved"] is True
+        assert plan["deletion_executed"] is True
+        assert plan["local_delete_executed"] is True
+        assert plan["local_delete_verified"] is True
+        assert plan["nas_deletion_executed"] is False
+        assert plan["nas_delete_pending"] is True
+        assert not target.exists()
+        mock_env.execute.assert_not_called()
+
+    def test_delete_file_approved_true_keeps_blocked_operational_assets(self, mock_env, tmp_path, monkeypatch):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        monkeypatch.setenv("HERMESWORK_NAS_ROOT", r"\\test-nas\\Hermes")
+        target = root / "Documents" / "project_registry.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{}", encoding="utf-8")
+
+        ops = ShellFileOperations(mock_env)
+        result = ops.delete_file(str(target), category="documents", dry_run=False, approved=True)
+
+        assert result.error is None
+        assert result.lint is not None
+        plan = result.lint["artifact_delete_plan"]
+        assert plan["delete_mode"] == "blocked"
+        assert plan["deletion_executed"] is False
+        assert plan["local_delete_executed"] is False
+        assert plan["local_delete_verified"] is False
+        assert target.exists()
+        mock_env.execute.assert_not_called()
 
 
 class TestShellFileOpsHelpers:
