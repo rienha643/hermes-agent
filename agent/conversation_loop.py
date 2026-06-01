@@ -362,13 +362,14 @@ _KICKOFF_GAME_RE = re.compile(
 )
 _PROJECT_NAME_QUOTED_RE = re.compile(r"[\"'“”‘’「『](?P<name>.+?)[\"'”’」』]")
 _PROJECT_NAME_MARKED_RE = re.compile(
-    r"(?:프로젝트명|프로젝트\s*이름|이름|project\s*name)\s*(?:은|는|:|=|is)?\s*(?P<name>.+)",
+    r"(?:프로젝트명|프로젝트\s*이름|이름|project\s*name)\s*(?:(?:은|는)(?=\s)|:|=|is)?\s*(?P<name>.+)",
     re.IGNORECASE,
 )
 _PROJECT_NAME_PREFIX_RE = re.compile(
     r"(?P<name>.+?)(?:\s*(?:게임\s*제작|게임\s*개발|게임\s*프로젝트|게임\s*기획|game\s*project|game\s*development|game\s*dev))",
     re.IGNORECASE,
 )
+_REPLY_CONTEXT_PREFIX_RE = re.compile(r"^\[Replying to:\s*\".+?\"\]\s*", re.IGNORECASE)
 _PROJECT_NAME_GENERIC_PREFIXES = {
     "신규",
     "새",
@@ -436,7 +437,16 @@ def _extract_project_name_from_kickoff_message(user_message: str) -> str | None:
     if not message:
         return None
 
-    for pattern in (_PROJECT_NAME_QUOTED_RE, _PROJECT_NAME_MARKED_RE, _PROJECT_NAME_PREFIX_RE):
+    # Explicit name markers must win over reply-context quotes so the actual
+    # requested project name is preserved in thread replies.
+    match = _PROJECT_NAME_MARKED_RE.search(message)
+    if match:
+        return _clean_project_name_candidate(match.group("name"))
+
+    if _REPLY_CONTEXT_PREFIX_RE.search(message):
+        return None
+
+    for pattern in (_PROJECT_NAME_QUOTED_RE, _PROJECT_NAME_PREFIX_RE):
         match = pattern.search(message)
         if not match:
             continue

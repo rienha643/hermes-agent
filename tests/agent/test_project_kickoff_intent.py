@@ -36,6 +36,49 @@ def test_positive_project_name_extraction_from_explicit_project_name_sentence():
     assert _extract_project_name_from_kickoff_message(message) == "Project Alpha"
 
 
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        (
+            '[Replying to: "서브컬쳐 게임 프로젝트"]\n\n프로젝트명 별빛전선으로 게임 개발을 시작합니다.',
+            "별빛전선",
+        ),
+        (
+            '[Replying to: "서브컬쳐 게임 프로젝트"]\n\n프로젝트 이름은 Project Alpha입니다. 새 게임 프로젝트를 생성해주세요.',
+            "Project Alpha",
+        ),
+        (
+            '프로젝트명 은하성역으로 게임 개발을 시작합니다',
+            "은하성역",
+        ),
+        (
+            '프로젝트명 이세계전선으로 게임 개발을 시작합니다',
+            "이세계전선",
+        ),
+        (
+            '프로젝트명 가온으로 게임 개발을 시작합니다',
+            "가온",
+        ),
+        (
+            '프로젝트명 망각구역으로 게임 개발을 시작합니다',
+            "망각구역",
+        ),
+        (
+            '[Replying to: "서브컬쳐 게임 프로젝트"]\n\n프로젝트명 은하성역으로 게임 개발을 시작합니다',
+            "은하성역",
+        ),
+    ],
+)
+def test_explicit_project_name_markers_override_reply_context_quotes(message, expected):
+    assert _extract_project_name_from_kickoff_message(message) == expected
+
+
+def test_reply_context_without_explicit_project_name_keeps_existing_policy():
+    message = '[Replying to: "서브컬쳐 게임 프로젝트"] 신규 게임 프로젝트를 시작합니다'
+
+    assert _extract_project_name_from_kickoff_message(message) is None
+
+
 def test_negative_kickoff_intent_rejects_document_workflow():
     message = "2D 서브컬쳐 턴제 RPG 기획서를 작성해 주세요"
 
