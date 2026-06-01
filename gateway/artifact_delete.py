@@ -267,6 +267,18 @@ def _format_execution_user_message(plan: DeletePlan, *, local_delete_verified: b
     return "\n".join(lines)
 
 
+def _normalize_approval_proof(approval_proof: Any) -> dict[str, Any] | None:
+    if not isinstance(approval_proof, dict):
+        return None
+    proof = {key: value for key, value in approval_proof.items() if value is not None}
+    proof["user_approved"] = proof.get("user_approved") is True
+    return proof
+
+
+def _approval_proof_allows_delete(approval_proof: Any) -> bool:
+    return isinstance(approval_proof, dict) and approval_proof.get("user_approved") is True
+
+
 def _delete_local_target(target: Path) -> None:
     if target.is_dir() and not target.is_symlink():
         shutil.rmtree(target)
@@ -283,6 +295,7 @@ def execute_approved_local_delete(
     category: str | None = None,
     mirror: bool | None = None,
     approved: bool | None = None,
+    approval_proof: dict[str, Any] | None = None,
     local_root: str | Path | None = None,
     nas_root: str | None = None,
 ) -> dict[str, Any] | None:
@@ -296,14 +309,22 @@ def execute_approved_local_delete(
     if plan_dict is None:
         return None
 
+    normalized_proof = _normalize_approval_proof(approval_proof)
     plan_dict["approved"] = approved is True
-    if approved is not True:
-        plan_dict["local_delete_status"] = "approval_required"
-        return plan_dict
+    plan_dict["approval_proof"] = normalized_proof
     if not plan_dict.get("will_delete_local", False):
         plan_dict["local_delete_status"] = plan_dict.get("delete_status", "blocked_protected_asset")
         return plan_dict
-
+    if approved is not True or not _approval_proof_allows_delete(normalized_proof):
+        plan_dict["delete_mode"] = "approval_required"
+        plan_dict["delete_status"] = "approval_required"
+        plan_dict["local_delete_status"] = "approval_required"
+        plan_dict["deletion_executed"] = False
+        plan_dict["local_delete_executed"] = False
+        plan_dict["local_delete_verified"] = False
+        plan_dict["nas_deletion_executed"] = False
+        plan_dict["nas_delete_pending"] = True
+        return plan_dict
     target = Path(plan_dict["local_path"])
     _delete_local_target(target)
     local_delete_verified = not target.exists()
@@ -318,6 +339,7 @@ def execute_approved_local_delete(
             "delete_status": "deleted_locally_verified" if local_delete_verified else "deleted_locally_unverified",
             "local_delete_status": "deleted_locally_verified" if local_delete_verified else "deleted_locally_unverified",
             "local_path_exists_after": target.exists(),
+            "approval_proof": normalized_proof,
             "user_message": _format_execution_user_message(
                 DeletePlan(
                     category=plan_dict["category"],

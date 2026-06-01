@@ -459,18 +459,73 @@ class TestShellFileOpsDeleteRouting:
             target.write_text("hello", encoding="utf-8")
 
         ops = ShellFileOperations(mock_env)
-        result = ops.delete_file(str(target), category=category, dry_run=False, approved=True)
+        result = ops.delete_file(
+            str(target),
+            category=category,
+            dry_run=False,
+            approved=True,
+            approval_proof={"user_approved": True, "approval_id": "approval-1"},
+        )
 
         assert result.error is None
         assert result.lint is not None
         plan = result.lint["artifact_delete_plan"]
         assert plan["approved"] is True
+        assert plan["approval_proof"]["user_approved"] is True
         assert plan["deletion_executed"] is True
         assert plan["local_delete_executed"] is True
         assert plan["local_delete_verified"] is True
         assert plan["nas_deletion_executed"] is False
         assert plan["nas_delete_pending"] is True
         assert not target.exists()
+        mock_env.execute.assert_not_called()
+
+    def test_delete_file_approved_true_without_proof_returns_approval_required_and_keeps_file(self, mock_env, tmp_path, monkeypatch):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        monkeypatch.setenv("HERMESWORK_NAS_ROOT", r"\\test-nas\\Hermes")
+        target = root / "Documents" / "draft.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("hello", encoding="utf-8")
+
+        ops = ShellFileOperations(mock_env)
+        result = ops.delete_file(str(target), category="documents", dry_run=False, approved=True)
+
+        assert result.error is None
+        assert result.lint is not None
+        plan = result.lint["artifact_delete_plan"]
+        assert plan["delete_mode"] == "approval_required"
+        assert plan["local_delete_status"] == "approval_required"
+        assert plan["deletion_executed"] is False
+        assert plan["local_delete_executed"] is False
+        assert plan["local_delete_verified"] is False
+        assert target.exists()
+        mock_env.execute.assert_not_called()
+
+    def test_delete_file_approved_true_with_false_proof_keeps_file(self, mock_env, tmp_path, monkeypatch):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        monkeypatch.setenv("HERMESWORK_NAS_ROOT", r"\\test-nas\\Hermes")
+        target = root / "Documents" / "draft.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("hello", encoding="utf-8")
+
+        ops = ShellFileOperations(mock_env)
+        result = ops.delete_file(
+            str(target),
+            category="documents",
+            dry_run=False,
+            approved=True,
+            approval_proof={"user_approved": False},
+        )
+
+        assert result.error is None
+        assert result.lint is not None
+        plan = result.lint["artifact_delete_plan"]
+        assert plan["delete_mode"] == "approval_required"
+        assert plan["local_delete_status"] == "approval_required"
+        assert plan["deletion_executed"] is False
+        assert target.exists()
         mock_env.execute.assert_not_called()
 
     def test_delete_file_approved_true_keeps_blocked_operational_assets(self, mock_env, tmp_path, monkeypatch):
@@ -491,6 +546,26 @@ class TestShellFileOpsDeleteRouting:
         assert plan["deletion_executed"] is False
         assert plan["local_delete_executed"] is False
         assert plan["local_delete_verified"] is False
+        assert target.exists()
+        mock_env.execute.assert_not_called()
+
+    def test_delete_file_approved_true_without_proof_keeps_blocked_operational_assets(self, mock_env, tmp_path, monkeypatch):
+        root = tmp_path / "HermesWork"
+        monkeypatch.setenv("HERMESWORK_ROOT", str(root))
+        monkeypatch.setenv("HERMESWORK_NAS_ROOT", r"\\test-nas\\Hermes")
+        target = root / "Documents" / "project_registry.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{}", encoding="utf-8")
+
+        ops = ShellFileOperations(mock_env)
+        result = ops.delete_file(str(target), category="documents", dry_run=False, approved=True)
+
+        assert result.error is None
+        assert result.lint is not None
+        plan = result.lint["artifact_delete_plan"]
+        assert plan["delete_mode"] == "blocked"
+        assert plan["deletion_executed"] is False
+        assert plan["local_delete_executed"] is False
         assert target.exists()
         mock_env.execute.assert_not_called()
 

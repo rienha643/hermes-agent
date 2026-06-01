@@ -362,6 +362,7 @@ class FileOperations(ABC):
         mirror: Optional[bool] = None,
         dry_run: bool = True,
         approved: Optional[bool] = None,
+        approval_proof: Optional[Dict[str, Any]] = None,
     ) -> WriteResult:
         """Delete a file. Returns WriteResult with .error set on failure."""
         ...
@@ -991,6 +992,7 @@ class ShellFileOperations(FileOperations):
         mirror: Optional[bool] = None,
         dry_run: bool = True,
         approved: Optional[bool] = None,
+        approval_proof: Optional[Dict[str, Any]] = None,
     ) -> WriteResult:
         """Delete a file via rm, or route HermesWork artifacts through the delete workflow."""
         path = self._expand_path(path)
@@ -1003,11 +1005,14 @@ class ShellFileOperations(FileOperations):
                     category=category,
                     mirror=mirror,
                     approved=approved,
+                    approval_proof=approval_proof,
                 )
                 if result is None:
                     return WriteResult(error="Failed to build approved HermesWork delete result")
                 warning = None
-                if not result.get("local_delete_verified", False):
+                if result.get("delete_mode") == "approval_required" or result.get("local_delete_status") == "approval_required":
+                    warning = "HermesWork artifact delete requires approval proof before executing."
+                elif not result.get("local_delete_verified", False):
                     warning = "HermesWork artifact local delete executed but verification failed."
                 lint_payload: Dict[str, Any] = result.copy()
                 lint_payload["artifact_delete_plan"] = result
