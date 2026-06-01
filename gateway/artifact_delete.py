@@ -5,6 +5,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Any
+from gateway.project_registry import remove_project_registry_entry
 
 LOCAL_HERMESWORK_ROOT_ENV = "HERMESWORK_ROOT"
 NAS_ROOT_ENV = "HERMESWORK_NAS_ROOT"
@@ -73,6 +74,11 @@ class DeletePlan:
         payload["nas_delete_planned"] = self.will_delete_nas
         payload["blocked_reasons"] = list(self.warnings) if _is_blocked_plan(self) else []
         payload["approval_metadata"] = _approval_metadata_for(self)
+        payload["registry_cleanup_attempted"] = False
+        payload["registry_cleanup_executed"] = False
+        payload["registry_cleanup_status"] = "not_attempted"
+        payload["registry_cleanup_project_id"] = None
+        payload["registry_cleanup_error"] = None
         payload["approved"] = False
         payload["user_message"] = _format_user_message(self)
         return payload
@@ -175,6 +181,46 @@ class ArtifactDeleteOrchestrator:
         if not path.exists():
             warnings.append(f"missing path: {path}")
         return tuple(warnings)
+
+    def _project_root_cleanup_candidate(self, path: Path, category: str) -> str | None:
+        category_dir = (self.local_root / CATEGORY_DIR_NAMES[category]).resolve(strict=False)
+        resolved = path.resolve(strict=False)
+        try:
+            relative = resolved.relative_to(category_dir)
+        except ValueError:
+            return None
+        if len(relative.parts) != 1:
+            return None
+        if not path.is_dir() or path.is_symlink():
+            return None
+        return relative.parts[0]
+
+    def _cleanup_project_registry_entry(
+        self,
+        *,
+        plan: dict[str, Any],
+        project_id: str | None,
+        approval_proof: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if project_id is None:
+            return {
+                "registry_cleanup_attempted": False,
+                "registry_cleanup_executed": False,
+                "registry_cleanup_status": "skipped_not_project_root",
+                "registry_cleanup_project_id": None,
+                "registry_cleanup_error": None,
+            }
+
+        cleanup_result = remove_project_registry_entry(
+            project_id=project_id,
+            approval_proof=approval_proof,
+        )
+        cleanup_result.setdefault("registry_cleanup_project_id", project_id)
+        cleanup_result.setdefault("registry_cleanup_attempted", True)
+        cleanup_result.setdefault("registry_cleanup_executed", True)
+        cleanup_result.setdefault("registry_cleanup_status", "removed")
+        cleanup_result.setdefault("registry_cleanup_error", None)
+        return cleanup_result
 
     def _is_protected_path(self, path: Path) -> bool:
         parts = {part.casefold() for part in path.parts}
@@ -306,6 +352,7 @@ def execute_approved_local_delete(
         local_root=local_root,
         nas_root=nas_root,
     )
+    orchestrator = ArtifactDeleteOrchestrator(local_root=local_root, nas_root=nas_root)
     if plan_dict is None:
         return None
 
@@ -314,6 +361,11 @@ def execute_approved_local_delete(
     plan_dict["approval_proof"] = normalized_proof
     if not plan_dict.get("will_delete_local", False):
         plan_dict["local_delete_status"] = plan_dict.get("delete_status", "blocked_protected_asset")
+        plan_dict["registry_cleanup_attempted"] = False
+        plan_dict["registry_cleanup_executed"] = False
+        plan_dict["registry_cleanup_status"] = "blocked_protected_asset"
+        plan_dict["registry_cleanup_project_id"] = None
+        plan_dict["registry_cleanup_error"] = None
         return plan_dict
     if approved is not True or not _approval_proof_allows_delete(normalized_proof):
         plan_dict["delete_mode"] = "approval_required"
@@ -324,9 +376,42 @@ def execute_approved_local_delete(
         plan_dict["local_delete_verified"] = False
         plan_dict["nas_deletion_executed"] = False
         plan_dict["nas_delete_pending"] = True
+        plan_dict["registry_cleanup_attempted"] = False
+        plan_dict["registry_cleanup_executed"] = False
+        plan_dict["registry_cleanup_status"] = "approval_required"
+        plan_dict["registry_cleanup_project_id"] = None
+        plan_dict["registry_cleanup_error"] = None
         return plan_dict
     target = Path(plan_dict["local_path"])
-    _delete_local_target(target)
+    cleanup_project_id = orchestrator._project_root_cleanup_candidate(target, plan_dict["category"])
+    try:
+        _delete_local_target(target)
+    except Exception as exc:
+        plan_dict.update(
+            {
+                "delete_mode": "actual_delete",
+                "delete_status": "local_delete_failed",
+                "local_delete_status": "local_delete_failed",
+                "deletion_executed": False,
+                "local_delete_executed": False,
+                "local_delete_verified": False,
+                "nas_deletion_executed": False,
+                "nas_delete_pending": True,
+                "local_path_exists_after": target.exists(),
+                "registry_cleanup_attempted": False,
+                "registry_cleanup_executed": False,
+                "registry_cleanup_status": "skipped_local_delete_failed",
+                "registry_cleanup_project_id": None,
+                "registry_cleanup_error": str(exc),
+            }
+        )
+        plan_dict["user_message"] = (
+            "로컬 삭제 실행 중 실패했습니다.\n"
+            f"- 오류: {exc}\n"
+            f"- 분류: {CATEGORY_DIR_NAMES.get(plan_dict['category'], plan_dict['category'])}\n"
+            f"- 로컬 경로: {plan_dict['local_path']}"
+        )
+        return plan_dict
     local_delete_verified = not target.exists()
     plan_dict.update(
         {
@@ -354,8 +439,21 @@ def execute_approved_local_delete(
                 ),
                 local_delete_verified=local_delete_verified,
             ),
+            "registry_cleanup_attempted": False,
+            "registry_cleanup_executed": False,
+            "registry_cleanup_status": "skipped_local_delete_unverified" if not local_delete_verified else "skipped_not_project_root",
+            "registry_cleanup_project_id": None,
+            "registry_cleanup_error": None,
         }
     )
+    if local_delete_verified:
+        plan_dict.update(
+            orchestrator._cleanup_project_registry_entry(
+                plan=plan_dict,
+                project_id=cleanup_project_id,
+                approval_proof=normalized_proof,
+            )
+        )
     return plan_dict
 
 

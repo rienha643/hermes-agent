@@ -399,6 +399,11 @@ class TestShellFileOpsDeleteRouting:
         assert result.lint is not None
         assert result.lint["deletion_executed"] is False
         assert result.lint["delete_mode"] == "dry-run"
+        assert result.lint["registry_cleanup_attempted"] is False
+        assert result.lint["registry_cleanup_executed"] is False
+        assert result.lint["registry_cleanup_status"] == "not_attempted"
+        assert result.lint["registry_cleanup_project_id"] is None
+        assert result.lint["registry_cleanup_error"] is None
         assert result.lint["artifact_delete_plan"]["category"] == "documents"
         assert result.lint["artifact_delete_plan"]["approval_purpose"] == "Hermes 아티팩트 삭제"
         assert result.lint["artifact_delete_plan"]["approval_work"] == "로컬 및 NAS 산출물 삭제 계획 확인"
@@ -420,6 +425,11 @@ class TestShellFileOpsDeleteRouting:
         assert "blocked" in result.warning.lower()
         assert result.lint is not None
         assert result.lint["deletion_executed"] is False
+        assert result.lint["registry_cleanup_attempted"] is False
+        assert result.lint["registry_cleanup_executed"] is False
+        assert result.lint["registry_cleanup_status"] == "not_attempted"
+        assert result.lint["registry_cleanup_project_id"] is None
+        assert result.lint["registry_cleanup_error"] is None
         assert result.lint["artifact_delete_plan"]["will_delete_local"] is False
         assert result.lint["artifact_delete_plan"]["will_delete_nas"] is False
         assert any("protected asset blocked" in warning for warning in result.lint["artifact_delete_plan"]["warnings"])
@@ -477,6 +487,18 @@ class TestShellFileOpsDeleteRouting:
         assert plan["local_delete_verified"] is True
         assert plan["nas_deletion_executed"] is False
         assert plan["nas_delete_pending"] is True
+        if is_dir:
+            assert plan["registry_cleanup_attempted"] is True
+            assert plan["registry_cleanup_executed"] is True
+            assert plan["registry_cleanup_status"] == "not_found"
+            assert plan["registry_cleanup_project_id"] == relative
+            assert plan["registry_cleanup_error"] is None
+        else:
+            assert plan["registry_cleanup_attempted"] is False
+            assert plan["registry_cleanup_executed"] is False
+            assert plan["registry_cleanup_status"] == "skipped_not_project_root"
+            assert plan["registry_cleanup_project_id"] is None
+            assert plan["registry_cleanup_error"] is None
         assert not target.exists()
         mock_env.execute.assert_not_called()
 
@@ -499,6 +521,11 @@ class TestShellFileOpsDeleteRouting:
         assert plan["deletion_executed"] is False
         assert plan["local_delete_executed"] is False
         assert plan["local_delete_verified"] is False
+        assert plan["registry_cleanup_attempted"] is False
+        assert plan["registry_cleanup_executed"] is False
+        assert plan["registry_cleanup_status"] == "approval_required"
+        assert plan["registry_cleanup_project_id"] is None
+        assert plan["registry_cleanup_error"] is None
         assert target.exists()
         mock_env.execute.assert_not_called()
 
@@ -525,6 +552,13 @@ class TestShellFileOpsDeleteRouting:
         assert plan["delete_mode"] == "approval_required"
         assert plan["local_delete_status"] == "approval_required"
         assert plan["deletion_executed"] is False
+        assert plan["local_delete_executed"] is False
+        assert plan["local_delete_verified"] is False
+        assert plan["registry_cleanup_attempted"] is False
+        assert plan["registry_cleanup_executed"] is False
+        assert plan["registry_cleanup_status"] == "approval_required"
+        assert plan["registry_cleanup_project_id"] is None
+        assert plan["registry_cleanup_error"] is None
         assert target.exists()
         mock_env.execute.assert_not_called()
 

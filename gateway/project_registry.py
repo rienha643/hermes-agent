@@ -211,14 +211,19 @@ def remove_project_registry_entry(
     """
     path = registry_path or project_registry_path()
     registry = load_project_registry(registry_path=path)
+    proof_payload = dict(approval_proof) if isinstance(approval_proof, Mapping) else None
     if not _approval_proof_allows_registry_cleanup(approval_proof):
         return {
+            "registry_cleanup_attempted": False,
+            "registry_cleanup_executed": False,
             "registry_cleanup_status": "approval_required",
+            "registry_cleanup_project_id": project_id,
+            "registry_cleanup_error": None,
             "registry_entry_removed": False,
             "registry_file_removed": False,
             "registry_file_path": str(path),
             "registry_file_exists_after": path.exists(),
-            "approval_proof": dict(approval_proof) if isinstance(approval_proof, Mapping) else None,
+            "approval_proof": proof_payload,
         }
 
     lookup_key = _project_lookup_key(project_name) if project_name is not None else None
@@ -236,17 +241,26 @@ def remove_project_registry_entry(
 
     if removed_record is None:
         return {
+            "registry_cleanup_attempted": True,
+            "registry_cleanup_executed": True,
             "registry_cleanup_status": "not_found",
+            "registry_cleanup_project_id": project_id,
+            "registry_cleanup_error": None,
             "registry_entry_removed": False,
             "registry_file_removed": False,
             "registry_file_path": str(path),
             "registry_file_exists_after": path.exists(),
             "removed_key": removed_key,
+            "approval_proof": proof_payload,
         }
 
     _write_project_registry(registry, registry_path=path)
     return {
+        "registry_cleanup_attempted": True,
+        "registry_cleanup_executed": True,
         "registry_cleanup_status": "removed",
+        "registry_cleanup_project_id": removed_record.project_id,
+        "registry_cleanup_error": None,
         "registry_entry_removed": True,
         "registry_file_removed": False,
         "registry_file_path": str(path),
@@ -254,7 +268,7 @@ def remove_project_registry_entry(
         "removed_key": removed_key,
         "removed_project_id": removed_record.project_id,
         "removed_project_name": removed_record.project_name,
-        "approval_proof": dict(approval_proof) if isinstance(approval_proof, Mapping) else None,
+        "approval_proof": proof_payload,
     }
 
 
