@@ -480,6 +480,40 @@ def _apply_add(op: PatchOperation, file_ops: Any) -> Tuple[bool, str, Optional[s
     return True, diff, getattr(result, "lsp_diagnostics", None)
 
 
+def _delete_result_indicates_execution(result: Any) -> bool:
+    """Return True only when a delete call actually executed."""
+    if getattr(result, "error", None):
+        return False
+    lint = getattr(result, "lint", None)
+    if not isinstance(lint, dict):
+        return True
+    plan = lint.get("artifact_delete_plan")
+    if not isinstance(plan, dict):
+        return True
+    if plan.get("deletion_executed") is True:
+        return True
+    if plan.get("local_delete_executed") is True:
+        return True
+    if plan.get("local_delete_verified") is True:
+        return True
+    return False
+
+
+def _delete_result_status(result: Any) -> str:
+    lint = getattr(result, "lint", None)
+    if isinstance(lint, dict):
+        plan = lint.get("artifact_delete_plan")
+        if isinstance(plan, dict):
+            for key in ("delete_mode", "local_delete_status", "delete_status"):
+                value = plan.get(key)
+                if value:
+                    return str(value)
+    warning = getattr(result, "warning", None)
+    if warning:
+        return str(warning)
+    return "approval_required"
+
+
 def _apply_delete(op: PatchOperation, file_ops: Any) -> Tuple[bool, str]:
     """Apply a delete file operation."""
     # Read before deleting so we can produce a real unified diff.
@@ -491,6 +525,10 @@ def _apply_delete(op: PatchOperation, file_ops: Any) -> Tuple[bool, str]:
     result = file_ops.delete_file(op.file_path)
     if result.error:
         return False, result.error
+
+    if not _delete_result_indicates_execution(result):
+        status = _delete_result_status(result)
+        return False, f"Delete of {op.file_path} was not executed ({status})"
 
     removed_lines = read_result.content.splitlines(keepends=True)
     diff = ''.join(difflib.unified_diff(

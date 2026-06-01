@@ -437,6 +437,47 @@ class TestApplyDelete:
         assert "-    return 42" in result.diff
         assert "/dev/null" in result.diff
 
+    def test_delete_diff_rejects_approval_required_without_execution(self):
+        """A delete that only returned approval_required must not be treated as executed."""
+        patch = """\
+*** Begin Patch
+*** Delete File: old/stuff.py
+*** End Patch"""
+        ops, err = parse_v4a_patch(patch)
+        assert err is None
+
+        class FakeFileOps:
+            deleted = False
+
+            def read_file_raw(self, path):
+                return SimpleNamespace(
+                    content="def old_func():\n    return 42\n",
+                    error=None,
+                )
+
+            def delete_file(self, path):
+                return SimpleNamespace(
+                    error=None,
+                    warning="approval required",
+                    lint={
+                        "artifact_delete_plan": {
+                            "delete_mode": "approval_required",
+                            "deletion_executed": False,
+                            "local_delete_executed": False,
+                            "local_delete_verified": False,
+                        }
+                    },
+                )
+
+        file_ops = FakeFileOps()
+        result = apply_v4a_operations(ops, file_ops)
+
+        assert result.success is False
+        assert file_ops.deleted is False
+        assert "approval_required" in result.error
+        assert "not executed" in result.error.lower()
+        assert "/dev/null" not in result.diff
+
     def test_delete_diff_fallback_on_empty_file(self):
         """An empty file should produce the fallback comment diff."""
         patch = """\
