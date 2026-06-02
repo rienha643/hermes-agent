@@ -173,6 +173,40 @@ _sudo_password_cache_lock = threading.Lock()
 import threading
 _callback_tls = threading.local()
 
+# Approval metadata registry keyed by the raw task_id supplied to terminal_tool.
+# This lets delegated children surface their parent task intent in approval
+# prompts even when they share the default execution environment.
+_task_approval_metadata: Dict[str, Dict[str, Any]] = {}
+_task_approval_metadata_lock = threading.Lock()
+
+
+def register_task_approval_metadata(task_id: str, metadata: Dict[str, Any]) -> None:
+    """Register approval metadata for a specific task/rollout."""
+    task_key = str(task_id or "").strip()
+    if not task_key or not isinstance(metadata, dict):
+        return
+    cleaned = {k: v for k, v in metadata.items() if v not in (None, "")}
+    with _task_approval_metadata_lock:
+        _task_approval_metadata[task_key] = cleaned
+
+
+def clear_task_approval_metadata(task_id: str) -> None:
+    """Clear approval metadata for a task after rollout completes."""
+    task_key = str(task_id or "").strip()
+    if not task_key:
+        return
+    with _task_approval_metadata_lock:
+        _task_approval_metadata.pop(task_key, None)
+
+
+def _get_task_approval_metadata(task_id: Optional[str]) -> Dict[str, Any]:
+    task_key = str(task_id or "").strip()
+    if not task_key:
+        return {}
+    with _task_approval_metadata_lock:
+        stored = _task_approval_metadata.get(task_key, {})
+    return dict(stored) if isinstance(stored, dict) else {}
+
 
 def _get_sudo_password_callback():
     return getattr(_callback_tls, "sudo_password", None)
@@ -255,13 +289,19 @@ def _reset_cached_sudo_passwords() -> None:
 # Dangerous command detection + approval now consolidated in tools/approval.py
 from tools.approval import (
     check_all_command_guards as _check_all_guards_impl,
+    detect_dangerous_command,
+    summarize_approval_intent,
 )
 
 
-def _check_all_guards(command: str, env_type: str) -> dict:
+def _check_all_guards(command: str, env_type: str, *, approval_metadata: Optional[dict] = None) -> dict:
     """Delegate to consolidated guard (tirith + dangerous cmd) with CLI callback."""
-    return _check_all_guards_impl(command, env_type,
-                                  approval_callback=_get_approval_callback())
+    return _check_all_guards_impl(
+        command,
+        env_type,
+        approval_callback=_get_approval_callback(),
+        approval_metadata=approval_metadata,
+    )
 
 
 # Allowlist: characters that can legitimately appear in directory paths.
@@ -291,6 +331,58 @@ def _validate_workdir(workdir: str) -> str | None:
                 )
         return "Blocked: workdir contains disallowed characters."
     return None
+
+
+def _build_terminal_approval_metadata(
+    command: str,
+    *,
+    task_id: Optional[str],
+    workdir: Optional[str],
+    env_type: str,
+) -> Dict[str, Any]:
+    """Build a safe, task-scoped metadata payload for approval prompts."""
+    task_key = str(task_id or "").strip()
+    metadata = _get_task_approval_metadata(task_key)
+    _, pattern_key, description = detect_dangerous_command(command)
+    summary = summarize_approval_intent(command, description or "", metadata)
+
+    def _normalize_risk_type_label(value: Optional[str], fallback: Optional[str]) -> str:
+        raw = str(value or "").strip().lower()
+        if raw.startswith("git"):
+            return "git"
+        if "cron" in raw:
+            return "cron"
+        if raw in {"shell_script", "shell", "shell command via -c/-lc flag"} or "shell" in raw:
+            return "shell"
+        if "delete" in raw or raw.startswith("rm"):
+            return "delete"
+        if raw:
+            return raw
+        fallback_raw = str(fallback or "").strip().lower()
+        if "shell" in fallback_raw:
+            return "shell"
+        if "delete" in fallback_raw:
+            return "delete"
+        if "cron" in fallback_raw:
+            return "cron"
+        if "git" in fallback_raw:
+            return "git"
+        return ""
+
+    payload: Dict[str, Any] = dict(metadata)
+    payload.setdefault("purpose", summary.get("purpose", ""))
+    payload.setdefault("work", summary.get("work", ""))
+    if not payload.get("risk_type"):
+        normalized_risk_type = _normalize_risk_type_label(pattern_key, description)
+        if normalized_risk_type:
+            payload["risk_type"] = normalized_risk_type
+    if workdir and not payload.get("target"):
+        payload["target"] = workdir
+    if task_key and not payload.get("job_id"):
+        payload["job_id"] = task_key
+    if not payload.get("operation"):
+        payload["operation"] = summary.get("purpose") or f"터미널 승인 ({env_type})"
+    return {k: v for k, v in payload.items() if v not in (None, "")}
 
 
 def _handle_sudo_failure(output: str, env_type: str) -> str:
@@ -1923,7 +2015,13 @@ def terminal_tool(
         # Skip check if force=True (user has confirmed they want to run it)
         approval_note = None
         if not force:
-            approval = _check_all_guards(command, env_type)
+            approval_metadata = _build_terminal_approval_metadata(
+                command,
+                task_id=task_id,
+                workdir=workdir,
+                env_type=env_type,
+            )
+            approval = _check_all_guards(command, env_type, approval_metadata=approval_metadata)
             if not approval["approved"]:
                 # Check if this is an approval_required (gateway ask mode)
                 if approval.get("status") == "pending_approval":
@@ -1936,6 +2034,7 @@ def terminal_tool(
                         "command": approval.get("command", command),
                         "description": approval.get("description", "command flagged"),
                         "pattern_key": approval.get("pattern_key", ""),
+                        "approval_metadata": approval_metadata,
                     }, ensure_ascii=False)
                 # Command was blocked
                 desc = approval.get("description", "command flagged")

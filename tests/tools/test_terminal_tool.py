@@ -1,5 +1,7 @@
 """Regression tests for sudo detection and sudo password handling."""
 
+import json
+
 import tools.terminal_tool as terminal_tool
 
 
@@ -168,3 +170,90 @@ def test_validate_workdir_blocks_shell_metacharacters_in_windows_paths():
     assert terminal_tool._validate_workdir(r"C:\Users\Alice\project; rm -rf /")
     assert terminal_tool._validate_workdir(r"C:\Users\Alice\project$(whoami)")
     assert terminal_tool._validate_workdir("C:\\Users\\Alice\\project\nwhoami")
+
+
+def test_build_terminal_approval_metadata_shell_default():
+    metadata = terminal_tool._build_terminal_approval_metadata(
+        "bash -lc 'python scripts/used_car_briefing.py'",
+        task_id="shell-task",
+        workdir="/repo/scripts",
+        env_type="local",
+    )
+
+    assert metadata["purpose"] == "쉘 스크립트 실행 승인"
+    assert metadata["work"] == "셸에서 전달된 스크립트를 실행합니다."
+    assert metadata["risk_type"] == "shell"
+    assert metadata["target"] == "/repo/scripts"
+    assert metadata["job_id"] == "shell-task"
+
+
+def test_build_terminal_approval_metadata_uses_registered_task_context():
+    try:
+        terminal_tool.register_task_approval_metadata(
+            "cron-task",
+            {
+                "purpose": "중고차 cron 스크립트 수동 실행",
+                "work": "추천 매물 출력과 링크를 검증합니다.",
+                "risk_type": "cron",
+                "target": "scripts/used_car_briefing.py",
+                "job_id": "used-car-briefing",
+            },
+        )
+        metadata = terminal_tool._build_terminal_approval_metadata(
+            "python scripts/used_car_briefing.py",
+            task_id="cron-task",
+            workdir="/repo/scripts",
+            env_type="local",
+        )
+    finally:
+        terminal_tool.clear_task_approval_metadata("cron-task")
+
+    assert metadata["purpose"] == "중고차 cron 스크립트 수동 실행"
+    assert metadata["work"] == "추천 매물 출력과 링크를 검증합니다."
+    assert metadata["risk_type"] == "cron"
+    assert metadata["target"] == "scripts/used_car_briefing.py"
+    assert metadata["job_id"] == "used-car-briefing"
+
+
+def test_terminal_pending_approval_returns_metadata(monkeypatch):
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {
+            "env_type": "local",
+            "local_persistent": False,
+            "cwd": None,
+            "timeout": 30,
+            "lifetime_seconds": 60,
+            "docker_image": None,
+            "singularity_image": None,
+            "modal_image": None,
+            "daytona_image": None,
+        },
+    )
+    monkeypatch.setattr(terminal_tool, "_resolve_container_task_id", lambda task_id: task_id or "default")
+    monkeypatch.setattr(terminal_tool, "_task_env_overrides", {}, raising=False)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_check_all_guards",
+        lambda command, env_type, approval_metadata=None: {
+            "approved": False,
+            "status": "pending_approval",
+            "command": command,
+            "description": "command flagged",
+            "pattern_key": "shell_script",
+        },
+    )
+
+    result = json.loads(
+        terminal_tool.terminal_tool(
+            command="bash -lc 'python scripts/used_car_briefing.py'",
+            task_id="shell-task",
+            workdir="/repo/scripts",
+        )
+    )
+
+    assert result["status"] == "pending_approval"
+    assert result["approval_metadata"]["purpose"] == "쉘 스크립트 실행 승인"
+    assert result["approval_metadata"]["risk_type"] == "shell"
+    assert result["approval_metadata"]["target"] == "/repo/scripts"

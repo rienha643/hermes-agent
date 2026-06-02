@@ -25,6 +25,7 @@ from tools.delegate_tool import (
     DELEGATE_BLOCKED_TOOLS,
     DELEGATE_TASK_SCHEMA,
     DelegateEvent,
+    _build_delegate_approval_metadata,
     _get_max_concurrent_children,
     _LEGACY_EVENT_MAP,
     MAX_DEPTH,
@@ -132,6 +133,20 @@ def _generate_openai_image_path() -> Path:
 
 
 class TestDelegateRequirements(unittest.TestCase):
+    def test_delegate_approval_metadata_summarizes_parent_intent(self):
+        metadata = _build_delegate_approval_metadata(
+            "Approval UI fallback 조사 및 테스트",
+            "목적/작업 문구를 실제 작업 내용에 맞게 표시하도록 수정하고 회귀 테스트를 확인합니다.",
+            profile="coder",
+            toolsets=["terminal", "file"],
+        )
+
+        self.assertEqual(metadata["purpose"], "Approval UI fallback 조사 및 테스트")
+        self.assertIn("목적/작업 문구", metadata["work"])
+        self.assertEqual(metadata["target"], "coder")
+        self.assertEqual(metadata["risk_type"], "terminal, file")
+        self.assertEqual(metadata["operation"], "위임 작업 실행")
+
     def test_always_available(self):
         self.assertTrue(check_delegate_requirements())
 

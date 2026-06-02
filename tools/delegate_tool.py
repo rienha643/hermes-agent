@@ -58,7 +58,11 @@ _IMAGE_SPECIALIST_PROFILES = {"artist", "forge", "comfy"}
 # Must match hermes_cli.runtime_provider.RUNTIME_PROVIDER_TYPE_CUSTOM.
 _RUNTIME_PROVIDER_CUSTOM = "custom"
 from tools import file_state
-from tools.terminal_tool import set_approval_callback as _set_subagent_approval_cb
+from tools.terminal_tool import (
+    clear_task_approval_metadata,
+    register_task_approval_metadata,
+    set_approval_callback as _set_subagent_approval_cb,
+)
 from utils import base_url_hostname, is_truthy_value
 
 
@@ -130,6 +134,36 @@ def _get_subagent_approval_callback():
     if is_truthy_value(val):
         return _subagent_auto_approve
     return _subagent_auto_deny
+
+
+def _normalize_delegate_summary_text(value: Optional[str], *, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _build_delegate_approval_metadata(
+    goal: Optional[str],
+    context: Optional[str],
+    *,
+    profile: Optional[str],
+    toolsets: Optional[List[str]],
+) -> Dict[str, str]:
+    purpose = _normalize_delegate_summary_text(goal, limit=90)
+    context_summary = _normalize_delegate_summary_text(context, limit=160)
+    work = context_summary or purpose or "위임 작업의 세부 실행 내용을 확인합니다."
+    metadata: Dict[str, str] = {
+        "purpose": purpose or "위임 작업 실행 승인",
+        "work": work,
+        "operation": "위임 작업 실행",
+    }
+    profile_name = str(profile or "").strip()
+    if profile_name:
+        metadata["target"] = profile_name
+    if toolsets:
+        metadata["risk_type"] = ", ".join(str(t).strip() for t in toolsets if str(t).strip())
+    return metadata
 
 # Build a description fragment listing toolsets available for subagents.
 # Excludes toolsets where ALL tools are blocked, composite/platform toolsets
@@ -2070,6 +2104,7 @@ def _run_single_child(
     Returns a structured result dict.
     """
     child_start = time.monotonic()
+    child_task_id = ""
 
     # Get the progress callback from the child agent
     child_progress_cb = getattr(child, "tool_progress_callback", None)
@@ -2221,6 +2256,13 @@ def _run_single_child(
 
         child_task_id = _subagent_id or f"subagent-{task_index}-{_uuid.uuid4().hex[:8]}"
         parent_task_id = getattr(parent_agent, "_current_task_id", None)
+        child_approval_metadata = _build_delegate_approval_metadata(
+            goal,
+            _kwargs.get("context"),
+            profile=_kwargs.get("profile"),
+            toolsets=_kwargs.get("toolsets"),
+        )
+        register_task_approval_metadata(child_task_id, child_approval_metadata)
         wall_start = time.time()
         parent_reads_snapshot = (
             list(file_state.known_reads(parent_task_id)) if parent_task_id else []
@@ -2671,6 +2713,7 @@ def _run_single_child(
         # child was never registered (e.g. ID missing on test doubles).
         if _subagent_id:
             _unregister_subagent(_subagent_id)
+        clear_task_approval_metadata(child_task_id)
 
         if child_pool is not None and leased_cred_id is not None:
             try:

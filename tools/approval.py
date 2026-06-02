@@ -31,6 +31,14 @@ _APPROVAL_SUMMARY_RULES: list[tuple[re.Pattern[str], tuple[str, str]]] = [
         ("GitHub 저장소 반영", "원격 저장소로 변경사항을 전송합니다."),
     ),
     (
+        re.compile(r"\bgit\s+commit\b|\bgh\s+repo\b.*\bcommit\b", re.IGNORECASE),
+        ("Git 커밋 승인", "로컬 변경사항을 커밋합니다."),
+    ),
+    (
+        re.compile(r"\b(?:bash|sh|zsh|ksh|python[23]?|perl|ruby|node)\b\s+-[a-z]*c\b", re.IGNORECASE),
+        ("쉘 스크립트 실행 승인", "셸에서 전달된 스크립트를 실행합니다."),
+    ),
+    (
         re.compile(
             r"(?:curl|wget)\b.*(?:127\.0\.0\.1|localhost|0\.0\.0\.0|:7860|:7861|:8000|:5000|comfyui|forge|webui)",
             re.IGNORECASE,
@@ -59,8 +67,55 @@ _APPROVAL_SUMMARY_RULES: list[tuple[re.Pattern[str], tuple[str, str]]] = [
 def _clean_approval_text(value: Any) -> str:
     if value is None:
         return ""
-    text = str(value).strip()
+    text = " ".join(str(value).split())
     return text
+
+
+def _first_approval_text(metadata: dict, *keys: str) -> str:
+    for key in keys:
+        value = _clean_approval_text(metadata.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _structured_approval_metadata(metadata: dict) -> dict[str, str]:
+    structured = {
+        "risk_type": _first_approval_text(metadata, "risk_type", "risk", "severity", "danger_level"),
+        "target": _first_approval_text(metadata, "target", "path", "resource", "subject", "destination", "repo"),
+        "job_id": _first_approval_text(metadata, "job_id", "task_id"),
+        "operation": _first_approval_text(metadata, "operation", "action", "verb"),
+    }
+    return {key: value for key, value in structured.items() if value}
+
+
+def _extract_rm_target(command: str) -> str:
+    normalized = " ".join((command or "").split())
+    if not normalized:
+        return ""
+    match = re.search(r"\brm\b(?:\s+-[^\s]+)*\s+(?P<target>.+)", normalized, re.IGNORECASE)
+    if not match:
+        return ""
+    target = match.group("target").strip()
+    target = re.split(r"\s*(?:&&|\|\||;|\||\n)\s*", target, maxsplit=1)[0].strip()
+    target = target.strip("'\"`")
+    return _clean_approval_text(target)
+
+
+def _truncate_approval_text(text: str, *, limit: int) -> str:
+    clean = _clean_approval_text(text)
+    if len(clean) <= limit:
+        return clean
+    return clean[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _sanitize_approval_summary_text(value: Any, *, limit: int, fallback: str) -> str:
+    clean = _truncate_approval_text(str(value or ""), limit=limit)
+    if not clean:
+        return fallback
+    if re.search(r"[;&|`]|\$\(|\n", clean):
+        return fallback
+    return clean
 
 
 def _normalize_approval_metadata(metadata: Optional[dict]) -> dict:
@@ -181,12 +236,40 @@ def summarize_approval_intent(command: str, description: str = "", metadata: Opt
     approval pipeline.
     """
     meta = _normalize_approval_metadata(metadata)
-    purpose = _clean_approval_text(
-        meta.get("purpose") or meta.get("objective") or meta.get("goal") or meta.get("summary")
+    purpose = _sanitize_approval_summary_text(
+        meta.get("purpose") or meta.get("objective") or meta.get("goal") or meta.get("summary"),
+        limit=90,
+        fallback="",
     )
-    work = _clean_approval_text(
-        meta.get("work") or meta.get("task") or meta.get("operation") or meta.get("intent")
+    work = _sanitize_approval_summary_text(
+        meta.get("work") or meta.get("task") or meta.get("intent"),
+        limit=180,
+        fallback="",
     )
+    structured = _structured_approval_metadata(meta)
+
+    if structured:
+        if not purpose:
+            purpose = (
+                structured.get("operation")
+                or structured.get("risk_type")
+                or structured.get("target")
+                or "명령 실행 전 승인"
+            )
+        if not work:
+            work_parts: list[str] = []
+            if structured.get("risk_type"):
+                work_parts.append(f"위험 유형: {structured['risk_type']}")
+            if structured.get("target"):
+                work_parts.append(f"대상: {structured['target']}")
+            if structured.get("job_id"):
+                work_parts.append(f"job_id: {structured['job_id']}")
+            if structured.get("operation") and structured.get("operation") != purpose:
+                work_parts.append(f"작업: {structured['operation']}")
+            work = " · ".join(work_parts) if work_parts else "명령 내용을 확인합니다."
+        summary = {"purpose": purpose, "work": work, "source": "metadata"}
+        summary.update(structured)
+        return summary
 
     if purpose or work:
         if not purpose:
@@ -197,6 +280,10 @@ def summarize_approval_intent(command: str, description: str = "", metadata: Opt
 
     normalized = " ".join((command or "").split())
     lowered = normalized.lower()
+    if re.search(r"\brm\b", lowered):
+        target = _extract_rm_target(normalized)
+        if target:
+            return {"purpose": "삭제 승인", "work": f"대상: {target}", "source": "command"}
     for pattern, (rule_purpose, rule_work) in _APPROVAL_SUMMARY_RULES:
         if pattern.search(lowered):
             return {"purpose": rule_purpose, "work": rule_work, "source": "command"}
@@ -223,12 +310,21 @@ def build_approval_intro(command: str, description: str = "", metadata: Optional
     it only improves what the user sees before making the approval decision.
     """
     summary = summarize_approval_intent(command, description, metadata)
-    return "\n".join([
+    lines = [
         f"목적: {summary['purpose']}",
         f"작업: {summary['work']}",
+    ]
+    if summary.get("risk_type"):
+        lines.append(f"위험 유형: {summary['risk_type']}")
+    if summary.get("target"):
+        lines.append(f"대상: {summary['target']}")
+    if summary.get("job_id"):
+        lines.append(f"job_id: {summary['job_id']}")
+    lines.extend([
         "승인 필요: 예",
         "Command Approval Required",
     ])
+    return "\n".join(lines)
 
 
 def _invoke_approval_callback(callback, command: str, description: str, *, allow_permanent: bool, approval_metadata: Optional[dict] = None):
