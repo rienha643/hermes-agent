@@ -7,6 +7,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from used_car_sources import (
+    build_kcar_detail_url,
     parse_encar_listing,
     parse_kcar_listing,
     fetch_all_sources,
@@ -87,7 +88,7 @@ def test_parse_encar_listing_extracts_certification_options_and_fields():
 
 
 def test_parse_kcar_listing_extracts_detail_json_fields():
-    listing = parse_kcar_listing(KCAR_ITEM, "https://www.kcar.com/bc/car-info?i_sCarCd=EC61358223", KCAR_DETAIL)
+    listing = parse_kcar_listing(KCAR_ITEM, "https://www.kcar.com/bc/detail/carInfoDtl?carCd=EC61358223", KCAR_DETAIL)
     assert listing["source"] == "kcar"
     assert listing["brand"] == "기아"
     assert listing["model"] == "쏘렌토"
@@ -102,6 +103,12 @@ def test_parse_kcar_listing_extracts_detail_json_fields():
     assert listing["accident_note"] == "무사고"
     assert listing["flood_note"] == "침수 없음"
     assert set(["열선 시트", "후방카메라", "크루즈 컨트롤", "메모리시트"]).issubset(set(listing["required_options_matched"]))
+
+
+def test_build_kcar_detail_url_uses_browser_detail_route():
+    assert build_kcar_detail_url("EC61353662") == "https://www.kcar.com/bc/detail/carInfoDtl?i_sCarCd=EC61353662"
+    assert build_kcar_detail_url("EC61358223") == "https://www.kcar.com/bc/detail/carInfoDtl?i_sCarCd=EC61358223"
+    assert build_kcar_detail_url("EC61356147") == "https://www.kcar.com/bc/detail/carInfoDtl?i_sCarCd=EC61356147"
 
 
 def test_fetch_all_sources_isolates_source_failures(monkeypatch):

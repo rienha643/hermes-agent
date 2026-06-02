@@ -130,7 +130,7 @@ def _fetch_kcar(limit: int) -> list[dict]:
     listings: list[dict] = []
     for item in items:
         car_cd = item.get("carCd")
-        detail_url = f"https://www.kcar.com/bc/car-info?i_sCarCd={car_cd}"
+        detail_url = build_kcar_detail_url(car_cd)
         try:
             detail_response = requests.get(
                 cfg["detail_api"],
@@ -145,6 +145,10 @@ def _fetch_kcar(limit: int) -> list[dict]:
             continue
         listings.append(parse_kcar_listing(item, detail_url, detail_json))
     return listings
+
+
+def build_kcar_detail_url(car_cd: str | None) -> str:
+    return f"https://www.kcar.com/bc/detail/carInfoDtl?i_sCarCd={car_cd}"
 
 
 def fetch_html(url: str, allow_jina_fallback: bool = False) -> str:
