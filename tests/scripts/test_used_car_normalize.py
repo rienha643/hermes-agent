@@ -22,6 +22,8 @@ def test_normalize_brand_maps_korean_and_english_variants():
     assert normalize_brand("Mercedes-Benz") == "벤츠"
     assert normalize_brand("현대") == "현대"
     assert normalize_brand("포르쉐") == "포르쉐"
+    assert normalize_brand("Volkswagen") == "폭스바겐"
+    assert normalize_brand("Lexus") == "렉서스"
 
 
 def test_parse_year_month_extracts_year_and_month():
@@ -52,6 +54,8 @@ def test_normalize_fuel_maps_supported_types():
 def test_infer_body_type_detects_suv_keywords():
     assert infer_body_type("벤츠 GLS클래스 X167 GLS 450 4MATIC") == "SUV"
     assert infer_body_type("현대 팰리세이드 디젤 2.2 4WD 익스클루시브") == "SUV"
+    assert infer_body_type("폭스바겐 티구안 2.0 TDI 4Motion") == "SUV"
+    assert infer_body_type("렉서스 RX 450h F SPORT") == "SUV"
     assert infer_body_type("현대 아반떼 1.6 모던") == "세단"
 
 

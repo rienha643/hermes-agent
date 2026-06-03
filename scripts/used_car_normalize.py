@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timezone
 from typing import Iterable
 
-ALLOWED_BRANDS = {"현대", "기아", "BMW", "벤츠", "포르쉐"}
+ALLOWED_BRANDS = {"현대", "기아", "BMW", "벤츠", "포르쉐", "폭스바겐", "렉서스"}
 ALLOWED_FUELS = {"가솔린", "디젤", "하이브리드"}
 ALLOWED_SOURCES = {"usedcar_destroyer", "jungcar_tv", "encar_certified", "kcar"}
 
@@ -33,6 +33,8 @@ SUV_KEYWORDS = {
     "BMW": ["X1", "X2", "X3", "X4", "X5", "X6", "X7", "XM", "IX"],
     "벤츠": ["GLA", "GLB", "GLC", "GLE", "GLS", "G클래스", "EQB", "EQC", "EQE SUV", "EQS SUV", "G바겐", "지바겐"],
     "포르쉐": ["카이엔", "마칸"],
+    "폭스바겐": ["티구안", "투아렉", "티록", "ID.4"],
+    "렉서스": ["UX", "NX", "RX", "GX", "LX", "RZ"],
 }
 
 BRAND_PATTERNS = [
@@ -40,6 +42,8 @@ BRAND_PATTERNS = [
     (re.compile(r"^benz$|벤츠", re.I), "벤츠"),
     (re.compile(r"^bmw$|BMW", re.I), "BMW"),
     (re.compile(r"포르쉐|porsche", re.I), "포르쉐"),
+    (re.compile(r"폭스바겐|volkswagen", re.I), "폭스바겐"),
+    (re.compile(r"렉서스|lexus", re.I), "렉서스"),
     (re.compile(r"현대|hyundai", re.I), "현대"),
     (re.compile(r"기아|kia", re.I), "기아"),
 ]

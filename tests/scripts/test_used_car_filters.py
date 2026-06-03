@@ -36,6 +36,17 @@ def test_apply_hard_filters_keeps_valid_suv_listing():
     assert excluded == []
 
 
+def test_apply_hard_filters_accepts_new_supported_brands():
+    kept, excluded = apply_hard_filters(
+        [
+            _base_listing(listing_id="vw", brand="폭스바겐", title="폭스바겐 티구안", body_type="SUV"),
+            _base_listing(listing_id="lexus", brand="렉서스", title="렉서스 RX", body_type="SUV"),
+        ]
+    )
+    assert [item["listing_id"] for item in kept] == ["vw", "lexus"]
+    assert excluded == []
+
+
 def test_apply_hard_filters_excludes_sedan_lpg_and_high_mileage():
     kept, excluded = apply_hard_filters(
         [
