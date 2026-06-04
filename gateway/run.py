@@ -1608,6 +1608,111 @@ def _normalize_empty_agent_response(
     return response
 
 
+def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
+    """Extract local attachment candidates from structured agent/tool results.
+
+    This complements text parsing of ``MEDIA:`` and bare local paths by scanning
+    structured payloads returned by tools such as ``delegate_task`` and
+    ``image_generate``. Only local filesystem paths are surfaced here; URL-based
+    artifacts remain text-only.
+    """
+    from urllib.parse import unquote, urlparse
+
+    candidates: list[str] = []
+    seen_paths: set[str] = set()
+    seen_nodes: set[int] = set()
+
+    def _maybe_add_path(value: Any) -> None:
+        if not isinstance(value, str):
+            return
+        raw = value.strip().strip("`\"'")
+        if not raw:
+            return
+        if raw.startswith("file://"):
+            parsed = urlparse(raw)
+            raw = unquote(parsed.path or "")
+        if not (raw.startswith("/") or raw.startswith("~/")):
+            return
+        expanded = os.path.expanduser(raw)
+        if expanded in seen_paths:
+            return
+        seen_paths.add(expanded)
+        candidates.append(expanded)
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            node_id = id(node)
+            if node_id in seen_nodes:
+                return
+            seen_nodes.add(node_id)
+
+            raw_artifacts = node.get("artifacts")
+            if isinstance(raw_artifacts, (list, tuple)):
+                for item in raw_artifacts:
+                    if isinstance(item, str):
+                        _maybe_add_path(item)
+
+            raw_media_files = node.get("media_files")
+            if isinstance(raw_media_files, (list, tuple)):
+                for item in raw_media_files:
+                    if isinstance(item, str):
+                        _maybe_add_path(item)
+                    elif isinstance(item, (list, tuple)) and item:
+                        _maybe_add_path(item[0])
+
+            for key in (
+                "image",
+                "local_path",
+                "file_path",
+                "path",
+                "output_path",
+                "audio_path",
+                "video_path",
+                "document_path",
+            ):
+                _maybe_add_path(node.get(key))
+
+            for value in node.values():
+                if isinstance(value, (dict, list, tuple)):
+                    _walk(value)
+                elif isinstance(value, str):
+                    stripped = value.lstrip()
+                    if stripped.startswith("{") or stripped.startswith("["):
+                        try:
+                            _walk(json.loads(value))
+                        except Exception:
+                            pass
+        elif isinstance(node, (list, tuple)):
+            node_id = id(node)
+            if node_id in seen_nodes:
+                return
+            seen_nodes.add(node_id)
+            for item in node:
+                if isinstance(item, (dict, list, tuple)):
+                    _walk(item)
+                elif isinstance(item, str):
+                    stripped = item.lstrip()
+                    if stripped.startswith("{") or stripped.startswith("["):
+                        try:
+                            _walk(json.loads(item))
+                        except Exception:
+                            _maybe_add_path(item)
+                    else:
+                        _maybe_add_path(item)
+        elif isinstance(node, str):
+            stripped = node.lstrip()
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    _walk(json.loads(node))
+                    return
+                except Exception:
+                    pass
+            _maybe_add_path(node)
+
+    _walk(agent_result)
+    return candidates
+
+
 def _should_clear_resume_pending_after_turn(agent_result: dict) -> bool:
     """Return True only when a gateway turn really completed successfully.
 
@@ -8923,6 +9028,12 @@ class GatewayRunner:
                 agent_result, response, history_len=len(history),
             )
             response = _sanitize_gateway_final_response(source.platform, response)
+            try:
+                _structured_attachment_paths = _collect_structured_attachment_paths(agent_result)
+            except Exception as _artifact_exc:
+                logger.debug("structured attachment extraction failed: %s", _artifact_exc)
+                _structured_attachment_paths = []
+            setattr(event, "_structured_attachment_paths", _structured_attachment_paths)
 
             # If the agent's session_id changed during compression, update
             # session_entry so transcript writes below go to the right session.
@@ -11586,7 +11697,7 @@ class GatewayRunner:
         event: MessageEvent,
         adapter,
     ) -> None:
-        """Extract MEDIA: tags and local file paths from a response and deliver them.
+        """Extract structured artifacts, MEDIA tags, and local file paths and deliver them.
 
         Called after streaming has already sent the text to the user, so the
         text itself is already delivered — this only handles file attachments
@@ -11606,9 +11717,22 @@ class GatewayRunner:
 
             media_files, _ = adapter.extract_media(response)
             media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files)
+            structured_files = BasePlatformAdapter.filter_local_delivery_paths(
+                getattr(event, "_structured_attachment_paths", []) or []
+            )
             _, cleaned = adapter.extract_images(response)
             local_files, _ = adapter.extract_local_files(cleaned)
             local_files = BasePlatformAdapter.filter_local_delivery_paths(local_files)
+            if structured_files:
+                seen_media_paths = {path for path, _ in media_files}
+                merged_local_files: list[str] = []
+                seen_local_paths: set[str] = set()
+                for file_path in [*structured_files, *local_files]:
+                    if file_path in seen_media_paths or file_path in seen_local_paths:
+                        continue
+                    seen_local_paths.add(file_path)
+                    merged_local_files.append(file_path)
+                local_files = merged_local_files
 
             _thread_meta = self._thread_metadata_for_source(event.source, self._reply_anchor_for_event(event))
 
