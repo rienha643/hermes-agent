@@ -1,0 +1,575 @@
+{
+  "summary": {
+    "comparison_result": "사용자 취향은 순수 OrangeMix + animevae 축보다, Anima/Illustrious 축으로 확장되는 방향에 더 가까운 것으로 판단됩니다. 다만 완전 전환보다는 Anima를 먼저 일부 도입하고, Illustrious는 보조 참조·후보군으로 유지하는 편이 안전합니다.",
+    "final_direction": "Anima 일부 도입",
+    "why": [
+      "사용자가 추가 제공한 링크 군집 자체가 Anima + Illustrious 중심이며, 단순 LoRA보다 워크플로우/생태계 자료 비중이 높습니다.",
+      "아카라이브 실사용 글에서는 Anima의 자연어 이해, 다중 인물 제어, 1024~1536 해상도 안정성, 속도/품질 장점이 반복적으로 언급됩니다.",
+      "Anima+IL 워크플로우 글은 “Anima로 초안을 잡고 IL이 디테일을 다듬는다”는 역할 분담을 명시합니다.",
+      "BD2/DC/모바일 게임풍에 가까운 광택 피부·세련된 미소녀 미감은 Anima B1 Nikke Style LoRA 같은 최신 Anima 자산과 더 직접적으로 연결됩니다.",
+      "현 Celia 기본 스택은 안정적이지만 SD1.5/OrangeMix 자산 중심이어서, 차세대 스타일 확장성은 Anima/Illustrious 쪽이 더 큽니다."
+    ],
+    "taste_scores": [
+      {
+        "axis": "브라운더스트2 적합성",
+        "OrangeMix": 3.3,
+        "Anima": 4.4,
+        "Illustrious": 4.2
+      },
+      {
+        "axis": "데스티니 차일드 적합성",
+        "OrangeMix": 3.4,
+        "Anima": 4.2,
+        "Illustrious": 4.3
+      },
+      {
+        "axis": "NAI 감성/태그 친화성",
+        "OrangeMix": 4.8,
+        "Anima": 4.1,
+        "Illustrious": 3.6
+      },
+      {
+        "axis": "자연어/현대 워크플로우 적합성",
+        "OrangeMix": 2.7,
+        "Anima": 4.8,
+        "Illustrious": 4.0
+      },
+      {
+        "axis": "Celia 현재 자산 연속성",
+        "OrangeMix": 5.0,
+        "Anima": 3.2,
+        "Illustrious": 2.8
+      }
+    ],
+    "ecosystem_conclusions": {
+      "OrangeMix": "현재 Celia의 안정 운영 축이며 NAI 계열 감성 유지에는 가장 유리합니다. 다만 차세대 고해상도·자연어·모바일 게임풍 확장성은 제한적입니다.",
+      "Anima": "가장 강한 차세대 후보입니다. 자연어 이해, 다중 인물 제어, 고해상도, 최신 스타일 LoRA 연결성이 강점입니다.",
+      "Illustrious": "성숙한 체크포인트/LoRA 풀과 범용성이 강점입니다. 다만 커뮤니티 근거상 Anima 초안 + IL 디테일링 구조가 더 자주 언급됩니다."
+    },
+    "community_evidence": [
+      {
+        "title": "초보자용 아니마+IL 워크플로우 VER.3",
+        "url": "https://arca.live/b/aiart/167585299",
+        "point": "Anima로 초안을 잡고 IL이 디테일을 다듬는 역할 분담, VRAM별 워크플로우, LoRA 적용 팁 제시"
+      },
+      {
+        "title": "Anima 계열 체크포인트 사용 중인 분들께 질문 있음!",
+        "url": "https://arca.live/b/aiart/172648261?p=1",
+        "point": "자연어 이해, 다중 인물 제어, 1024/1536 해상도 안정성, 속도/학습력 장점 반복 언급"
+      },
+      {
+        "title": "SDXL+Anima 써보니 상상 이상이네",
+        "url": "https://arca.live/b/aiart/165742722",
+        "point": "LoRA 캐릭터도 regional 없이 잘 나와 연구 가치가 높다는 평가"
+      },
+      {
+        "title": "이제 anima 의 시대인 겁니까?",
+        "url": "https://arca.live/b/aiart/169133453",
+        "point": "정식 릴리즈 전이지만 프롬프트 이해도, 눈/손 안정성, 랜덤 다양성 장점 언급"
+      },
+      {
+        "title": "NTR MIX | illustrious-XL | Noob-XL",
+        "url": "https://civitai.com/models/926443/ntr-mix-or-illustrious-xl-or-noob-xl?modelVersionId=1061268",
+        "point": "ComfyUI 권장 세팅이 구체적이고 Illustrious 메인 범용 베이스로 쓰임"
+      },
+      {
+        "title": "Anima B1 Nikke Style LoRA",
+        "url": "https://civitai.com/models/2534308/anima-b1-nikke-style-lora",
+        "point": "NIKKE 스타일을 Anima 위에서 직접 구현하는 최신 스타일 LoRA 사례"
+      }
+    ]
+  },
+  "models": [
+    {
+      "name": "OrangeMixs AOM3A1",
+      "ecosystem": "OrangeMix",
+      "kind": "Checkpoint",
+      "url": "https://huggingface.co/WarriorMama777/OrangeMixs",
+      "workflow": "SD1.5 + animevae(or orangemix.vae) + LoRA 보조. 현재 Celia 기본 축.",
+      "purpose": "NAI 계열 감성, 익숙한 SD1.5 애니 그림체, 가벼운 로컬 운용.",
+      "style": "NAI/Anything 계열 2D 애니, 익숙한 태그 기반 조작.",
+      "vs_orange": "기준축",
+      "source": "Hugging Face OrangeMixs README",
+      "downloads": null,
+      "thumbs_up": null,
+      "comment_count": null,
+      "base_model": "SD 1.5 / NAI-adjacent",
+      "trained_words": [],
+      "description_excerpt": "",
+      "images": []
+    },
+    {
+      "name": "animevae / orangemix.vae",
+      "ecosystem": "OrangeMix",
+      "kind": "VAE",
+      "url": "https://huggingface.co/WarriorMama777/OrangeMixs/blob/main/VAEs/orangemix.vae.pt",
+      "workflow": "OrangeMix/AOM 계열과 결합, 채도·밝기 안정화 역할.",
+      "purpose": "기존 OrangeMix 색감 유지.",
+      "style": "NAI/Anything 계열 VAE 톤.",
+      "vs_orange": "기준 VAE",
+      "source": "Hugging Face OrangeMixs README",
+      "downloads": null,
+      "thumbs_up": null,
+      "comment_count": null,
+      "base_model": "SD 1.5 / NAI-adjacent",
+      "trained_words": [],
+      "description_excerpt": "",
+      "images": []
+    },
+    {
+      "name": "WAI-ANIMA",
+      "ecosystem": "Anima",
+      "kind": "Checkpoint",
+      "id": 2544636,
+      "url": "https://civitai.red/models/2544636/wai-anima?modelVersionId=2859702",
+      "workflow": "Anima 단독 또는 Anima 초안용 베이스. 자연어/태그 혼용.",
+      "purpose": "범용 Anima 스타팅 포인트.",
+      "style": "범용 고해상도 애니·미소녀.",
+      "vs_orange": "해상도·자연어 우위, 기존 SD1.5 LoRA 자산은 약함.",
+      "source": "Civitai model page",
+      "api_name": "WAI-ANIMA",
+      "downloads": 843,
+      "thumbs_up": 86,
+      "comment_count": 159,
+      "base_model": "Anima",
+      "trained_words": [],
+      "description_excerpt": "(2) wai-anima1.0 - v1 - Free AI CHECKPOINT Download |   Tensor.Art   |   Tensor.Art     Based on BASE 1.0. If you encounter any issues, please leave feedback, and I will try to fix or improve them in future versions.       Recommended set",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/1d8cf074-a5ca-4fdf-8988-68981f2f54d6/original=true/132075530.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/95677296-890e-4faa-b978-4693b794ac63/original=true/132075529.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/4adf1cf6-3481-4dd3-af7b-358f9f47c7bf/original=true/132075532.jpeg"
+      ]
+    },
+    {
+      "name": "NTRMix | STYLE",
+      "ecosystem": "Anima",
+      "kind": "LoRA",
+      "id": 2393785,
+      "url": "https://civitai.red/models/2393785/ntrmix-or-style",
+      "workflow": "Anima 베이스에 스타일 LoRA로 얹는 형태.",
+      "purpose": "NTR MIX 감성을 Anima에 이식.",
+      "style": "Illustrious/NTR 계열 감성 보정.",
+      "vs_orange": "스타일 이식력은 좋지만 안정성은 베이스 의존.",
+      "source": "Civitai model page",
+      "api_name": "NTRMix | STYLE",
+      "downloads": 642,
+      "thumbs_up": 64,
+      "comment_count": 5,
+      "base_model": "Anima",
+      "trained_words": [
+        "@ntrmixstyle"
+      ],
+      "description_excerpt": "If the creator of NTRMix  @tkio  wants this taken down then I will.   Style based off of  NTRMix 4.0 . Obviously it is not 1 to 1 accuracy. Still trying to work out the settings of what is best for training style loras on anima.",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/dcea7ce2-516d-4934-8700-6011f6168819/original=true/131985833.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/50fb8b53-6a64-42f4-8848-0f94ae7464b3/original=true/131985836.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/677296d8-6e4e-415a-b282-4305acc61366/original=true/131985834.jpeg"
+      ]
+    },
+    {
+      "name": "AnimaYume",
+      "ecosystem": "Anima",
+      "kind": "Checkpoint",
+      "id": 2385278,
+      "url": "https://civitai.red/models/2385278/animayume",
+      "workflow": "Anima 파인튜닝 단독 사용.",
+      "purpose": "고품질 일러스트·미소녀 중심.",
+      "style": "부드럽고 미학적 애니 일러스트.",
+      "vs_orange": "더 큰 해상도와 현대적 질감, SD1.5보다 무거움.",
+      "source": "Civitai model page",
+      "api_name": "AnimaYume",
+      "downloads": 7755,
+      "thumbs_up": 507,
+      "comment_count": 0,
+      "base_model": "Anima",
+      "trained_words": [],
+      "description_excerpt": "I. Introduction    AnimaYume  is a  text-to-image  model fine-tuned from   Anima  , a high-quality anime-style image generation model developed by  CircleStone Labs . It builds upon    Cosmos 2 , a model developed by NVIDIA’s research tea",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/ed7849a6-c248-4924-ad5e-fca9ff131519/original=true/131350881.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/a16f9ec0-1fc2-4f6a-8ab7-6900e57022cf/original=true/131350880.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/7e245eb4-9c32-4f69-8b82-b93c3272d02f/original=true/131350857.jpeg"
+      ]
+    },
+    {
+      "name": "AnimaIka",
+      "ecosystem": "Anima",
+      "kind": "Checkpoint",
+      "id": 2426265,
+      "url": "https://civitai.red/models/2426265/animaika?modelVersionId=2866503",
+      "workflow": "Forge/ComfyUI 호환. 프롬프트 가이드 준수형.",
+      "purpose": "선명한 선화와 품질 안정성.",
+      "style": "깨끗한 선과 발색 중심의 애니.",
+      "vs_orange": "선명도 우세, 익숙한 SD1.5 프롬 감각과는 다름.",
+      "source": "Civitai model page",
+      "api_name": "AnimaIka",
+      "downloads": 1846,
+      "thumbs_up": 142,
+      "comment_count": 44,
+      "base_model": "Anima",
+      "trained_words": [],
+      "description_excerpt": "v4    Compatible with ComfyUI and Forge Neo.  Please refer to the Anima Preview model for prompt writing guidelines.   --prompt--\nmasterpiece, best quality, (safe|sensitive|explicit, uncensored),\n\n--negative--\nworst quality, low quality, s",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/f3902f80-1f43-4b48-ac34-9ced1099c205/original=true/131581190.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/b62b9c39-f94c-48cb-9519-284d91828afa/original=true/131581184.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/30f5d028-a00c-4828-bc86-4b7179b14a73/original=true/131581185.jpeg"
+      ]
+    },
+    {
+      "name": "Hakushi Mix Anima",
+      "ecosystem": "Anima",
+      "kind": "Checkpoint",
+      "id": 2515015,
+      "url": "https://civitai.red/models/2515015/hakushi-mix-anima?modelVersionId=2906068",
+      "workflow": "여러 화풍 블렌드 전제. 조합 변화폭 큼.",
+      "purpose": "다양한 화풍 혼합 실험용.",
+      "style": "블랭크 캔버스형 범용 애니.",
+      "vs_orange": "유연성 우세, 결과 통제는 더 어렵다.",
+      "source": "Civitai model page",
+      "api_name": "Hakushi Mix Anima",
+      "downloads": 749,
+      "thumbs_up": 85,
+      "comment_count": 11,
+      "base_model": "Anima",
+      "trained_words": [],
+      "description_excerpt": "Hakushi Mix Animaは様々な画風をブレンドして使用することを前提として作られています。 AnimaはGelbooru tagと自然言語の組み合わせによりIllustriousよりも細かい指定が可能となっています。  Animaでは組み合わせによる変化が大きいためどうするのが正解とは言えません。  サンプルで使われている品質タグやネガティブプロンプトは一例として見てください。  好みに合った画風になるよう調整していただければと思います。    v1.0  Ani",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/87e81627-f2a3-45fb-8dcb-a2e85a836dd2/original=true/132682600.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/dd8bda09-3608-4b7f-a042-a1bdefc20e23/original=true/132685363.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/97521c95-4e3b-4c3c-8010-a80a3b14c71a/original=true/132683291.jpeg"
+      ]
+    },
+    {
+      "name": "QwenimageVAE_liquid1087",
+      "ecosystem": "Anima",
+      "kind": "VAE",
+      "id": 2487530,
+      "url": "https://civitai.red/models/2487530/qwenimagevaeliquid1087",
+      "workflow": "Anima용 외부 VAE.",
+      "purpose": "색 균형·라인과 채색 경계 개선.",
+      "style": "채색 경계 깔끔, 애니 음영 정리.",
+      "vs_orange": "현대적 SDXL/Anima 톤, SD1.5용과 직접 호환 아님.",
+      "source": "Civitai model page",
+      "api_name": "QwenimageVAE_liquid1087",
+      "downloads": 1400,
+      "thumbs_up": 67,
+      "comment_count": 3,
+      "base_model": "Anima",
+      "trained_words": [],
+      "description_excerpt": "This merged VAE improves anime-style shading by refining the color balance and reducing visible gaps between lineart and fill colors. The merge also suppresses the white fringe that can appear between dark outlines and flat color areas, re",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/662602f5-ba52-4a4a-a39d-b82f434acd69/original=true/125111800.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/f835f4b3-428e-4c04-b1f7-d0f0b88a63bd/original=true/125111823.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/649b9906-08aa-45fb-8eb0-6d9e9186d020/original=true/125111941.jpeg"
+      ]
+    },
+    {
+      "name": "SinGlo-Anima",
+      "ecosystem": "Anima",
+      "kind": "Checkpoint",
+      "id": 2583535,
+      "url": "https://civitai.red/models/2583535/singlo-anima?modelVersionId=2902419",
+      "workflow": "Anima Preview 3 + SinGlo 계열 혼합.",
+      "purpose": "어둡고 분위기 있는 감성.",
+      "style": "다크, emo, moody.",
+      "vs_orange": "무드 연출 우세, 범용성은 낮다.",
+      "source": "Civitai model page",
+      "api_name": "SinGlo-Anima",
+      "downloads": 111,
+      "thumbs_up": 17,
+      "comment_count": 2,
+      "base_model": "Anima",
+      "trained_words": [],
+      "description_excerpt": "1.5 now comes with Base!     This uses my trained SinGlo lora/checkpoints from Illustrious mixed in with Anima Preview 3!  Works very well with natural language.    YOU NEED:     qwen base encoder &amp; qwen image vae          All galler",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/c80230a3-d25c-4a53-a9e5-54c854eb3719/original=true/132575702.jpeg"
+      ]
+    },
+    {
+      "name": "CottonAnima",
+      "ecosystem": "Anima",
+      "kind": "Checkpoint",
+      "id": 2382223,
+      "url": "https://civitai.red/models/2382223/cottonanima",
+      "workflow": "Anima 기반 머지.",
+      "purpose": "안정적인 범용 애니 출력.",
+      "style": "부드럽고 안정적인 애니.",
+      "vs_orange": "대형 해상도와 최신 렌더링 우세, SD1.5 속도/자산은 불리.",
+      "source": "Civitai model page",
+      "api_name": "CottonAnima",
+      "downloads": 3453,
+      "thumbs_up": 306,
+      "comment_count": 0,
+      "base_model": "Anima",
+      "trained_words": [],
+      "description_excerpt": "Anima official release!     released BASE1. This model is based on anima-base-v1.0.     CottonAnima is a merged model based on Anima, combined with a style LoRA (trained on 100 + 60 AI-generated images).  This model adopts a fixed art sty",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/d500731a-dc7f-411c-93c4-82d9be8c88ae/original=true/130953248.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/bc8c6d06-ecd0-4487-9882-2f61b152668e/original=true/130953371.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/1a4cdf83-8807-4743-a060-675c450f1cf1/original=true/130953395.jpeg"
+      ]
+    },
+    {
+      "name": "Anima B1 Nikke Style LoRA",
+      "ecosystem": "Anima",
+      "kind": "LoRA",
+      "id": 2534308,
+      "url": "https://civitai.com/models/2534308/anima-b1-nikke-style-lora",
+      "workflow": "Anima Base v1.0 + 스타일 LoRA, pale/shiny/wet skin 태그 병행.",
+      "purpose": "NIKKE/모바일 게임풍 피부 질감·광택.",
+      "style": "광택 피부, 세련된 모바일 게임풍.",
+      "vs_orange": "BD2/DC 인접 미감에 강함, 차세대 취향 적중 가능성 높음.",
+      "source": "Civitai model page",
+      "api_name": "Anima B1 Nikke Style Lora",
+      "downloads": 1584,
+      "thumbs_up": 110,
+      "comment_count": 0,
+      "base_model": "Anima",
+      "trained_words": [],
+      "description_excerpt": "26.04.24   Dataset expansion and improved skin texture.    26.05.16   Retrained using a new base model.      This is a Nikke-style LoRA trained using  Anima Base v1.0 .      This is a NIKKE-style LoRA trained on Anima Base v1.0.  The trigg",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/dee87cce-fb63-4833-bb59-ac0a62301717/original=true/130846119.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/e9ec3495-bded-4fba-93bc-c4a78488d30e/original=true/130846118.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/6eccff9e-7103-4344-8e04-aec33fcc6c0d/original=true/130846121.jpeg"
+      ]
+    },
+    {
+      "name": "WAI-illustrious-SDXL",
+      "ecosystem": "Illustrious",
+      "kind": "Checkpoint",
+      "id": 827184,
+      "url": "https://civitai.red/models/827184/wai-illustrious-sdxl",
+      "workflow": "Illustrious 범용 입문 베이스.",
+      "purpose": "LoRA 없이도 캐릭터·의상 데이터 활용 폭 큼.",
+      "style": "범용 고품질 IL 애니.",
+      "vs_orange": "범용성과 해상도 우세, 기존 SD1.5 자산 이식은 별도 검토 필요.",
+      "source": "Civitai model page",
+      "api_name": "WAI-illustrious-SDXL",
+      "downloads": 76121,
+      "thumbs_up": 4529,
+      "comment_count": 0,
+      "base_model": "Illustrious",
+      "trained_words": [],
+      "description_excerpt": "If you want to use more my checkpoint online generation, please visit here.   https://tensor.art/u/762555264535746522    WAI-NSFW-illustrious-SDXL - SeaArt AI Model    WAI_NSFW-illustrious-SDXL_NSFW-illustrious-SDXL_NSFW-illustrious-SDXL_N",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/bf704a4b-9e7c-4651-9387-91f121b24ef3/original=true/128374653.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/76cd0a59-f047-4fd6-a33d-9a5b4e025788/original=true/128374802.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/98b577e4-e244-446b-91b4-8bbd8ef04ac1/original=true/128374698.jpeg"
+      ]
+    },
+    {
+      "name": "NTR MIX",
+      "ecosystem": "Illustrious",
+      "kind": "Checkpoint",
+      "id": 926443,
+      "url": "https://civitai.com/models/926443/ntr-mix-or-illustrious-xl-or-noob-xl?modelVersionId=1061268",
+      "workflow": "ComfyUI 권장. 품질 태그와 step/cfg 세팅 중요.",
+      "purpose": "실전형 범용 IL 메인 베이스.",
+      "style": "역동적 구도, 예쁜 색감, 범용 미소녀.",
+      "vs_orange": "현세대 메인 모델 감각, ReForge/Forge 호환성은 불확실.",
+      "source": "Civitai model page",
+      "api_name": "NTR MIX | illustrious-XL | Noob-XL",
+      "downloads": 89449,
+      "thumbs_up": 13169,
+      "comment_count": 0,
+      "base_model": "Illustrious",
+      "trained_words": [],
+      "description_excerpt": "This model is recommended for use with Comfyui    compatibility with Reforge is not guaranteed.       RECOMMEND setting (NTR MIX Xiii)     {your Prompt}\n\nmasterpiece, best quality, amazing quality, very aesthetic, absurdres,  newest, \n\nyo",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/32f84039-2e6c-4ef0-b714-b4f13684649e/original=true/45654541.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/69630d05-28e3-47b6-8abe-6a8fdedf4310/original=true/45654546.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/b29afa8f-7de6-4853-8c7a-c69c251ab91d/original=true/45654545.jpeg"
+      ]
+    },
+    {
+      "name": "IllumiYume XL",
+      "ecosystem": "Illustrious",
+      "kind": "Checkpoint",
+      "id": 1308285,
+      "url": "https://civitai.red/models/1308285/illumiyume-xl-illustrious?modelVersionId=1887507",
+      "workflow": "Illustrious 기반 단독.",
+      "purpose": "Danbooru2023·Illustrious 계열 미학 강화.",
+      "style": "밝고 미학적인 일러스트.",
+      "vs_orange": "디테일/대형 캔버스 우세, SD1.5 경량성은 불리.",
+      "source": "Civitai model page",
+      "api_name": "IllumiYume XL (Illustrious)",
+      "downloads": 4663,
+      "thumbs_up": 361,
+      "comment_count": 0,
+      "base_model": "Illustrious",
+      "trained_words": [],
+      "description_excerpt": "Introduction   For version 1.0:    This model is based on 'Illustrious XL 1.0' with some minor modifications and was trained on the  Danbooru2023  along with the dataset I previously used for training my LoRA models.    For version 2.0:",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/1bd4ab13-83b7-4638-a98f-137e20f2b6c3/original=true/81481525.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/6d885ac2-7f52-44e7-9de1-ed5194343ebe/original=true/81481528.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/3f89bcaa-6a9d-4c48-947a-31e1a8bafa32/original=true/81481524.jpeg"
+      ]
+    },
+    {
+      "name": "Ikastrious",
+      "ecosystem": "Illustrious",
+      "kind": "Checkpoint",
+      "id": 874216,
+      "url": "https://civitai.red/models/874216/ikastrious",
+      "workflow": "범용 IL 베이스.",
+      "purpose": "클리어 라인·선명 발색.",
+      "style": "선명한 선과 강한 색감.",
+      "vs_orange": "발색·선화 우세, 태그/워크플로우 적응 필요.",
+      "source": "Civitai model page",
+      "api_name": "Ikastrious",
+      "downloads": 2010,
+      "thumbs_up": 175,
+      "comment_count": 0,
+      "base_model": "Illustrious",
+      "trained_words": [],
+      "description_excerpt": "🦑 Ikastrious 🦑   クリアな線と発色が特徴の、高品質な汎用アニメモデル  A high-quality, versatile anime-style model featuring clear linework and vibrant colors.     --prompt--\n(explicit|general), masterpiece, best quality, anime coloring (if you need)\n--negative--\nl",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/fe1b3318-cbb6-4f70-9208-f67c6f8f5c0c/original=true/126701434.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/c1dffc6a-7c87-4946-a3de-2534d7f0d4f4/original=true/126701435.jpeg"
+      ]
+    },
+    {
+      "name": "Hakushi Mix",
+      "ecosystem": "Illustrious",
+      "kind": "Checkpoint",
+      "id": 1337666,
+      "url": "https://civitai.red/models/1337666/hakushi-mix?modelVersionId=2060205",
+      "workflow": "다양한 화풍 블렌드 전제.",
+      "purpose": "여러 스타일을 한 베이스에서 소화.",
+      "style": "유연한 범용 캔버스형.",
+      "vs_orange": "유연성 우세, 재현성은 세팅 의존.",
+      "source": "Civitai model page",
+      "api_name": "Hakushi Mix",
+      "downloads": 3821,
+      "thumbs_up": 392,
+      "comment_count": 0,
+      "base_model": "Illustrious",
+      "trained_words": [],
+      "description_excerpt": "Hakushi Mix  is designed to be used with various blended art styles. \"Hakushi\" means \"Blank Paper\" The quality tags and negative prompts used in the samples are not necessarily the best or only options.  Please adjust them as needed to ma",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/046a6da4-4990-4a7c-aa5a-5c36f4907b8e/original=true/91206076.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/26ff63de-dd72-4299-b962-0c1d9f99787d/original=true/91206084.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/f6d12b6a-4d1c-40e5-96e9-fa4aae000b1f/original=true/91206077.jpeg"
+      ]
+    },
+    {
+      "name": "Liquid111VAE & Liquid9745VAE",
+      "ecosystem": "Illustrious",
+      "kind": "VAE",
+      "id": 85106,
+      "url": "https://civitai.red/models/85106/liquid111vae-and-liquid9745vae",
+      "workflow": "Illustrious/SDXL용 외부 VAE.",
+      "purpose": "고채도, hires/detailer 전제 색감 강화.",
+      "style": "고채도 선명 발색.",
+      "vs_orange": "색감은 강렬하지만 과채도 리스크.",
+      "source": "Civitai model page",
+      "api_name": "Liquid111VAE & Liquid9745VAE",
+      "downloads": 10628,
+      "thumbs_up": 876,
+      "comment_count": 4,
+      "base_model": "Illustrious",
+      "trained_words": [],
+      "description_excerpt": "High saturation.  Drawing conditions according to dtailer and Hires.fix.    The VAE for SD1.5 is not compatible with the VAE for SDXL.",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/c37fc430-4384-40b2-91e7-f780001fe826/original=true/21188451.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/0991aa88-7042-4e69-9ed9-038030d2f49f/original=true/21181586.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/489ca9b2-bd00-46b9-aeb0-5593a8d2bf49/original=true/21181594.jpeg"
+      ]
+    },
+    {
+      "name": "SinGlo-illustrious",
+      "ecosystem": "Illustrious",
+      "kind": "Checkpoint",
+      "id": 1552304,
+      "url": "https://civitai.red/models/1552304/singlo-illustrious?modelVersionId=2027722",
+      "workflow": "다크·emo 테마 특화.",
+      "purpose": "고딕/퇴폐/다크 무드.",
+      "style": "dark, gritty, emo.",
+      "vs_orange": "특정 무드에서는 우세, 범용 기본축으로는 편향적.",
+      "source": "Civitai model page",
+      "api_name": "SinGlo-illustrious",
+      "downloads": 558,
+      "thumbs_up": 78,
+      "comment_count": 1,
+      "base_model": "Illustrious",
+      "trained_words": [],
+      "description_excerpt": "🖤   SinGlo    v3  – Dark, Gritty, and Emo Aesthetics.   What is    SinGlo   ?  SinGlo v3 is a  custom checkpoint  crafted for  dark, moody, and emo-inspired visuals . Expect  gritty textures, shadowy tones, and emotional depth  in your gen",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/07dc95fe-6333-4c74-8065-740f3eab66b2/original=true/89264534.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/2cd5c83a-c85a-4353-aebc-b1fffce4ab5a/original=true/89264544.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/5031c438-3294-43d6-beba-6e45a5822edf/original=true/89264539.jpeg"
+      ]
+    },
+    {
+      "name": "Cat Carrier",
+      "ecosystem": "Illustrious",
+      "kind": "Checkpoint",
+      "id": 860278,
+      "url": "https://civitai.red/models/860278/cat-carrier?modelVersionId=2501370",
+      "workflow": "Illustrious 범용 체크포인트.",
+      "purpose": "캐릭터·배경 안정 출력.",
+      "style": "범용 IL 계열 애니.",
+      "vs_orange": "현세대 범용성 우세, 근거 문서량은 상대적으로 적음.",
+      "source": "Civitai model page",
+      "api_name": "Cat Carrier",
+      "downloads": 2443,
+      "thumbs_up": 210,
+      "comment_count": 8,
+      "base_model": "Illustrious",
+      "trained_words": [],
+      "description_excerpt": "Cat Carrier is anime style IllustriousXL model,  Not NoobAI XL .  VAE is baked in.    Recommended Setting    Steps: 25-30    CFG scale: 5-7    Sampler: Euler a, DPM++ 2M Karras    Use ADetailer as needed      Positive Prompt   masterpiece,",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/5976461a-065e-489a-9d4c-17521a1b9e49/original=true/113759814.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/7e445b5b-c0c7-40ff-8c4a-86ae49a17fd2/original=true/113759852.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/fb4550c2-4b49-4f30-bc7f-2ef021175b2b/original=true/113759880.jpeg"
+      ]
+    },
+    {
+      "name": "CottonIllustrious",
+      "ecosystem": "Illustrious",
+      "kind": "Checkpoint",
+      "id": 1432671,
+      "url": "https://civitai.red/models/1432671/cottonillustrious",
+      "workflow": "Illustrious XL 2.0 기반, 큰 해상도 안정성 강조.",
+      "purpose": "2048x1536급 대형 출력 안정성.",
+      "style": "부드럽고 안정적인 IL 애니.",
+      "vs_orange": "고해상도 크게 우세, 자원 소모 증가.",
+      "source": "Civitai model page",
+      "api_name": "CottonIllustrious",
+      "downloads": 3737,
+      "thumbs_up": 388,
+      "comment_count": 5,
+      "base_model": "Illustrious",
+      "trained_words": [],
+      "description_excerpt": "Version 2 released      Base model changed to Illustrious XL v2.0    The output is very stable even at huge resolutions such as 2048*1536. There is no longer any stretch in the torso.    Even at 2048*2048 resolution, collapse of the hum",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/abe70cb3-acf7-4564-8003-a27ca51f59fd/original=true/73067484.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/7f1d559a-c410-467f-9263-c440fe8d5d9a/original=true/73067641.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/de6615d7-52f2-4ce8-be0e-cc425cd0a1ba/original=true/73067957.jpeg"
+      ]
+    },
+    {
+      "name": "BOKA_SRWR_Style Lora",
+      "ecosystem": "Illustrious",
+      "kind": "LoRA",
+      "id": 2602939,
+      "url": "https://civitai.com/models/2602939/bokasrwrstyle-lora?modelVersionId=2922788",
+      "workflow": "Illustrious 베이스에 스타일 보정.",
+      "purpose": "특정 작가/스타일성 강화.",
+      "style": "스타일 지향 IL LoRA.",
+      "vs_orange": "세대는 최신이나 공개 근거는 비교적 제한적.",
+      "source": "Civitai model page",
+      "api_name": "BOKA_SRWR_Style Lora",
+      "downloads": 356,
+      "thumbs_up": 38,
+      "comment_count": 0,
+      "base_model": "Illustrious",
+      "trained_words": [],
+      "description_excerpt": "BOKA_SRWR_Style Lora     *Commercial use is permitted,      but please notify me beforehand.*     SDXL Model: Wai Illustration v 17  Strength : 0.7~0.9 (recommended)    +Using it with the      BOKA NIST LORA    model produces beautiful re",
+      "images": [
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/fc3d7849-e966-4b36-97e3-b4cc9856dbc1/original=true/129805688.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/b420870d-ccf4-47ee-b052-c3567b60fc8e/original=true/129806922.jpeg",
+        "https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/4df5f62f-ca9f-4825-adfd-62c06bd4f72b/original=true/129806929.jpeg"
+      ]
+    }
+  ]
+}

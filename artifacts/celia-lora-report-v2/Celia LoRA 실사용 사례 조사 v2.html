@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Celia LoRA 실사용 사례 조사 v2</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --panel2:#1d2230; --text:#e8ecf1; --muted:#aab4c0; --accent:#7cc4ff; --good:#7ad99f; --warn:#ffd166; --bad:#ff7b7b; --border:#2a3140; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", Arial, sans-serif; background:var(--bg); color:var(--text); line-height:1.55; }
+  a { color:var(--accent); text-decoration:none; }
+  .wrap { max-width:1200px; margin:0 auto; padding:32px 28px 60px; }
+  .hero { background:linear-gradient(135deg,#151925,#1e2940); border:1px solid var(--border); border-radius:18px; padding:28px; margin-bottom:20px; }
+  h1,h2,h3,h4 { margin:0 0 10px; }
+  h1 { font-size:30px; }
+  h2 { font-size:24px; margin-top:26px; }
+  h3 { font-size:18px; }
+  .sub { color:var(--muted); }
+  .nav { display:flex; gap:12px; flex-wrap:wrap; margin-top:14px; }
+  .nav a { background:#111826; border:1px solid var(--border); padding:8px 12px; border-radius:999px; font-size:14px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:18px 18px 16px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:16px 0; }
+  .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+  .summary-list { margin:0; padding-left:18px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th,td { border:1px solid var(--border); padding:10px 8px; text-align:center; }
+  th { background:var(--panel2); }
+  td:first-child, th:first-child { text-align:left; }
+  .candidate { margin-top:26px; padding-top:6px; border-top:1px solid #263046; }
+  .images { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:16px 0; }
+  .imgcard { margin:0; background:var(--panel); border:1px solid var(--border); border-radius:14px; overflow:hidden; }
+  .imgcard img { width:100%; height:360px; object-fit:cover; display:block; background:#0b0d12; }
+  .imgcard figcaption { padding:10px 12px; color:var(--muted); font-size:13px; }
+  .twocol { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .statline { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:14px; margin-bottom:12px; }
+  .label-good { color:var(--good); font-weight:700; }
+  .label-warn { color:var(--warn); font-weight:700; }
+  .label-bad { color:var(--bad); font-weight:700; }
+  .foot { color:var(--muted); font-size:13px; margin-top:26px; }
+  @media print { body { background:white; color:black; } .card,.hero,.imgcard { break-inside:avoid; } a { color:#134b8a; } }
+  @media (max-width: 900px) { .grid2,.grid3,.images,.twocol { grid-template-columns:1fr; } .imgcard img { height:280px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="hero">
+    <h1>Celia LoRA 실사용 사례 조사 v2</h1>
+    <p class="sub">LoRA 신규 발굴이 아니라, 기존 후보 5종의 실제 사용 사례·커뮤니티 평가·Celia 적합성을 확인하는 조사입니다.</p>
+    <div class="nav"><a href="#sec-1">QuickHand</a><a href="#sec-2">Front face lighting</a><a href="#sec-3">Maidoll Style</a><a href="#sec-4">Detail Tweaker</a><a href="#sec-5">Kim Hyung-Tae Style</a></div>
+  </section>
+
+  <section class="grid2">
+    <div class="card">
+      <h2>1장. 요약</h2>
+      <ul class="summary-list">
+        <li><b>조사 목적:</b> 기존 후보 5종의 실사용 사례, 커뮤니티 승인도, Celia 기본 스택 적합성 확인</li>
+        <li><b>후보 목록:</b> QuickHand / Front face lighting / Maidoll Style / Detail Tweaker / Kim Hyung-Tae Style</li>
+        <li><b>최종 결론:</b> 실사용 흔적과 커뮤니티 승인도가 가장 안정적으로 잡힌 것은 Front face lighting·Detail Tweaker·QuickHand였습니다. Maidoll Style은 OrangeMix/NovelAI 계열 적합성 근거가 강하지만, 이번에 확인된 공개 실사용 사례가 BD2/DC 취향 직결형은 아니어서 보류가 적절합니다. Kim Hyung-Tae Style은 데스티니 차일드 계열 적합성은 가장 높지만, Celia 기본 스택에서의 안정 운영 근거는 상대적으로 약했습니다.</li>
+        <li><b>즉시 설치 권장:</b> Front face lighting, Detail Tweaker, QuickHand</li>
+        <li><b>추가 검증 필요:</b> Maidoll Style, Kim Hyung-Tae Style</li>
+        <li><b>설치 비권장:</b> 없음 — 이번 v2 조사 범위에서는 “설치하지 않는 것이 좋다”까지 확정할 근거가 부족했습니다.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>조사 메모</h2>
+      <ul class="summary-list">
+        <li><b>조사한 URL 수:</b> 28</li>
+        <li><b>문서에 반영한 실사용 사례 수:</b> 15</li>
+        <li><b>포함 이미지 수:</b> 15</li>
+        <li><b>Tavily 사용:</b> 예</li>
+        <li><b>추적 구조:</b> 원본 문서 → 1차 링크 → 2차 링크 구조는 아카라이브 공지/가이드 문서에서 Civitai·NovelAI·실사용 게시글로 내려가는 흐름을 기준으로 정리했습니다.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>2장. 후보별 점수표</h2>
+    <table>
+      <thead>
+        <tr><th>후보</th><th>OrangeMix 적합성</th><th>animevae 적합성</th><th>브라운더스트2 적합성</th><th>데스티니 차일드 적합성</th><th>NAI 적합성</th><th>Celia 적합성</th></tr>
+      </thead>
+      <tbody><tr><th>QuickHand</th><td>3.0</td><td>3.5</td><td>3.0</td><td>3.0</td><td>2.0</td><td><b>3.5</b></td></tr><tr><th>Front face lighting</th><td>4.0</td><td>4.0</td><td>4.5</td><td>4.0</td><td>2.5</td><td><b>4.5</b></td></tr><tr><th>Maidoll Style</th><td>5.0</td><td>3.5</td><td>3.5</td><td>3.5</td><td>5.0</td><td><b>4.0</b></td></tr><tr><th>Detail Tweaker</th><td>4.0</td><td>4.0</td><td>4.0</td><td>4.0</td><td>2.5</td><td><b>4.5</b></td></tr><tr><th>Kim Hyung-Tae Style</th><td>3.0</td><td>3.0</td><td>4.0</td><td>5.0</td><td>4.0</td><td><b>3.5</b></td></tr></tbody>
+    </table>
+  </section>
+
+  
+    <section class="candidate" id="sec-1">
+      <h2>1. QuickHand</h2>
+      <div class="statline">
+        <span>다운로드 6,176</span>
+        <span>좋아요 46</span>
+        <span>싫어요 0</span>
+        <span>공개 예시 이미지 3장</span>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h3>판정</h3>
+          <p><b>추천 이유:</b> 손 왜곡 억제 목적이 명확하고, Civitai 공개 이미지와 아카라이브 실사용 언급이 모두 확인됩니다.</p>
+          <p><b>비추천 이유:</b> 아카라이브 사용자 경험상 스타일 변화 체감이 있고, 고가중치에서 손만 과도하게 강조될 수 있습니다.</p>
+          <p><b>OrangeMix 사용 사례:</b> 직접 OrangeMix 표기는 찾지 못했지만, SD1.5 애니 계열용으로 설계되었고 Anything 계열/애니 모델 사용 사례가 확인됩니다.</p>
+          <p><b>NAI 사용 사례:</b> 직접 NAI 사례는 부족합니다. NAI 감성 강화용보다는 로컬 SD1.5 손 보정용에 가깝습니다.</p>
+          <p><b>브라운더스트2 적합성:</b> 브라운더스트2 취향에서 손·포즈 안정성 확보용 보조 LoRA로는 유효하나, 그림체 보정 LoRA는 아닙니다.</p>
+          <p><b>데스티니 차일드 적합성:</b> 데스티니 차일드 계열에서도 손 노출 컷 안정화에는 도움될 수 있으나, 스타일 적합성 근거는 약합니다.</p>
+        </div>
+        <div class="card">
+          <h3>장점 / 단점</h3>
+          <div class="twocol">
+            <div><h4>장점</h4><ul><li>용도가 명확함</li><li>공개 사용 이미지가 꾸준히 존재</li><li>애니 계열 SD1.5에 맞춘 설명이 존재</li></ul></div>
+            <div><h4>단점</h4><ul><li>고가중치에서 스타일 드리프트 가능</li><li>NAI/OrangeMix 직결 근거는 약함</li></ul></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>실사용 사례 요약</h3>
+        <ul><li>아카라이브 글에서 손 문제 해결을 위해 QuickHand LoRA를 실제로 사용했다는 언급이 확인됩니다.</li><li>아카라이브 작품 공유 글에서 프롬프트에 QuickHands가 직접 포함된 사례가 확인됩니다.</li><li>Civitai 공개 사용자 이미지 20건 샘플에서 모두 SD 1.5 기반 사용이 확인되었습니다.</li></ul>
+      </div>
+      <div class="images"><figure class="imgcard"><a href="https://civitai.com/models/44056/quickhand"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/f336f3af-a4af-4118-b184-577606b11900/original=true/522954.jpeg" loading="lazy"></a><figcaption>Civitai 모델 프리뷰 1</figcaption></figure><figure class="imgcard"><a href="https://civitai.com/models/44056/quickhand"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/8886062f-1245-4f5b-5fc7-569581c18400/original=true/522953.jpeg" loading="lazy"></a><figcaption>Civitai 모델 프리뷰 2</figcaption></figure><figure class="imgcard"><a href="https://civitai.com/images/32010678"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/e080e644-cfbc-4d5d-8376-a87ecf1133cf/original=true/e080e644-cfbc-4d5d-8376-a87ecf1133cf.jpeg" loading="lazy"></a><figcaption>공개 사용자 이미지 예시</figcaption></figure></div>
+      <div class="grid2">
+        <div class="card">
+          <h3>추적 경로</h3>
+          <ol><li><b>원본</b> — <a href="https://arca.live/b/aiart/70255821">AI 그림 채널 정보글 모음</a></li><li><b>1차</b> — <a href="https://arca.live/b/aiart/70269083">뉴비용 정보 모음 → Civitai/LoRA 자료 동선</a></li><li><b>2차</b> — <a href="https://civitai.com/models/44056/quickhand">QuickHand 모델 페이지</a></li><li><b>실사용</b> — <a href="https://arca.live/b/aiart/73732717">손 문제 해결 과정에서 QuickHand 사용 언급</a></li><li><b>실사용</b> — <a href="https://arca.live/b/aiart/77471269">프롬프트에 QuickHands 사용 사례 공개</a></li></ol>
+        </div>
+        <div class="card">
+          <h3>근거 링크</h3>
+          <ul><li><a href="https://civitai.com/models/44056/quickhand">https://civitai.com/models/44056/quickhand</a></li><li><a href="https://civitai.com/models/44056/reviews?modelVersionId=48702&amp;dialog=resourceReview&amp;reviewId=7476447">https://civitai.com/models/44056/reviews?modelVersionId=48702&amp;dialog=resourceReview&amp;reviewId=7476447</a></li><li><a href="https://arca.live/b/aiart/73732717">https://arca.live/b/aiart/73732717</a></li><li><a href="https://arca.live/b/aiart/77471269">https://arca.live/b/aiart/77471269</a></li></ul>
+        </div>
+      </div>
+    </section>
+    
+    <section class="candidate" id="sec-2">
+      <h2>2. Front face lighting</h2>
+      <div class="statline">
+        <span>다운로드 3,552</span>
+        <span>좋아요 390</span>
+        <span>싫어요 0</span>
+        <span>공개 예시 이미지 7장</span>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h3>판정</h3>
+          <p><b>추천 이유:</b> 얼굴 그림자 제거/정면 보광이라는 목적이 분명하고, 커뮤니티 반응과 공개 사용자 이미지가 많습니다.</p>
+          <p><b>비추천 이유:</b> 제작자도 광학적으로 부자연스러울 수 있다고 경고하며, 과가중치 시 과조명/도장 뭉개짐이 발생할 수 있습니다.</p>
+          <p><b>OrangeMix 사용 사례:</b> 직접 OrangeMix 표기는 부족하지만 SD1.5 애니/일러스트 계열 사용이 폭넓게 확인됩니다.</p>
+          <p><b>NAI 사용 사례:</b> NAI 직접 사례보다는 로컬 SD1.5 얼굴 보정 LoRA에 가깝습니다.</p>
+          <p><b>브라운더스트2 적합성:</b> 브라운더스트2 취향의 “얼굴이 어둡지 않고 전면이 화사한” 컷과 잘 맞습니다.</p>
+          <p><b>데스티니 차일드 적합성:</b> 데스티니 차일드풍에서도 얼굴 강조 컷에는 적합하지만, 전신/역광 연출에서는 과개입 위험이 있습니다.</p>
+        </div>
+        <div class="card">
+          <h3>장점 / 단점</h3>
+          <div class="twocol">
+            <div><h4>장점</h4><ul><li>다운로드/평가량이 높음</li><li>실제 사용자 이미지가 풍부함</li><li>Detail Tweaker와 병행 사례가 확인됨</li></ul></div>
+            <div><h4>단점</h4><ul><li>부자연스러운 광학 효과 가능</li><li>세부 묘사 약화 시 보조 LoRA 필요</li></ul></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>실사용 사례 요약</h3>
+        <ul><li>Civitai 공개 이미지 샘플에서 DreamShaper + Front face lighting + 스타일/디테일 LoRA 병행 사례가 확인됩니다.</li><li>상위 샘플에서 Detail Tweaker 병행 빈도가 눈에 띄며, 실제 운영에서 얼굴 보광과 세부 보정이 함께 쓰이는 패턴이 보입니다.</li><li>아카라이브에서는 얼굴 그림자 문제가 반복적으로 제기되어, 이 LoRA의 해결 목표와 수요가 직접적으로 맞물립니다.</li></ul>
+      </div>
+      <div class="images"><figure class="imgcard"><a href="https://civitai.com/models/136307/front-face-lighting"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/c78871a5-24da-4b61-8ebe-e024afe93ec2/original=true/7783589.jpeg" loading="lazy"></a><figcaption>모델 프리뷰 1</figcaption></figure><figure class="imgcard"><a href="https://civitai.com/models/136307/front-face-lighting"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/ebab9afd-afb3-496c-808d-bca55f6ec8c5/original=true/7783602.jpeg" loading="lazy"></a><figcaption>모델 프리뷰 2</figcaption></figure><figure class="imgcard"><a href="https://civitai.com/images/116203059"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/495ef9a0-5b19-47f9-b413-cb0da0f05942/original=true/495ef9a0-5b19-47f9-b413-cb0da0f05942.jpeg" loading="lazy"></a><figcaption>실사용 이미지 예시</figcaption></figure></div>
+      <div class="grid2">
+        <div class="card">
+          <h3>추적 경로</h3>
+          <ol><li><b>원본</b> — <a href="https://arca.live/b/aiart/70255821">AI 그림 채널 정보글 모음</a></li><li><b>1차</b> — <a href="https://arca.live/b/aiart/146135875">얼굴 그림자 문제 토론</a></li><li><b>2차</b> — <a href="https://civitai.com/models/136307/front-face-lighting">Front face lighting 모델 페이지</a></li><li><b>실사용</b> — <a href="https://civitai.com/images/116203059">공개 사용자 이미지</a></li></ol>
+        </div>
+        <div class="card">
+          <h3>근거 링크</h3>
+          <ul><li><a href="https://civitai.com/models/136307/front-face-lighting">https://civitai.com/models/136307/front-face-lighting</a></li><li><a href="https://civitai.com/models/136307/reviews?modelVersionId=386547&amp;dialog=resourceReview&amp;reviewId=60450691">https://civitai.com/models/136307/reviews?modelVersionId=386547&amp;dialog=resourceReview&amp;reviewId=60450691</a></li><li><a href="https://arca.live/b/aiart/146135875">https://arca.live/b/aiart/146135875</a></li></ul>
+        </div>
+      </div>
+    </section>
+    
+    <section class="candidate" id="sec-3">
+      <h2>3. Maidoll Style</h2>
+      <div class="statline">
+        <span>다운로드 5,525</span>
+        <span>좋아요 924</span>
+        <span>싫어요 2</span>
+        <span>공개 예시 이미지 11장</span>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h3>판정</h3>
+          <p><b>추천 이유:</b> OrangeMix·NovelAI VAE 계열 호환성을 제작자가 직접 명시했고, NAI 감성 강화 후보 중 근거가 가장 분명합니다.</p>
+          <p><b>비추천 이유:</b> 이번에 확인한 공개 사용자 이미지들은 범용 스타일 실험 비중이 높아 BD2/DC 취향 직결 사례는 부족합니다.</p>
+          <p><b>OrangeMix 사용 사례:</b> 모델 설명에서 Orangemix를 권장 784MB VAE 계열로 직접 언급합니다.</p>
+          <p><b>NAI 사용 사례:</b> NovelAI VAE 또는 kl-f8-anime2 VAE 권장이 명시되어 있습니다.</p>
+          <p><b>브라운더스트2 적합성:</b> 고광택 미소녀 일러스트 톤에는 일부 맞지만, BD2 특유의 의상/체형 연출 직결 사례는 부족합니다.</p>
+          <p><b>데스티니 차일드 적합성:</b> 화사한 미소녀 일러스트 방향성은 맞아도 Kim Hyung-Tae 계열만큼 직접적이지는 않습니다.</p>
+        </div>
+        <div class="card">
+          <h3>장점 / 단점</h3>
+          <div class="twocol">
+            <div><h4>장점</h4><ul><li>OrangeMix/NAI 계열 호환성 근거가 명시적</li><li>커뮤니티 평가량이 높음</li><li>프리뷰 이미지 수가 많음</li></ul></div>
+            <div><h4>단점</h4><ul><li>실사용 이미지가 스타일 혼합 위주</li><li>BD2/DC 직결 사례가 적음</li></ul></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>실사용 사례 요약</h3>
+        <ul><li>제작자 설명에서 non-NAI 체크포인트 호환 수정, NovelAI/Orangemix 권장 VAE 명시가 확인됩니다.</li><li>Civitai 공개 사용자 이미지에서는 maidoll 트리거를 직접 넣어 스타일을 호출하는 사례가 확인됩니다.</li><li>이번 샘플에서는 “실제 사용은 존재하나, BD2/DC 지향으로 수렴하는지”는 추가 검증이 필요했습니다.</li></ul>
+      </div>
+      <div class="images"><figure class="imgcard"><a href="https://civitai.com/models/24660/art-stylemaidoll-style"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/b6dc9893-4fbd-4005-1c36-22a3729c8100/original=true/364300.jpeg" loading="lazy"></a><figcaption>모델 프리뷰 1</figcaption></figure><figure class="imgcard"><a href="https://civitai.com/models/24660/art-stylemaidoll-style"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/1eeaca5a-2c04-4f18-dd01-4818bd345800/original=true/364299.jpeg" loading="lazy"></a><figcaption>모델 프리뷰 2</figcaption></figure><figure class="imgcard"><a href="https://civitai.com/images/91914347"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/d0f1a1f7-18b7-439f-a9bd-7444fc1509f1/original=true/d0f1a1f7-18b7-439f-a9bd-7444fc1509f1.jpeg" loading="lazy"></a><figcaption>공개 사용자 이미지 예시</figcaption></figure></div>
+      <div class="grid2">
+        <div class="card">
+          <h3>추적 경로</h3>
+          <ol><li><b>원본</b> — <a href="https://arca.live/b/aiart/70255821">AI 그림 채널 정보글 모음</a></li><li><b>1차</b> — <a href="https://arca.live/b/aiart/91654114">NAI V3 세팅 가이드북</a></li><li><b>1차</b> — <a href="https://arca.live/b/aiart/154204833">그림체 조절 총집편</a></li><li><b>2차</b> — <a href="https://civitai.com/models/24660/art-stylemaidoll-style">Maidoll Style 모델 페이지</a></li></ol>
+        </div>
+        <div class="card">
+          <h3>근거 링크</h3>
+          <ul><li><a href="https://civitai.com/models/24660/art-stylemaidoll-style">https://civitai.com/models/24660/art-stylemaidoll-style</a></li><li><a href="https://arca.live/b/aiart/91654114">https://arca.live/b/aiart/91654114</a></li><li><a href="https://arca.live/b/aiart/154204833">https://arca.live/b/aiart/154204833</a></li></ul>
+        </div>
+      </div>
+    </section>
+    
+    <section class="candidate" id="sec-4">
+      <h2>4. Detail Tweaker</h2>
+      <div class="statline">
+        <span>다운로드 569,914</span>
+        <span>좋아요 33,439</span>
+        <span>싫어요 15</span>
+        <span>공개 예시 이미지 10장</span>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h3>판정</h3>
+          <p><b>추천 이유:</b> 실사용 규모와 추천 빈도가 압도적이며, 다른 캐릭터 LoRA 설명에서도 보조 LoRA로 반복 추천됩니다.</p>
+          <p><b>비추천 이유:</b> 세부 묘사를 올리는 방향이 강해서, OrangeMix 기반 Celia에서 과하면 원래 그림체를 거칠게 만들 수 있습니다.</p>
+          <p><b>OrangeMix 사용 사례:</b> 직접 OrangeMix 표기 사례는 적지만 “all kinds of base models” 설명과 downstream 추천 사례가 풍부합니다.</p>
+          <p><b>NAI 사용 사례:</b> NAI 직접 사례는 약합니다. 로컬 SD 계열 보조 LoRA에 가깝습니다.</p>
+          <p><b>브라운더스트2 적합성:</b> 의상 디테일·장식·광택을 살리는 데 유리해 BD2 취향과 궁합이 좋습니다.</p>
+          <p><b>데스티니 차일드 적합성:</b> 데스티니 차일드풍 장신구/금속/피부 텍스처 강조에도 유리합니다.</p>
+        </div>
+        <div class="card">
+          <h3>장점 / 단점</h3>
+          <div class="twocol">
+            <div><h4>장점</h4><ul><li>압도적인 다운로드/좋아요 수</li><li>다른 LoRA 제작자들이 반복 추천</li><li>양/음 가중치 모두 운용 가능</li></ul></div>
+            <div><h4>단점</h4><ul><li>과적용 시 과디테일화</li><li>스타일 자체를 좋게 만든다기보다 디테일을 강제하는 도구</li></ul></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>실사용 사례 요약</h3>
+        <ul><li>다운스트림 캐릭터 LoRA 설명에서 “Detail Tweaker 사용을 권장”하는 사례가 반복 확인됩니다.</li><li>Civitai 공개 이미지가 매우 많고, Illustrious/SDXL/SD1.5 등 다양한 기반에서 실제 사용됩니다.</li><li>Celia 기준으로는 얼굴·의상 디테일 상승용 보조 LoRA로 해석하는 것이 가장 안전합니다.</li></ul>
+      </div>
+      <div class="images"><figure class="imgcard"><a href="https://civitai.com/models/58390/detail-tweaker-lora-lora"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/8db45d23-7bcf-4979-8b35-0e7779c5a8f8/original=true/692411.jpeg" loading="lazy"></a><figcaption>모델 프리뷰 1</figcaption></figure><figure class="imgcard"><a href="https://civitai.com/models/58390/detail-tweaker-lora-lora"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/5db97082-a909-4c3e-b6d1-2a46318f29a0/original=true/692487.jpeg" loading="lazy"></a><figcaption>모델 프리뷰 2</figcaption></figure><figure class="imgcard"><a href="https://civitai.com/images/132725877"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/492191af-7f63-4912-9a78-271234b07f11/original=true/492191af-7f63-4912-9a78-271234b07f11.jpeg" loading="lazy"></a><figcaption>공개 사용자 이미지 예시</figcaption></figure></div>
+      <div class="grid2">
+        <div class="card">
+          <h3>추적 경로</h3>
+          <ol><li><b>원본</b> — <a href="https://arca.live/b/aiart/70255821">AI 그림 채널 정보글 모음</a></li><li><b>1차</b> — <a href="https://civitai.com/models/87520/boa-hancock-one-piece-character-lora">다운스트림 캐릭터 LoRA에서 Detail Tweaker 추천</a></li><li><b>1차</b> — <a href="https://civitai.com/models/83423/perona-one-piece-character-lora">다운스트림 캐릭터 LoRA에서 Detail Tweaker 추천</a></li><li><b>1차</b> — <a href="https://civitai.com/models/87531/hina-one-piece-character-lora">다운스트림 캐릭터 LoRA에서 Detail Tweaker 추천</a></li><li><b>2차</b> — <a href="https://civitai.com/models/58390/detail-tweaker-lora-lora">Detail Tweaker 모델 페이지</a></li></ol>
+        </div>
+        <div class="card">
+          <h3>근거 링크</h3>
+          <ul><li><a href="https://civitai.com/models/58390/detail-tweaker-lora-lora">https://civitai.com/models/58390/detail-tweaker-lora-lora</a></li><li><a href="https://civitai.com/models/87520/boa-hancock-one-piece-character-lora">https://civitai.com/models/87520/boa-hancock-one-piece-character-lora</a></li><li><a href="https://civitai.com/models/83423/perona-one-piece-character-lora">https://civitai.com/models/83423/perona-one-piece-character-lora</a></li><li><a href="https://civitai.com/models/87531/hina-one-piece-character-lora">https://civitai.com/models/87531/hina-one-piece-character-lora</a></li></ul>
+        </div>
+      </div>
+    </section>
+    
+    <section class="candidate" id="sec-5">
+      <h2>5. Kim Hyung-Tae Style</h2>
+      <div class="statline">
+        <span>다운로드 5,751</span>
+        <span>좋아요 557</span>
+        <span>싫어요 0</span>
+        <span>공개 예시 이미지 6장</span>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h3>판정</h3>
+          <p><b>추천 이유:</b> 후보 중 데스티니 차일드 계열 취향 적합성이 가장 직접적이며, 모델 설명에 “Train on nai”가 명시됩니다.</p>
+          <p><b>비추천 이유:</b> 이번에 확인된 공개 사용자 이미지들이 스타일 재현 실험 위주라, OrangeMix 기반 Celia 운영 적합성은 아직 더 확인이 필요합니다.</p>
+          <p><b>OrangeMix 사용 사례:</b> 직접 OrangeMix 언급은 찾지 못했습니다.</p>
+          <p><b>NAI 사용 사례:</b> 모델 설명에 “Train on nai”가 명시됩니다.</p>
+          <p><b>브라운더스트2 적합성:</b> 브라운더스트2 채널의 캐릭터 생성 수요와 맞닿아 있으나, BD2 자체 스타일 재현 증거는 부족합니다.</p>
+          <p><b>데스티니 차일드 적합성:</b> 작가명 자체가 데스티니 차일드 계열과 직접 연결되어 가장 강한 후보입니다.</p>
+        </div>
+        <div class="card">
+          <h3>장점 / 단점</h3>
+          <div class="twocol">
+            <div><h4>장점</h4><ul><li>데스티니 차일드 연상도가 높음</li><li>커뮤니티 평가량이 높음</li><li>NAI 학습 기반 명시</li></ul></div>
+            <div><h4>단점</h4><ul><li>Celia 기본 스택과의 안정성 근거 부족</li><li>공개 실사용 예시가 범용 스타일 실험 위주</li></ul></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>실사용 사례 요약</h3>
+        <ul><li>Civitai 공개 사용자 이미지에서 KimHyungTae 태그를 직접 호출하는 사례가 다수 확인됩니다.</li><li>모델 설명에 NAI 학습 기반이 명시되어, NAI 감성과의 연결 근거는 확보됩니다.</li><li>다만 이번 샘플에서는 BD2 직접 재현, Celia 기본 스택 안정 운용까지 이어지는 사례는 부족했습니다.</li></ul>
+      </div>
+      <div class="images"><figure class="imgcard"><a href="https://civitai.com/models/14312/kim-hyung-tae-style-sd15-lora"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/5d888aa0-bee0-491f-dcbc-e229fc7c5600/original=true/170351.jpeg" loading="lazy"></a><figcaption>모델 프리뷰 1</figcaption></figure><figure class="imgcard"><a href="https://civitai.com/models/14312/kim-hyung-tae-style-sd15-lora"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/754c3a76-544c-4992-d9ac-41781ba1d600/original=true/170375.jpeg" loading="lazy"></a><figcaption>모델 프리뷰 2</figcaption></figure><figure class="imgcard"><a href="https://civitai.com/images/123927787"><img src="https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/b28e310b-df77-454c-a7ab-2e6eae2243f2/original=true/b28e310b-df77-454c-a7ab-2e6eae2243f2.jpeg" loading="lazy"></a><figcaption>공개 사용자 이미지 예시</figcaption></figure></div>
+      <div class="grid2">
+        <div class="card">
+          <h3>추적 경로</h3>
+          <ol><li><b>원본</b> — <a href="https://arca.live/b/aiart/70255821">AI 그림 채널 정보글 모음</a></li><li><b>1차</b> — <a href="https://arca.live/b/aiart/154204833">그림체 조절 총집편</a></li><li><b>1차</b> — <a href="https://arca.live/b/browndust2/154614476">브라운더스트2 채널의 캐릭터 생성 수요 확인</a></li><li><b>2차</b> — <a href="https://civitai.com/models/14312/kim-hyung-tae-style-sd15-lora">Kim Hyung-Tae Style 모델 페이지</a></li><li><b>보강</b> — <a href="https://www.reddit.com/r/stellarblade/comments/1b09bz7/hyungtae_kim_previous_illustrator_for_blade_soul/">Destiny Child 연상도 보강 링크</a></li></ol>
+        </div>
+        <div class="card">
+          <h3>근거 링크</h3>
+          <ul><li><a href="https://civitai.com/models/14312/kim-hyung-tae-style-sd15-lora">https://civitai.com/models/14312/kim-hyung-tae-style-sd15-lora</a></li><li><a href="https://civitai.com/models/14312/reviews?modelVersionId=16846">https://civitai.com/models/14312/reviews?modelVersionId=16846</a></li><li><a href="https://arca.live/b/aiart/154204833">https://arca.live/b/aiart/154204833</a></li><li><a href="https://arca.live/b/browndust2/154614476">https://arca.live/b/browndust2/154614476</a></li></ul>
+        </div>
+      </div>
+    </section>
+    
+
+  <section class="grid3">
+    <div class="card">
+      <h2>최종 결론</h2>
+      <h3 class="label-good">지금 즉시 설치해도 되는 후보</h3>
+      <ul><li>Front face lighting</li><li>Detail Tweaker</li><li>QuickHand</li></ul>
+    </div>
+    <div class="card">
+      <h2>&nbsp;</h2>
+      <h3 class="label-warn">설치 전 추가 검증이 필요한 후보</h3>
+      <ul><li>Maidoll Style</li><li>Kim Hyung-Tae Style</li></ul>
+    </div>
+    <div class="card">
+      <h2>&nbsp;</h2>
+      <h3 class="label-bad">설치하지 않는 것이 좋은 후보</h3>
+      <ul><li>없음 — 이번 v2 조사 범위에서는 “설치하지 않는 것이 좋다”까지 확정할 근거가 부족했습니다.</li></ul>
+    </div>
+  </section>
+
+  <p class="foot">본 문서는 공개적으로 열람 가능한 아카라이브 문서, NovelAI 가이드, Civitai 모델/리뷰/공개 이미지, Civitai 공개 API 메타데이터를 교차 확인해 작성했습니다. 설치·다운로드·실험·Forge 설정 변경은 수행하지 않았습니다.</p>
+</div>
+</body>
+</html>

@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Celia LoRA 조사 보고서 v1</title>
+<style>
+:root { --bg:#f5f7fb; --paper:#ffffff; --ink:#182230; --muted:#5d6b7f; --line:#d9e1ec; --accent:#335cff; --good:#0e7c4f; --hold:#9a6a00; --bad:#b42318; }
+*{box-sizing:border-box} body{margin:0;font-family:"Noto Sans CJK KR","Noto Sans KR","Malgun Gothic",sans-serif;background:var(--bg);color:var(--ink);line-height:1.6} .wrap{max-width:1100px;margin:0 auto;padding:32px 20px 80px} .hero{background:linear-gradient(135deg,#16233c,#233b70 58%,#335cff);color:#fff;border-radius:24px;padding:36px 32px;box-shadow:0 18px 50px rgba(18,32,71,.18)} h1{margin:0 0 8px;font-size:40px;line-height:1.2} .subtitle{font-size:16px;opacity:.9} .meta{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:24px} .meta .card{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);border-radius:16px;padding:16px} section{background:var(--paper);border:1px solid var(--line);border-radius:22px;padding:28px;margin-top:24px;box-shadow:0 10px 28px rgba(18,32,71,.06)} h2{margin:0 0 18px;font-size:28px} h3{margin:24px 0 10px;font-size:20px} h4{margin:0 0 10px;font-size:18px} p,li{font-size:15px} .summary-list{margin:0;padding-left:18px} .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px} .note{background:#f8faff;border:1px solid #dce6ff;padding:16px;border-radius:16px} table{width:100%;border-collapse:collapse;font-size:14px} th,td{padding:12px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top} th{font-size:13px;color:var(--muted);font-weight:700;background:#f8fafc} .badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700} .good{background:#e8fff3;color:var(--good)} .hold{background:#fff7e6;color:var(--hold)} .bad{background:#fff0ee;color:var(--bad)} .cardlist{display:grid;grid-template-columns:1fr;gap:16px} .detail{border:1px solid var(--line);border-radius:18px;padding:18px} .detail-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start} .muted{color:var(--muted)} .cols{display:grid;grid-template-columns:1.15fr .85fr;gap:18px} .small{font-size:13px} .footer{margin-top:18px;font-size:13px;color:var(--muted)} @media (max-width: 860px){.meta,.grid2,.cols{grid-template-columns:1fr} h1{font-size:30px} section{padding:22px} } @media print{body{background:#fff} .wrap{max-width:none;padding:0} section,.hero{box-shadow:none;break-inside:avoid-page} section{page-break-before:always;border-radius:0;margin-top:0} .hero{border-radius:0} a{color:inherit;text-decoration:none} }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+<h1>Celia LoRA 조사 보고서 v1</h1>
+<div class="subtitle">Eclipse 조사 결과를 기반으로 재구성한 Celia용 LoRA 의사결정 문서</div>
+<div class="meta">
+<div class="card"><strong>문서 목적</strong><br>5분 내 설치 후보·보류 후보·제외 후보 판단</div>
+<div class="card"><strong>최종 1차 추천</strong><br>QuickHand / Front face lighting / Maidoll Style</div>
+<div class="card"><strong>작성 범위</strong><br>기존 조사 결과 정리만 수행, 신규 조사·실험 없음</div>
+</div>
+</header>
+<section id="sec1"><h2>1장. 요약</h2>
+<div class="grid2"><div>
+<h3>조사 목적</h3>
+<p>이번 문서는 기존 조사 로그를 빠르게 읽기 어려운 상태에서, 사용자가 짧은 시간 안에 설치 우선순위를 결정할 수 있도록 재정리하는 데 목적이 있습니다. 판단 기준은 “가장 인기 있는 LoRA”가 아니라, <strong>OrangeMix 기반 Celia 기본 스택에 가장 덜 위험하게 맞는 LoRA</strong>인지 여부입니다.</p>
+<h3>Celia 기본 스택</h3>
+<ul class="summary-list"><li><strong>기본</strong>: Checkpoint OrangeMixs (AOM3A1) / VAE animevae / Upscaler AnimeSharpV3</li><li><strong>예외</strong>: Checkpoint Animagine XL 4.0 / VAE ft-mse-840000 / Upscaler AnimeSharpV4 Fast</li><li><strong>특수</strong>: Upscaler R-ESRGAN 4x+ Anime6B</li></ul>
+</div><div>
+<h3>조사 범위</h3>
+<p>후보군은 캐릭터 일관성, 눈 표현, 얼굴 품질, 손 보정, 의상 디테일, 브라운더스트2 계열, 데스티니 차일드 계열, NAI 감성 강화 범위에서 선별되었습니다. 본 문서는 <strong>기존 조사 결과만 사용</strong>했으며, 신규 검증이나 설치 실험은 수행하지 않았습니다.</p>
+<h3>최종 결론</h3><ul><li>이번 문서는 기존 조사 로그를 5분 내 의사결정이 가능한 형태로 재정리하는 데 목적이 있습니다.</li><li>핵심 질문은 “좋은 LoRA가 무엇인가”가 아니라, “OrangeMix 기반 Celia 기본 스택에 어떤 LoRA가 가장 덜 위험하게 맞는가”입니다.</li><li>결론적으로 첫 설치 후보는 QuickHand, Front face lighting, Maidoll Style 3종이 가장 타당합니다.</li><li>Detail Tweaker와 Kim Hyung-Tae style은 유효한 후보이지만, 첫 설치보다 2차 검토 또는 목적형 도입이 더 적절합니다.</li><li>브라운더스트2 계열과 범용 캐릭터 일관성 계열은 현재 근거 또는 아키텍처 적합성 부족으로 확정 후보에서 제외됩니다.</li></ul>
+</div></div></section>
+<section id="sec2"><h2>2장. 설치/실험 우선 후보</h2>
+<table><thead><tr><th>이름</th><th>목적</th><th>OrangeMix 궁합</th><th>animevae 궁합</th><th>추천도</th><th>설치 우선순위</th></tr></thead><tbody><tr><td><strong>QuickHand</strong></td><td>손 왜곡 빈도 감소 및 손 형태 안정화</td><td>상</td><td>상</td><td>매우 높음</td><td>1</td></tr><tr><td><strong>Front face lighting / 前面ライトアップ</strong></td><td>얼굴·상반신 전면 그림자 제거 및 얼굴 가독성 개선</td><td>상</td><td>상</td><td>매우 높음</td><td>2</td></tr><tr><td><strong>Detail Tweaker LoRA</strong></td><td>얼굴·의상·배경 전반의 디테일 증감</td><td>상</td><td>상</td><td>높음</td><td>4</td></tr><tr><td><strong>Maidoll Style</strong></td><td>NAI 감성 강화 및 Orangemix 계열 스타일 보강</td><td>최상</td><td>상</td><td>매우 높음</td><td>3</td></tr><tr><td><strong>Kim Hyung-Tae style - SD1.5 LORA</strong></td><td>데스티니 차일드 계열 스타일 재현</td><td>상</td><td>상</td><td>높음</td><td>5</td></tr></tbody></table>
+<div class="footer">정리 기준: 기본 스택 적합성, 스타일 침습도, 용도 명확성, 근거 링크의 구체성</div>
+</section>
+<section id="sec3"><h2>3장. 보류 후보</h2>
+<table><thead><tr><th>이름</th><th>목적</th><th>OrangeMix 궁합</th><th>animevae 궁합</th><th>추천도</th><th>보류 사유</th></tr></thead><tbody><tr><td><strong>Worried eyes / 困り顔の眼</strong></td><td>감정형 눈매 강화</td><td>상</td><td>상</td><td>중</td><td>anime용 SD1.5이나 범용 눈 품질 강화보다는 특정 표정 재현에 가깝습니다.</td></tr><tr><td><strong>Good Hands LoRA</strong></td><td>손 개선</td><td>중상</td><td>중상</td><td>중</td><td>평판은 좋지만 hand poses not yet supported가 명시되어 첫 설치 우선도는 낮습니다.</td></tr><tr><td><strong>ChiChi Style</strong></td><td>NAI 감성 강화</td><td>최상</td><td>상</td><td>중</td><td>NAI/Orangemix 호환 근거는 좋지만 Maidoll과 역할이 중복됩니다.</td></tr><tr><td><strong>Animix - Anime Screenshot-like Style Mix LoRA</strong></td><td>애니 스크린샷풍 스타일 강화</td><td>상</td><td>상</td><td>중</td><td>Orangemix 근거는 좋으나 Celia 기본 화풍 보강보다 애니 스크린샷풍 전환 성격이 강합니다.</td></tr><tr><td><strong>Shexyo Style LoRA</strong></td><td>특정 작가풍 스타일 강화</td><td>최상</td><td>상</td><td>중</td><td>AOM3_A1 + OrangeMix VAE 근거는 강하지만 범용 NAI 감성보다 특정 작가풍에 가깝습니다.</td></tr><tr><td><strong>Browndust</strong></td><td>브라운더스트 계열 스타일 추정</td><td>미확정</td><td>미확정</td><td>낮음</td><td>SD1.5이지만 본문 근거가 빈약하고 BrownDust2 여부도 불명확합니다.</td></tr></tbody></table>
+</section>
+<section id="sec4"><h2>4장. 제외 후보</h2>
+<table><thead><tr><th>이름</th><th>제외 사유</th></tr></thead><tbody><tr><td><strong>Browndust2 Artstyle</strong></td><td>Illustrious 기반이라 Celia 기본 스택(AOM3A1 + animevae)과 아키텍처가 맞지 않습니다.</td></tr><tr><td><strong>design perfect eyes</strong></td><td>포토/메이크업 지향이 강해 Celia 애니 베이스와 결이 다릅니다.</td></tr><tr><td><strong>StL Photo Detailer</strong></td><td>포토리얼 디테일 추가 성격이 강해 OrangeMix 애니 결과를 2.5D/실사 쪽으로 끌 가능성이 큽니다.</td></tr><tr><td><strong>Momo Ayase / Zone-tan 등 특정 캐릭터 일관성 LoRA</strong></td><td>범용 후보가 아니라 특정 캐릭터 재현용이라 Celia 공용 스택 의사결정 문서 목적과 맞지 않습니다.</td></tr><tr><td><strong>리얼/세미리얼 consistent character article 계열</strong></td><td>애니 범용 OrangeMix 운영이 아니라 리얼·세미리얼 중심 자료라 적용 대상이 다릅니다.</td></tr></tbody></table>
+</section>
+<section id="sec5"><h2>5장. 후보별 상세 카드</h2><div class="cardlist"><article class="detail">
+        <div class="detail-top"><h4>QuickHand</h4><span class="badge good">1차 추천</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>손 왜곡 빈도 감소 및 손 형태 안정화</p>
+            <p><strong>장점</strong><ul><li>SD 1.5 기반</li><li>animated models 추천</li><li>V2는 원본 그림체 변화가 적음</li><li>권장 강도 0.3~0.6</li></ul></p>
+            <p><strong>단점</strong><ul><li>고강도 사용 시 손만 강조될 가능성</li><li>포토리얼 계열과는 궁합이 약할 수 있음</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>최상</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/44056/quickhand">https://civitai.com/models/44056/quickhand</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">통합 공지 → 정보글 모음 → FAQ / 뉴비용 정보 모음 / 손가락 수정·인페인트·Hires 계열 자료군 → 손 보정 LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Front face lighting / 前面ライトアップ</h4><span class="badge good">1차 추천</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>얼굴·상반신 전면 그림자 제거 및 얼굴 가독성 개선</p>
+            <p><strong>장점</strong><ul><li>SD 1.5 기반</li><li>anime/comic/illustrative 용도 명시</li><li>권장 강도 0.3~0.6</li><li>얼굴이 먹히는 문제에 직접 대응</li></ul></p>
+            <p><strong>단점</strong><ul><li>광학적으로 부자연스러운 조명이 될 수 있음</li><li>강하게 쓰면 디테일이 다소 약해질 수 있음</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>상</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/136307/front-face-lighting">https://civitai.com/models/136307/front-face-lighting</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">통합 공지 → 정보글 모음 → NAI V3 세팅 가이드북 → 그림체 총집편(조명/얼굴 가독성 분해) → 얼굴 가독성 보정용 SD1.5 anime LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Detail Tweaker LoRA</h4><span class="badge hold">상세 검토</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>얼굴·의상·배경 전반의 디테일 증감</p>
+            <p><strong>장점</strong><ul><li>SD 1.5 기반</li><li>anime/style/character LoRA 병행 용이</li><li>스타일 유지하며 디테일만 조절 가능</li></ul></p>
+            <p><strong>단점</strong><ul><li>의상 전용이 아니라 효과 범위가 넓음</li><li>과도하게 쓰면 전체 질감이 과해질 수 있음</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>상</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/58390/detail-tweaker-lora-lora">https://civitai.com/models/58390/detail-tweaker-lora-lora</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">통합 공지 → 정보글 모음 → 뉴비용 정보 모음 → 그림체 총집편(디테일/스타일 분리 관점) → 범용 디테일 조절 LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Maidoll Style</h4><span class="badge good">1차 추천</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>NAI 감성 강화 및 Orangemix 계열 스타일 보강</p>
+            <p><strong>장점</strong><ul><li>SD 1.5 기반</li><li>non-NAI checkpoint compatibility fix 명시</li><li>NAI / kl-f8-anime2 / Orangemix 추천</li><li>권장 강도 0.6~0.8</li></ul></p>
+            <p><strong>단점</strong><ul><li>스타일 개입도가 있음</li><li>고해상도에서 과개입 가능성 주의</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>최상</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/24660/art-stylemaidoll-style">https://civitai.com/models/24660/art-stylemaidoll-style</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">통합 공지 → 정보글 모음 → 뉴비용 정보 모음 / NAI V3 세팅 가이드북 / NovelAI 위키 / 그림체 총집편 → NAI·Orangemix 호환 스타일 LoRA 추적 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Kim Hyung-Tae style - SD1.5 LORA</h4><span class="badge hold">상세 검토</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>데스티니 차일드 계열 스타일 재현</p>
+            <p><strong>장점</strong><ul><li>SD 1.5 기반</li><li>trained on NAI</li><li>권장 강도 0.8~1</li><li>스타일 목표가 명확함</li></ul></p>
+            <p><strong>단점</strong><ul><li>스타일 개입도가 강함</li><li>범용 보정보다 화풍 전환에 가까움</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>상</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/14312/kim-hyung-tae-style-sd15-lora">https://civitai.com/models/14312/kim-hyung-tae-style-sd15-lora</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">통합 공지 → 정보글 모음 → NAI V3 세팅 가이드북 → 그림체 총집편(작가 태그/스타일 축) → 데스티니 차일드 계열 스타일 LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Worried eyes / 困り顔の眼</h4><span class="badge hold">보류</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>감정형 눈매 강화</p>
+            <p><strong>장점</strong><ul><li>관련성은 있으나 도입 판단을 유보할 수준의 근거는 확보되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>anime용 SD1.5이나 범용 눈 품질 강화보다는 특정 표정 재현에 가깝습니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>보류</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/155553/worried-eyes">https://civitai.com/models/155553/worried-eyes</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">정보글 모음 → NAI V3 세팅 가이드북 → NovelAI 일관성 위키 → 눈 표현 LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Good Hands LoRA</h4><span class="badge hold">보류</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>손 개선</p>
+            <p><strong>장점</strong><ul><li>관련성은 있으나 도입 판단을 유보할 수준의 근거는 확보되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>평판은 좋지만 hand poses not yet supported가 명시되어 첫 설치 우선도는 낮습니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>보류</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/324264/good-hands-lora">https://civitai.com/models/324264/good-hands-lora</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">정보글 모음 → FAQ / 뉴비용 정보 모음 → 손가락·인페인트·Hires 맥락 → 손 보정 LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>ChiChi Style</h4><span class="badge hold">보류</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>NAI 감성 강화</p>
+            <p><strong>장점</strong><ul><li>관련성은 있으나 도입 판단을 유보할 수준의 근거는 확보되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>NAI/Orangemix 호환 근거는 좋지만 Maidoll과 역할이 중복됩니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>보류</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/22992/art-stylechichi-style">https://civitai.com/models/22992/art-stylechichi-style</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">정보글 모음 → 뉴비용 정보 모음 → NAI V3 세팅 가이드북 / 그림체 총집편 → NAI/Orangemix 호환 스타일 LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Animix - Anime Screenshot-like Style Mix LoRA</h4><span class="badge hold">보류</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>애니 스크린샷풍 스타일 강화</p>
+            <p><strong>장점</strong><ul><li>관련성은 있으나 도입 판단을 유보할 수준의 근거는 확보되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>Orangemix 근거는 좋으나 Celia 기본 화풍 보강보다 애니 스크린샷풍 전환 성격이 강합니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>보류</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/23723/animix-anime-screenshot-like-style-mix-lora">https://civitai.com/models/23723/animix-anime-screenshot-like-style-mix-lora</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">정보글 모음 → 그림체 총집편 → 애니 스크린샷풍 스타일 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Shexyo Style LoRA</h4><span class="badge hold">보류</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>특정 작가풍 스타일 강화</p>
+            <p><strong>장점</strong><ul><li>관련성은 있으나 도입 판단을 유보할 수준의 근거는 확보되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>AOM3_A1 + OrangeMix VAE 근거는 강하지만 범용 NAI 감성보다 특정 작가풍에 가깝습니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>보류</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/14779/shexyo-style-lora">https://civitai.com/models/14779/shexyo-style-lora</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">정보글 모음 → 그림체 총집편 / NAI 관련 자료군 → NAI 기반 작가풍 LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Browndust</h4><span class="badge hold">보류</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>브라운더스트 계열 스타일 추정</p>
+            <p><strong>장점</strong><ul><li>관련성은 있으나 도입 판단을 유보할 수준의 근거는 확보되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>SD1.5이지만 본문 근거가 빈약하고 BrownDust2 여부도 불명확합니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>보류</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/129324/browndust">https://civitai.com/models/129324/browndust</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">통합 공지 → 정보글 모음 → 브라운더스트 스타일 LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Browndust2 Artstyle</h4><span class="badge bad">제외</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>후보 검토 대상이었으나 최종 추천군에서는 제외되었습니다.</p>
+            <p><strong>장점</strong><ul><li>후보로 탐지될 정도의 관련성 또는 화제성은 확인되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>Illustrious 기반이라 Celia 기본 스택(AOM3A1 + animevae)과 아키텍처가 맞지 않습니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>낮음</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/1805931/browndust2-artstyle">https://civitai.com/models/1805931/browndust2-artstyle</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">통합 공지 → 정보글 모음 → 브라운더스트2 스타일 LoRA 검색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>design perfect eyes</h4><span class="badge bad">제외</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>후보 검토 대상이었으나 최종 추천군에서는 제외되었습니다.</p>
+            <p><strong>장점</strong><ul><li>후보로 탐지될 정도의 관련성 또는 화제성은 확인되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>포토/메이크업 지향이 강해 Celia 애니 베이스와 결이 다릅니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>낮음</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/2019300/design-perfect-eyes">https://civitai.com/models/2019300/design-perfect-eyes</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">정보글 모음 → NAI/눈/얼굴 디테일 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>StL Photo Detailer</h4><span class="badge bad">제외</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>후보 검토 대상이었으나 최종 추천군에서는 제외되었습니다.</p>
+            <p><strong>장점</strong><ul><li>후보로 탐지될 정도의 관련성 또는 화제성은 확인되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>포토리얼 디테일 추가 성격이 강해 OrangeMix 애니 결과를 2.5D/실사 쪽으로 끌 가능성이 큽니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>낮음</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/307793/stl-photo-detailer">https://civitai.com/models/307793/stl-photo-detailer</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">정보글 모음 → 디테일 강화 LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>Momo Ayase / Zone-tan 등 특정 캐릭터 일관성 LoRA</h4><span class="badge bad">제외</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>후보 검토 대상이었으나 최종 추천군에서는 제외되었습니다.</p>
+            <p><strong>장점</strong><ul><li>후보로 탐지될 정도의 관련성 또는 화제성은 확인되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>범용 후보가 아니라 특정 캐릭터 재현용이라 Celia 공용 스택 의사결정 문서 목적과 맞지 않습니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>낮음</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/models/2451423/momo-ayase-15">https://civitai.com/models/2451423/momo-ayase-15</a><br><a href="https://civitai.com/models/95782/zone-tan-character-lora">https://civitai.com/models/95782/zone-tan-character-lora</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">정보글 모음 / 일관성 관련 자료 → 특정 캐릭터 LoRA 탐색 → Civitai</span></p>
+          </div>
+        </div>
+      </article><article class="detail">
+        <div class="detail-top"><h4>리얼/세미리얼 consistent character article 계열</h4><span class="badge bad">제외</span></div>
+        <div class="cols">
+          <div>
+            <p><strong>목적</strong><br>후보 검토 대상이었으나 최종 추천군에서는 제외되었습니다.</p>
+            <p><strong>장점</strong><ul><li>후보로 탐지될 정도의 관련성 또는 화제성은 확인되었습니다.</li></ul></p>
+            <p><strong>단점</strong><ul><li>애니 범용 OrangeMix 운영이 아니라 리얼·세미리얼 중심 자료라 적용 대상이 다릅니다.</li></ul></p>
+          </div>
+          <div>
+            <p><strong>Celia 적합성</strong><br>낮음</p>
+            <p><strong>근거 링크</strong><br><a href="https://civitai.com/articles/2472/consistent-characters-this-person-does-not-exist-loralyco-packs-realistic-and-semi-realistic">https://civitai.com/articles/2472/consistent-characters-this-person-does-not-exist-loralyco-packs-realistic-and-semi-realistic</a></p>
+            <p><strong>추적 경로</strong><br><span class="small">정보글 모음 → 일관성 관련 문서 → 리얼/세미리얼 자료 확인</span></p>
+          </div>
+        </div>
+      </article></div></section>
+<section id="sec6"><h2>6장. 최종 추천</h2>
+<h3>1차 설치 후보</h3>
+<ul class="summary-list"><li><strong>QuickHand</strong> — 손 왜곡을 줄이면서 기본 화풍을 크게 해치지 않는 보정 후보</li><li><strong>Front face lighting / 前面ライトアップ</strong> — 얼굴 가독성과 상반신 조명 품질을 높이는 보정 후보</li><li><strong>Maidoll Style</strong> — Orangemix/NAI 계열 감성을 가장 명확하게 보강하는 스타일 후보</li></ul>
+<h3>선정 이유</h3>
+<div class="note"><p>세 후보는 각각 <strong>손 보정</strong>, <strong>얼굴 가독성</strong>, <strong>NAI 감성 보강</strong>이라는 역할이 분리되어 있습니다. 따라서 첫 설치 후보로 묶었을 때 기능 중복이 상대적으로 적고, Celia 기본 스택에서 관찰하고 싶은 변화가 명확합니다.</p></div>
+<h3>주의점</h3>
+<ul class="summary-list"><li><strong>스타일 오염 가능성</strong>: Maidoll Style, Kim Hyung-Tae style, ChiChi Style, Shexyo Style처럼 스타일 개입도가 큰 후보는 서로 중첩될수록 기본 화풍을 빠르게 덮을 수 있습니다.</li><li><strong>중복 설치 위험</strong>: QuickHand와 Good Hands LoRA, Maidoll Style과 ChiChi Style은 역할 중복이 큽니다. 첫 단계에서 동시 도입은 피하는 편이 안전합니다.</li><li><strong>보정과 스타일의 분리</strong>: 첫 단계는 보정용(QuickHand, Front face lighting)과 스타일용(Maidoll Style)을 구분해 판단하는 것이 좋습니다.</li></ul>
+<h3>정리</h3>
+<p>현 시점에서 가장 합리적인 1차 설치 후보는 <strong>QuickHand → Front face lighting → Maidoll Style</strong> 순서입니다. 이 조합은 Celia 기본 스택의 유지 안정성을 해치지 않으면서도, 손·얼굴·스타일 세 축의 개선 가능성을 가장 명확하게 보여줄 수 있습니다.</p>
+</section>
+</div></body></html>
