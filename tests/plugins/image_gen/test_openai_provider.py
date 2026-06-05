@@ -182,7 +182,8 @@ class TestGenerate:
         assert result["success"] is True
         saved = Path(result["image"])
         assert saved.exists()
-        assert saved.parent == tmp_path / "HermesWork" / "Image" / "260601_openai_gpt_image_2_medium"
+        assert saved.parent.parent == tmp_path / "HermesWork" / "Image"
+        assert saved.parent.name.endswith("_openai_gpt_image_2_medium")
         assert saved.name == "openai_gpt-image-2-medium_v1.png"
         assert result["local_path"] == result["image"]
         assert result["nas_status"] == "동기화 요청됨"

@@ -1,0 +1,5 @@
+name: comfy-local
+version: 1.0.0
+description: "Local ComfyUI API image generation backend (txt2img) with HermesWork publish, sidecar bundle preservation, and NAS hook integration."
+author: Hermes
+kind: backend

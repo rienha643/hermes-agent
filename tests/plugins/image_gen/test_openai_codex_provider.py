@@ -120,7 +120,8 @@ class TestGenerate:
 
         saved = Path(result["image"])
         assert saved.exists()
-        assert saved.parent == tmp_path / "HermesWork" / "Image" / "260601_openai_codex_gpt_image_2_medium"
+        assert saved.parent.parent == tmp_path / "HermesWork" / "Image"
+        assert saved.parent.name.endswith("_openai_codex_gpt_image_2_medium")
         # Filename prefix differs from the API-key plugin so cache audits can
         # tell the two backends apart.
         assert saved.name.startswith("openai_codex_")
@@ -139,7 +140,8 @@ class TestGenerate:
         assert result["success"] is True
         saved = Path(result["image"])
         assert saved.exists()
-        assert saved.parent == tmp_path / "HermesWork" / "Image" / "260601_망각구역"
+        assert saved.parent.parent == tmp_path / "HermesWork" / "Image"
+        assert saved.parent.name.endswith("_망각구역")
         assert saved.name == "scene_v1.png"
         assert result["local_path"] == result["image"]
         assert result["nas_status"] == "동기화 요청됨"

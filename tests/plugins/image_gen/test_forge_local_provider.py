@@ -134,7 +134,8 @@ class TestForgeLocalImageGenProviderGenerate:
         assert result["local_path"] == result["image"]
         assert result["nas_status"] == "동기화 요청됨"
         assert result["slack_status"] == "완료"
-        assert result["image"].startswith(str(tmp_path / "HermesWork" / "Image" / "260601_forge_test"))
+        assert result["image"].startswith(str(tmp_path / "HermesWork" / "Image"))
+        assert Path(result["image"]).parent.name.endswith("_forge_test")
         assert Path(result["image"]).name == "forge_test_v1.png"
 
     def test_generate_publishes_into_project_scoped_image_tree(self, monkeypatch, tmp_path):
@@ -166,7 +167,8 @@ class TestForgeLocalImageGenProviderGenerate:
         assert result["local_path"] == result["image"]
         assert result["nas_status"] == "동기화 요청됨"
         assert result["slack_status"] == "완료"
-        assert result["image"].startswith(str(tmp_path / "HermesWork" / "Image" / "260601_망각구역"))
+        assert result["image"].startswith(str(tmp_path / "HermesWork" / "Image"))
+        assert Path(result["image"]).parent.name.endswith("_망각구역")
         assert Path(result["image"]).name == "scene_v1.png"
 
     def test_generate_invalid_prompt(self):

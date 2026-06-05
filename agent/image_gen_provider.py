@@ -31,9 +31,11 @@ from __future__ import annotations
 import abc
 import base64
 import datetime
+import json
 import logging
 import os
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -204,6 +206,126 @@ def _publish_image_artifact(
     return published_path
 
 
+def publish_filesystem_image_bundle(
+    source: Path,
+    *,
+    prefix: str,
+    project_name: Optional[str],
+    artifact_name: Optional[str],
+    category: str,
+    workflow_json: Dict[str, Any],
+    prompt_payload: Dict[str, Any],
+    metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Publish a filesystem-backed image plus sidecars into HermesWork/Image."""
+
+    source = Path(source)
+    if not source.is_file():
+        raise FileNotFoundError(f"Source image not found: {source}")
+
+    project_key = (project_name or prefix or "image").strip() or "image"
+    artifact_key = (artifact_name or prefix or source.stem or "image").strip() or "image"
+    artifact_key = Path(artifact_key).name
+
+    project_record, published_dir = resolve_project_artifact_dir("Image", project_key)
+    published_dir.mkdir(parents=True, exist_ok=True)
+    primary_image_path = next_versioned_child_path(published_dir, f"{artifact_key}{source.suffix}")
+    shutil.copyfile(source, primary_image_path)
+
+    versioned_stem = primary_image_path.stem
+    workflow_path = published_dir / f"{versioned_stem}.workflow.json"
+    prompt_path = published_dir / f"{versioned_stem}.prompt.json"
+    metadata_path = published_dir / f"{versioned_stem}.metadata.json"
+    manifest_path = published_dir / "manifest.json"
+
+    metadata_payload = dict(metadata)
+    metadata_payload.update(
+        {
+            "category": category,
+            "output_source_path": str(source),
+            "published_primary_path": str(primary_image_path),
+            "published_dir": str(published_dir),
+        }
+    )
+
+    workflow_path.write_text(json.dumps(workflow_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    prompt_path.write_text(json.dumps(prompt_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    nas_hook_requested = queue_nas_sync_hook(
+        category="image",
+        scope=published_dir.name,
+        artifact_path=primary_image_path,
+        source_root=published_dir,
+    )
+    metadata_payload["nas_hook_requested"] = nas_hook_requested
+    metadata_path.write_text(json.dumps(metadata_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    manifest_payload = {
+        "project_id": project_record.project_id,
+        "artifact_name": artifact_key,
+        "version": versioned_stem,
+        "category": category,
+        "primary_image": primary_image_path.name,
+        "files": [
+            primary_image_path.name,
+            workflow_path.name,
+            prompt_path.name,
+            metadata_path.name,
+        ],
+        "sidecars": {
+            "workflow": workflow_path.name,
+            "prompt": prompt_path.name,
+            "metadata": metadata_path.name,
+        },
+        "prompt_id": metadata_payload.get("prompt_id", ""),
+        "engine": metadata_payload.get("provider", ""),
+        "created_at": metadata_payload.get("created_at", ""),
+        "status": {
+            "local_status": metadata_payload.get("local_status", "생성 완료"),
+            "publish_status": metadata_payload.get("publish_status", "HermesWork publish 완료"),
+            "nas_status": "동기화 요청됨" if nas_hook_requested else "동기화 요청 실패",
+            "slack_status": metadata_payload.get("slack_status", "primary image 준비됨"),
+        },
+    }
+    manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    return {
+        "project_id": project_record.project_id,
+        "published_dir": published_dir,
+        "primary_image_path": primary_image_path,
+        "workflow_path": workflow_path,
+        "prompt_path": prompt_path,
+        "metadata_path": metadata_path,
+        "manifest_path": manifest_path,
+        "primary_image": primary_image_path.name,
+        "sidecars": manifest_payload["sidecars"],
+        "nas_hook_requested": nas_hook_requested,
+    }
+
+
+def wait_for_file_stable(path: Path, *, checks: int = 2, delay_seconds: float = 0.5) -> bool:
+    """Return True when the file exists and its size stays stable across checks."""
+
+    candidate = Path(path)
+    if not candidate.is_file():
+        return False
+
+    previous_size: Optional[int] = None
+    stable_count = 0
+    attempts = max(checks, 1) + 1
+    for _ in range(attempts):
+        current_size = candidate.stat().st_size
+        if previous_size is not None and current_size == previous_size:
+            stable_count += 1
+            if stable_count >= max(checks - 1, 1):
+                return True
+        else:
+            stable_count = 0
+        previous_size = current_size
+        time.sleep(delay_seconds)
+    return False
+
+
 def save_b64_image(
     b64_data: str,
     *,
@@ -370,8 +492,7 @@ def success_response(
         "message": _format_image_completion_message(local_path),
     }
     if extra:
-        for k, v in extra.items():
-            payload.setdefault(k, v)
+        payload.update(extra)
     return payload
 
 
