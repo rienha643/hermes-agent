@@ -6,7 +6,12 @@ import pytest
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
-from gateway.run import GatewayRunner, _collect_structured_attachment_paths
+from gateway.run import (
+    GatewayRunner,
+    _collect_structured_attachment_paths,
+    _collect_turn_scoped_structured_attachments,
+    _slice_turn_messages,
+)
 from gateway.session import SessionSource, build_session_key
 
 
@@ -216,3 +221,138 @@ def test_collect_structured_attachment_paths_finds_delegate_and_image_results(tm
     }
 
     assert _collect_structured_attachment_paths(agent_result) == [str(image_path), str(doc_path)]
+
+
+def test_slice_turn_messages_uses_history_offset_boundary():
+    messages = [
+        {"role": "user", "content": "old user"},
+        {"role": "tool", "content": {"path": "/tmp/old.png"}},
+        {"role": "user", "content": "new user"},
+        {"role": "tool", "content": {"path": "/tmp/new.png"}},
+    ]
+
+    assert _slice_turn_messages({"messages": messages}, 2) == messages[2:]
+
+
+def test_turn_scoped_structured_attachments_ignore_old_tool_artifacts(tmp_path):
+    old_a = tmp_path / "oldA.png"
+    old_b = tmp_path / "oldB.png"
+    current = tmp_path / "current.png"
+    for path in (old_a, old_b, current):
+        path.write_bytes(b"png")
+
+    agent_result = {
+        "messages": [
+            {"role": "tool", "tool_name": "delegate_task", "content": {"artifacts": [str(old_a)]}},
+            {"role": "tool", "tool_name": "image_generate", "content": {"image": str(old_b)}},
+            {"role": "user", "content": "current request"},
+            {"role": "tool", "tool_name": "delegate_task", "content": {"artifacts": [str(current)]}},
+        ]
+    }
+
+    collected, debug = _collect_turn_scoped_structured_attachments(agent_result, 3)
+
+    assert collected == [str(current)]
+    assert debug["turn_messages_count"] == 1
+    assert debug["turn_tool_messages_count"] == 1
+    assert debug["collected_count"] == 1
+
+
+def test_turn_scoped_structured_attachments_empty_when_only_history_has_artifacts(tmp_path):
+    old_a = tmp_path / "oldA.png"
+    old_b = tmp_path / "oldB.png"
+    old_a.write_bytes(b"png")
+    old_b.write_bytes(b"png")
+
+    agent_result = {
+        "messages": [
+            {"role": "tool", "tool_name": "delegate_task", "content": {"artifacts": [str(old_a)]}},
+            {"role": "tool", "tool_name": "image_generate", "content": {"image": str(old_b)}},
+            {"role": "assistant", "content": "no new artifacts this turn"},
+        ]
+    }
+
+    collected, debug = _collect_turn_scoped_structured_attachments(agent_result, 2)
+
+    assert collected == []
+    assert debug["turn_messages_count"] == 1
+    assert debug["turn_tool_messages_count"] == 0
+    assert debug["collected_count"] == 0
+
+
+def test_turn_scoped_structured_attachments_collect_delegate_fields_from_current_tool_message(tmp_path):
+    image_path = tmp_path / "delegate.png"
+    image_path.write_bytes(b"png")
+
+    agent_result = {
+        "messages": [
+            {"role": "user", "content": "request"},
+            {
+                "role": "tool",
+                "tool_name": "delegate_task",
+                "content": {
+                    "results": [
+                        {
+                            "summary": "done",
+                            "artifacts": [str(image_path)],
+                            "image": str(image_path),
+                            "file_path": str(image_path),
+                            "path": str(image_path),
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    collected, debug = _collect_turn_scoped_structured_attachments(agent_result, 1)
+
+    assert collected == [str(image_path)]
+    assert debug["turn_tool_messages_count"] == 1
+
+
+def test_turn_scoped_structured_attachments_collect_image_generate_fields_from_current_tool_message(tmp_path):
+    image_path = tmp_path / "generated.png"
+    output_path = tmp_path / "generated-final.png"
+    image_path.write_bytes(b"png")
+    output_path.write_bytes(b"png")
+
+    agent_result = {
+        "messages": [
+            {"role": "assistant", "content": "draft"},
+            {
+                "role": "tool",
+                "tool_name": "image_generate",
+                "content": {
+                    "local_path": str(image_path),
+                    "output_path": str(output_path),
+                },
+            },
+        ]
+    }
+
+    collected, debug = _collect_turn_scoped_structured_attachments(agent_result, 1)
+
+    assert collected == [str(image_path), str(output_path)]
+    assert debug["turn_tool_messages_count"] == 1
+
+
+def test_turn_scoped_structured_attachments_ignore_user_and_assistant_textual_paths(tmp_path):
+    old_path = tmp_path / "old.png"
+    current_path = tmp_path / "current.png"
+    old_path.write_bytes(b"png")
+    current_path.write_bytes(b"png")
+
+    agent_result = {
+        "messages": [
+            {"role": "tool", "tool_name": "delegate_task", "content": {"artifacts": [str(old_path)]}},
+            {"role": "user", "content": f"Please mention {current_path}"},
+            {"role": "assistant", "content": f"I see {current_path}"},
+        ]
+    }
+
+    collected, debug = _collect_turn_scoped_structured_attachments(agent_result, 1)
+
+    assert collected == []
+    assert debug["turn_messages_count"] == 2
+    assert debug["turn_tool_messages_count"] == 0

@@ -3690,9 +3690,8 @@ class BasePlatformAdapter(ABC):
                 # Extract MEDIA:<path> tags (from TTS tool) before other processing
                 media_files, response = self.extract_media(response)
                 media_files = self.filter_media_delivery_paths(media_files)
-                structured_files = self.filter_local_delivery_paths(
-                    getattr(event, "_structured_attachment_paths", []) or []
-                )
+                structured_files_raw = getattr(event, "_structured_attachment_paths", []) or []
+                structured_files = self.filter_local_delivery_paths(structured_files_raw)
 
                 # Extract image URLs and send them as native platform attachments
                 images, text_content = self.extract_images(response)
@@ -3705,16 +3704,26 @@ class BasePlatformAdapter(ABC):
 
                 # Auto-detect bare local file paths for native media delivery
                 # (helps small models that don't use MEDIA: syntax)
-                local_files, text_content = self.extract_local_files(text_content)
-                local_files = self.filter_local_delivery_paths(local_files)
+                local_files_raw, text_content = self.extract_local_files(text_content)
+                local_files_filtered = self.filter_local_delivery_paths(local_files_raw)
                 local_files = self.dedupe_local_delivery_paths(
-                    [*structured_files, *local_files],
+                    [*structured_files, *local_files_filtered],
                     skip_paths={path for path, _ in media_files},
                 )
                 if structured_files:
                     logger.info("[%s] structured attachments provided %d file(s)", self.name, len(structured_files))
                 if local_files:
                     logger.info("[%s] extract_local_files found %d file(s) in response", self.name, len(local_files))
+                if structured_files_raw or local_files_raw:
+                    logger.info(
+                        "[%s] attachment counts: structured_received=%d structured_filtered=%d local_received=%d local_filtered=%d upload_candidates=%d",
+                        self.name,
+                        len(structured_files_raw),
+                        len(structured_files),
+                        len(local_files_raw),
+                        len(local_files_filtered),
+                        len(local_files),
+                    )
 
                 artifact_reports: list[str] = []
                 artifact_report_seen: set[str] = set()

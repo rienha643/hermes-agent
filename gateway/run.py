@@ -1713,6 +1713,42 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
     return candidates
 
 
+def _slice_turn_messages(agent_result: dict, history_len: int) -> List[Dict[str, Any]]:
+    """Return only the messages created during the current turn."""
+    agent_messages = agent_result.get("messages", []) if isinstance(agent_result, dict) else []
+    if not isinstance(agent_messages, list):
+        return []
+    if not isinstance(history_len, int) or history_len < 0:
+        history_len = 0
+    if len(agent_messages) <= history_len:
+        return []
+    return [msg for msg in agent_messages[history_len:] if isinstance(msg, dict)]
+
+
+def _collect_turn_scoped_structured_attachments(
+    agent_result: dict,
+    history_len: int,
+) -> tuple[List[str], Dict[str, Any]]:
+    """Collect structured attachment paths only from current-turn tool results."""
+    turn_messages = _slice_turn_messages(agent_result, history_len)
+    turn_tool_messages = [msg for msg in turn_messages if str(msg.get("role") or "").lower() == "tool"]
+    collected = _collect_structured_attachment_paths({"messages": turn_tool_messages})
+    debug = {
+        "turn_messages_count": len(turn_messages),
+        "turn_tool_messages_count": len(turn_tool_messages),
+        "collected_count": len(collected),
+        "source_summaries": [
+            {
+                "tool_name": str(msg.get("tool_name") or "")[:64],
+                "message_id": str(msg.get("id") or "")[:32],
+            }
+            for msg in turn_tool_messages
+        ],
+        "collected_file_names": [Path(path).name for path in collected[:10]],
+    }
+    return collected, debug
+
+
 def _should_clear_resume_pending_after_turn(agent_result: dict) -> bool:
     """Return True only when a gateway turn really completed successfully.
 
@@ -9028,12 +9064,38 @@ class GatewayRunner:
                 agent_result, response, history_len=len(history),
             )
             response = _sanitize_gateway_final_response(source.platform, response)
+            _history_len_for_turn = agent_result.get("history_offset", len(history))
             try:
-                _structured_attachment_paths = _collect_structured_attachment_paths(agent_result)
+                _structured_attachment_paths, _structured_attachment_debug = (
+                    _collect_turn_scoped_structured_attachments(
+                        agent_result,
+                        _history_len_for_turn,
+                    )
+                )
+                logger.info(
+                    "structured attachments turn scope: turn_messages=%d tool_messages=%d collected=%d",
+                    _structured_attachment_debug["turn_messages_count"],
+                    _structured_attachment_debug["turn_tool_messages_count"],
+                    _structured_attachment_debug["collected_count"],
+                )
+                if _structured_attachment_debug["source_summaries"]:
+                    logger.debug(
+                        "structured attachment sources: %s",
+                        _structured_attachment_debug["source_summaries"],
+                    )
+                if _structured_attachment_debug["collected_file_names"]:
+                    logger.debug(
+                        "structured attachment files: %s",
+                        _structured_attachment_debug["collected_file_names"],
+                    )
             except Exception as _artifact_exc:
                 logger.debug("structured attachment extraction failed: %s", _artifact_exc)
                 _structured_attachment_paths = []
             setattr(event, "_structured_attachment_paths", _structured_attachment_paths)
+            logger.info(
+                "structured attachments event count=%d",
+                len(_structured_attachment_paths),
+            )
 
             # If the agent's session_id changed during compression, update
             # session_entry so transcript writes below go to the right session.
