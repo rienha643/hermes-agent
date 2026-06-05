@@ -395,6 +395,154 @@ def write_qualification_report(published_dir: Path, report_payload: Dict[str, An
     return report_path
 
 
+def _load_json_file(path: Path) -> Dict[str, Any]:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _write_json_file(path: Path, payload: Dict[str, Any]) -> Path:
+    path = Path(path)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _normalize_delivery_status(value: Any) -> str:
+    normalized = str(value or "Pending").strip().lower()
+    mapping = {
+        "pass": "Pass",
+        "success": "Pass",
+        "ok": "Pass",
+        "fail": "Fail",
+        "failed": "Fail",
+        "error": "Fail",
+        "pending": "Pending",
+        "skip": "Skipped",
+        "skipped": "Skipped",
+    }
+    return mapping.get(normalized, "Pending")
+
+
+def finalize_run_manifest_status(published_dir: Path) -> Path:
+    """Recompute run-level summary fields from the artifact list."""
+
+    manifest_path = Path(published_dir) / "run_manifest.json"
+    payload = _load_json_file(manifest_path)
+    artifacts = [entry for entry in payload.get("artifacts", []) if isinstance(entry, dict)]
+    existing_summary = dict(payload.get("summary") or {})
+
+    artifact_count = len(artifacts)
+    completed_run_count = sum(1 for entry in artifacts if str((entry.get("status") or {}).get("technical_result") or "").strip() == "Pass")
+    failed_run_count = sum(1 for entry in artifacts if str((entry.get("status") or {}).get("technical_result") or "").strip() == "Fail")
+    planned_run_count = existing_summary.get("planned_run_count")
+    total_runs = int(planned_run_count) if isinstance(planned_run_count, int) and planned_run_count > 0 else artifact_count
+
+    existing_summary.update(
+        {
+            "artifact_count": artifact_count,
+            "completed_run_count": completed_run_count,
+            "failed_run_count": failed_run_count,
+            "total_runs": total_runs,
+        }
+    )
+    if isinstance(planned_run_count, int) and planned_run_count > 0:
+        existing_summary["planned_run_count"] = planned_run_count
+
+    payload["summary"] = existing_summary
+    return _write_json_file(manifest_path, payload)
+
+
+def update_run_delivery_status(
+    published_dir: Path,
+    *,
+    delivery_result: Dict[str, Any],
+    delivery_note: Optional[str] = None,
+) -> Path:
+    """Update artifact-level delivery statuses in ``run_manifest.json``."""
+
+    manifest_path = Path(published_dir) / "run_manifest.json"
+    payload = _load_json_file(manifest_path)
+    artifacts = [entry for entry in payload.get("artifacts", []) if isinstance(entry, dict)]
+
+    for entry in artifacts:
+        run_id = str(entry.get("run_id") or "").strip()
+        artifact_name = str(entry.get("artifact_name") or "").strip()
+        if run_id in delivery_result:
+            status_value = delivery_result[run_id]
+        elif artifact_name in delivery_result:
+            status_value = delivery_result[artifact_name]
+        else:
+            continue
+        status = dict(entry.get("status") or {})
+        status["slack_status"] = _normalize_delivery_status(status_value)
+        if delivery_note:
+            status["delivery_note"] = delivery_note
+        entry["status"] = status
+
+    payload["artifacts"] = artifacts
+    _write_json_file(manifest_path, payload)
+    return finalize_run_manifest_status(published_dir)
+
+
+def finalize_qualification_report_status(
+    published_dir: Path,
+    *,
+    delivery_result: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """Recompute delivery-related counters in ``qualification_report.json``."""
+
+    published_dir = Path(published_dir)
+    manifest_path = published_dir / "run_manifest.json"
+    report_path = published_dir / "qualification_report.json"
+
+    if delivery_result:
+        update_run_delivery_status(published_dir, delivery_result=delivery_result)
+
+    manifest_payload = _load_json_file(manifest_path)
+    report_payload = _load_json_file(report_path)
+
+    artifact_map: Dict[str, Dict[str, Any]] = {}
+    for entry in manifest_payload.get("artifacts", []):
+        if not isinstance(entry, dict):
+            continue
+        run_id = str(entry.get("run_id") or "").strip()
+        artifact_name = str(entry.get("artifact_name") or "").strip()
+        if run_id:
+            artifact_map[run_id] = entry
+        if artifact_name:
+            artifact_map[artifact_name] = entry
+
+    success_count = 0
+    fail_count = 0
+    pending_count = 0
+    skipped_count = 0
+
+    for run in report_payload.get("runs", []):
+        if not isinstance(run, dict):
+            continue
+        run_id = str(run.get("run_id") or "").strip()
+        linked = artifact_map.get(run_id)
+        slack_status = "Pending"
+        if isinstance(linked, dict):
+            slack_status = _normalize_delivery_status((linked.get("status") or {}).get("slack_status"))
+        run["slack_status"] = slack_status
+        if slack_status == "Pass":
+            success_count += 1
+        elif slack_status == "Fail":
+            fail_count += 1
+        elif slack_status == "Skipped":
+            skipped_count += 1
+        else:
+            pending_count += 1
+
+    summary = dict(report_payload.get("summary") or {})
+    summary["slack_success_count"] = success_count
+    summary["slack_fail_count"] = fail_count
+    summary["slack_pending_count"] = pending_count
+    summary["slack_skipped_count"] = skipped_count
+    report_payload["summary"] = summary
+
+    return _write_json_file(report_path, report_payload)
+
+
 def wait_for_file_stable(path: Path, *, checks: int = 2, delay_seconds: float = 0.5) -> bool:
     """Return True when the file exists and its size stays stable across checks."""
 

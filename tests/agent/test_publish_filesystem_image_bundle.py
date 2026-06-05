@@ -347,3 +347,139 @@ def test_run_manifest_and_qualification_report_can_be_written_for_grouped_publis
     assert report["workflow_code"] == "ANG-TXT-001"
     assert report["lifecycle_after_proposed"]["core_pipeline_status"] == "Production"
     assert report["lifecycle_after_proposed"]["use_case_status"]["full_body"] == "MVP"
+
+
+def test_finalize_run_manifest_status_recomputes_total_runs_from_artifacts_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+
+    from agent import image_gen_provider as provider_mod
+
+    published_dir = tmp_path / "HermesWork" / "Image" / "260605_ANG_TXT_001_qualification"
+    published_dir.mkdir(parents=True, exist_ok=True)
+
+    provider_mod.write_run_manifest(
+        published_dir,
+        workflow_code="ANG-TXT-001",
+        workflow_name="TXT2IMG Basic",
+        run_kind="qualification",
+        project_name="ANG_TXT_001_qualification",
+        project_id="260605_ANG_TXT_001_qualification",
+        artifacts=[
+            {"run_id": "ANG-TXT-001-POR-01", "artifact_name": "ang_txt_001_por_01", "primary_image": "a.png", "workflow_json": "a.workflow.json", "prompt_json": "a.prompt.json", "metadata_json": "a.metadata.json", "category": "portrait", "seed": 1, "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pending"}},
+            {"run_id": "ANG-TXT-001-FB-01", "artifact_name": "ang_txt_001_fb_01", "primary_image": "b.png", "workflow_json": "b.workflow.json", "prompt_json": "b.prompt.json", "metadata_json": "b.metadata.json", "category": "full_body", "seed": 2, "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pending"}},
+            {"run_id": "ANG-TXT-001-ENV-01", "artifact_name": "ang_txt_001_env_01", "primary_image": "c.png", "workflow_json": "c.workflow.json", "prompt_json": "c.prompt.json", "metadata_json": "c.metadata.json", "category": "environment", "seed": 3, "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pending"}},
+        ],
+        summary={"artifact_count": 3, "total_runs": 1},
+    )
+
+    manifest_path = provider_mod.finalize_run_manifest_status(published_dir)
+    manifest = _read_json(manifest_path)
+
+    assert manifest["summary"]["artifact_count"] == 3
+    assert manifest["summary"]["total_runs"] == 3
+    assert manifest["summary"]["completed_run_count"] == 3
+    assert manifest["summary"]["failed_run_count"] == 0
+
+
+def test_finalize_run_manifest_status_prefers_planned_run_count(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+
+    from agent import image_gen_provider as provider_mod
+
+    published_dir = tmp_path / "HermesWork" / "Image" / "260605_ANG_TXT_001_qualification"
+    published_dir.mkdir(parents=True, exist_ok=True)
+
+    provider_mod.write_run_manifest(
+        published_dir,
+        workflow_code="ANG-TXT-001",
+        workflow_name="TXT2IMG Basic",
+        run_kind="qualification",
+        project_name="ANG_TXT_001_qualification",
+        project_id="260605_ANG_TXT_001_qualification",
+        artifacts=[
+            {"run_id": "ANG-TXT-001-POR-01", "artifact_name": "ang_txt_001_por_01", "primary_image": "a.png", "workflow_json": "a.workflow.json", "prompt_json": "a.prompt.json", "metadata_json": "a.metadata.json", "category": "portrait", "seed": 1, "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pending"}},
+            {"run_id": "ANG-TXT-001-FB-01", "artifact_name": "ang_txt_001_fb_01", "primary_image": "b.png", "workflow_json": "b.workflow.json", "prompt_json": "b.prompt.json", "metadata_json": "b.metadata.json", "category": "full_body", "seed": 2, "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pending"}},
+            {"run_id": "ANG-TXT-001-ENV-01", "artifact_name": "ang_txt_001_env_01", "primary_image": "c.png", "workflow_json": "c.workflow.json", "prompt_json": "c.prompt.json", "metadata_json": "c.metadata.json", "category": "environment", "seed": 3, "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pending"}},
+        ],
+        summary={"planned_run_count": 10, "artifact_count": 3, "total_runs": 1},
+    )
+
+    manifest_path = provider_mod.finalize_run_manifest_status(published_dir)
+    manifest = _read_json(manifest_path)
+
+    assert manifest["summary"]["planned_run_count"] == 10
+    assert manifest["summary"]["artifact_count"] == 3
+    assert manifest["summary"]["total_runs"] == 10
+
+
+def test_update_run_delivery_status_and_finalize_qualification_report(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+
+    from agent import image_gen_provider as provider_mod
+
+    published_dir = tmp_path / "HermesWork" / "Image" / "260605_ANG_TXT_001_qualification"
+    published_dir.mkdir(parents=True, exist_ok=True)
+
+    provider_mod.write_run_manifest(
+        published_dir,
+        workflow_code="ANG-TXT-001",
+        workflow_name="TXT2IMG Basic",
+        run_kind="qualification",
+        project_name="ANG_TXT_001_qualification",
+        project_id="260605_ANG_TXT_001_qualification",
+        artifacts=[
+            {"run_id": "ANG-TXT-001-POR-01", "artifact_name": "ang_txt_001_por_01", "primary_image": "a.png", "workflow_json": "a.workflow.json", "prompt_json": "a.prompt.json", "metadata_json": "a.metadata.json", "category": "portrait", "seed": 1, "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pending"}},
+            {"run_id": "ANG-TXT-001-FB-01", "artifact_name": "ang_txt_001_fb_01", "primary_image": "b.png", "workflow_json": "b.workflow.json", "prompt_json": "b.prompt.json", "metadata_json": "b.metadata.json", "category": "full_body", "seed": 2, "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pending"}},
+            {"run_id": "ANG-TXT-001-ENV-01", "artifact_name": "ang_txt_001_env_01", "primary_image": "c.png", "workflow_json": "c.workflow.json", "prompt_json": "c.prompt.json", "metadata_json": "c.metadata.json", "category": "environment", "seed": 3, "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pending"}},
+        ],
+        summary={"planned_run_count": 3, "artifact_count": 3, "total_runs": 3},
+    )
+    provider_mod.write_qualification_report(
+        published_dir,
+        {
+            "workflow_code": "ANG-TXT-001",
+            "workflow_name": "TXT2IMG Basic",
+            "test_name": "ANG-TXT-001 Production Qualification Test",
+            "run_date": "2026-06-05",
+            "production_gate_result": "Hold",
+            "summary": {"total_runs": 3, "technical_pass_count": 3, "visual_pass_count": 0, "visual_warning_count": 0, "visual_fail_count": 0, "full_body_face_eye_fail_count": 0, "publish_success_count": 3, "nas_hook_success_count": 3, "slack_success_count": 0},
+            "runs": [
+                {"run_id": "ANG-TXT-001-POR-01", "category": "portrait", "prompt_summary": "a", "seed": 1, "image_path": "a.png", "technical_status": "Pass", "visual_qc": "Unchecked", "full_body_face_eye_qc": "NA", "final_decision": "Recorded", "reviewer_note": ""},
+                {"run_id": "ANG-TXT-001-FB-01", "category": "full_body", "prompt_summary": "b", "seed": 2, "image_path": "b.png", "technical_status": "Pass", "visual_qc": "Unchecked", "full_body_face_eye_qc": "Unchecked", "final_decision": "Recorded", "reviewer_note": ""},
+                {"run_id": "ANG-TXT-001-ENV-01", "category": "environment", "prompt_summary": "c", "seed": 3, "image_path": "c.png", "technical_status": "Pass", "visual_qc": "Unchecked", "full_body_face_eye_qc": "NA", "final_decision": "Recorded", "reviewer_note": ""},
+            ],
+            "lifecycle_after_proposed": {"core_pipeline_status": "Production", "use_case_status": {"portrait": "Production Candidate", "full_body": "MVP", "environment": "MVP"}},
+            "user_feedback": [],
+            "known_risks": [],
+            "next_actions": [],
+        },
+    )
+
+    provider_mod.update_run_delivery_status(
+        published_dir,
+        delivery_result={
+            "ANG-TXT-001-POR-01": "Pass",
+            "ANG-TXT-001-FB-01": "Fail",
+            "ANG-TXT-001-ENV-01": "Skipped",
+        },
+    )
+    report_path = provider_mod.finalize_qualification_report_status(
+        published_dir,
+        delivery_result={
+            "ANG-TXT-001-POR-01": "Pass",
+            "ANG-TXT-001-FB-01": "Fail",
+            "ANG-TXT-001-ENV-01": "Skipped",
+        },
+    )
+
+    manifest = _read_json(published_dir / "run_manifest.json")
+    report = _read_json(report_path)
+
+    assert [entry["status"]["slack_status"] for entry in manifest["artifacts"]] == ["Pass", "Fail", "Skipped"]
+    assert report["summary"]["slack_success_count"] == 1
+    assert report["summary"]["slack_fail_count"] == 1
+    assert report["summary"]["slack_pending_count"] == 0
+    assert report["summary"]["slack_skipped_count"] == 1
