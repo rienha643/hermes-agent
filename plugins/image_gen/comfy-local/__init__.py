@@ -25,7 +25,9 @@ from agent.image_gen_provider import (
     publish_filesystem_image_bundle,
     resolve_aspect_ratio,
     success_response,
+    update_run_manifest,
     wait_for_file_stable,
+    write_qualification_report,
 )
 
 logger = logging.getLogger(__name__)
@@ -504,6 +506,39 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 aspect_ratio=aspect,
             )
 
+        qualification_context = kwargs.get("qualification_context") if isinstance(kwargs.get("qualification_context"), dict) else None
+        run_manifest_path: Optional[Path] = None
+        qualification_report_path: Optional[Path] = None
+        if qualification_context:
+            artifact_entry = {
+                "run_id": str(qualification_context.get("run_id") or artifact_name or filename_prefix),
+                "artifact_name": str(artifact_name or filename_prefix),
+                "primary_image": bundle["primary_image"],
+                "workflow_json": Path(bundle["workflow_path"]).name,
+                "prompt_json": Path(bundle["prompt_path"]).name,
+                "metadata_json": Path(bundle["metadata_path"]).name,
+                "category": category,
+                "seed": seed,
+                "status": {
+                    "technical_result": "Pass",
+                    "publish_status": "Pass",
+                    "nas_hook_status": "Pass" if bundle["nas_hook_requested"] else "Fail",
+                    "slack_status": "Pending",
+                },
+            }
+            run_manifest_path = update_run_manifest(
+                bundle["published_dir"],
+                workflow_code=str(qualification_context.get("workflow_code") or ""),
+                workflow_name=str(qualification_context.get("workflow_name") or ""),
+                run_kind=str(qualification_context.get("run_kind") or "qualification"),
+                project_name=str(project_name or filename_prefix),
+                project_id=str(bundle["project_id"]),
+                artifact=artifact_entry,
+            )
+            report_payload = qualification_context.get("report")
+            if isinstance(report_payload, dict):
+                qualification_report_path = write_qualification_report(bundle["published_dir"], report_payload)
+
         nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
         return success_response(
             image=str(bundle["primary_image_path"]),
@@ -527,6 +562,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "prompt_path": str(bundle["prompt_path"]),
                 "metadata_path": str(bundle["metadata_path"]),
                 "manifest_path": str(bundle["manifest_path"]),
+                "run_manifest_path": str(run_manifest_path) if run_manifest_path else None,
+                "qualification_report_path": str(qualification_report_path) if qualification_report_path else None,
                 "primary_image": bundle["primary_image"],
                 "sidecars": bundle["sidecars"],
                 "prompt_id": prompt_id,

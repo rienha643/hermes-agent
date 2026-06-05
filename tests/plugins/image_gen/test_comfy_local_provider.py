@@ -173,6 +173,75 @@ class TestComfyLocalImageGenProviderGenerate:
         assert result["success"] is False
         assert result["error_type"] == "io_error"
 
+    def test_generate_writes_run_manifest_and_qualification_report_when_requested(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
+        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "comfy-output"))
+
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        output_dir = Path(tmp_path / "comfy-output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / "ang_txt_001_por_01_00001_.png"
+        output_file.write_bytes(PNG_1PX)
+
+        class Response:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, timeout=None):
+            if url.endswith("/system_stats"):
+                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
+            if url.endswith("/models/checkpoints"):
+                return Response(["AOM3A1_orangemixs.safetensors"])
+            if url.endswith("/models/vae"):
+                return Response(["animevae.pt"])
+            if "/history/" in url:
+                return Response({"pid-123": {"status": {"completed": True, "status_str": "success"}, "outputs": {"8": {"images": [{"filename": "ang_txt_001_por_01_00001_.png", "subfolder": "", "type": "output"}]}}}})
+            raise AssertionError(f"unexpected GET {url}")
+
+        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
+        monkeypatch.setattr(comfy_mod.requests, "post", lambda *a, **k: Response({"prompt_id": "pid-123", "number": 0, "node_errors": {}}))
+        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
+        import agent.image_gen_provider as provider_mod
+        monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
+
+        result = ComfyLocalImageGenProvider().generate(
+            "anime portrait of a young heroine",
+            aspect_ratio="square",
+            project_name="ANG_TXT_001_qualification",
+            artifact_name="ang_txt_001_por_01",
+            negative_prompt="blurry",
+            qualification_context={
+                "workflow_code": "ANG-TXT-001",
+                "workflow_name": "TXT2IMG Basic",
+                "run_kind": "qualification",
+                "summary": {"total_runs": 1, "artifact_count": 1},
+                "report": {
+                    "workflow_code": "ANG-TXT-001",
+                    "workflow_name": "TXT2IMG Basic",
+                    "test_name": "ANG-TXT-001 Production Qualification Test",
+                    "run_date": "2026-06-05",
+                    "production_gate_result": "Hold",
+                    "summary": {"total_runs": 1, "technical_pass_count": 1, "visual_pass_count": 1, "visual_warning_count": 0, "visual_fail_count": 0, "full_body_face_eye_fail_count": 0, "publish_success_count": 1, "nas_hook_success_count": 1, "slack_success_count": 1},
+                    "runs": [],
+                    "lifecycle_after_proposed": {"core_pipeline_status": "Production", "use_case_status": {"portrait": "Production Candidate", "full_body": "MVP", "environment": "MVP"}},
+                    "user_feedback": [],
+                    "known_risks": [],
+                    "next_actions": [],
+                },
+            },
+        )
+
+        assert Path(result["run_manifest_path"]).exists()
+        assert Path(result["qualification_report_path"]).exists()
+
 
 class TestComfyLocalPluginRegistration:
     def test_register_wires_provider_into_registry(self):

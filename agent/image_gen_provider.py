@@ -303,6 +303,98 @@ def publish_filesystem_image_bundle(
     }
 
 
+def write_run_manifest(
+    published_dir: Path,
+    *,
+    workflow_code: str,
+    workflow_name: str,
+    run_kind: str,
+    project_name: str,
+    project_id: str,
+    artifacts: List[Dict[str, Any]],
+    summary: Dict[str, Any],
+) -> Path:
+    """Write a run-level manifest without changing the per-artifact manifest contract."""
+
+    published_dir = Path(published_dir)
+    published_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = published_dir / "run_manifest.json"
+    payload = {
+        "manifest_type": "run_summary",
+        "workflow_code": workflow_code,
+        "workflow_name": workflow_name,
+        "run_kind": run_kind,
+        "project_name": project_name,
+        "project_id": project_id,
+        "artifacts": list(artifacts),
+        "summary": dict(summary),
+    }
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return manifest_path
+
+
+def update_run_manifest(
+    published_dir: Path,
+    *,
+    workflow_code: str,
+    workflow_name: str,
+    run_kind: str,
+    project_name: str,
+    project_id: str,
+    artifact: Dict[str, Any],
+) -> Path:
+    """Append or replace a single artifact entry inside ``run_manifest.json``."""
+
+    published_dir = Path(published_dir)
+    manifest_path = published_dir / "run_manifest.json"
+    existing_artifacts: List[Dict[str, Any]] = []
+    existing_summary: Dict[str, Any] = {}
+    if manifest_path.exists():
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(payload.get("artifacts"), list):
+                existing_artifacts = [entry for entry in payload["artifacts"] if isinstance(entry, dict)]
+            if isinstance(payload.get("summary"), dict):
+                existing_summary = dict(payload["summary"])
+        except Exception:
+            existing_artifacts = []
+            existing_summary = {}
+
+    artifact_name = str(artifact.get("artifact_name") or "").strip()
+    updated = False
+    for idx, entry in enumerate(existing_artifacts):
+        if str(entry.get("artifact_name") or "").strip() == artifact_name and artifact_name:
+            existing_artifacts[idx] = dict(artifact)
+            updated = True
+            break
+    if not updated:
+        existing_artifacts.append(dict(artifact))
+
+    summary = dict(existing_summary)
+    summary["artifact_count"] = len(existing_artifacts)
+    summary.setdefault("total_runs", len(existing_artifacts))
+    return write_run_manifest(
+        published_dir,
+        workflow_code=workflow_code,
+        workflow_name=workflow_name,
+        run_kind=run_kind,
+        project_name=project_name,
+        project_id=project_id,
+        artifacts=existing_artifacts,
+        summary=summary,
+    )
+
+
+def write_qualification_report(published_dir: Path, report_payload: Dict[str, Any]) -> Path:
+    """Persist qualification/QC results beside the grouped publish artifacts."""
+
+    published_dir = Path(published_dir)
+    published_dir.mkdir(parents=True, exist_ok=True)
+    report_path = published_dir / "qualification_report.json"
+    report_path.write_text(json.dumps(report_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return report_path
+
+
 def wait_for_file_stable(path: Path, *, checks: int = 2, delay_seconds: float = 0.5) -> bool:
     """Return True when the file exists and its size stays stable across checks."""
 

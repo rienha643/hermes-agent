@@ -197,3 +197,153 @@ def test_publish_filesystem_image_bundle_uses_next_version_when_name_repeats(mon
     assert first["primary_image_path"].name == "angelica_smoke_v1.png"
     assert second["primary_image_path"].name == "angelica_smoke_v2.png"
     assert second["workflow_path"].name == "angelica_smoke_v2.workflow.json"
+
+
+def test_publish_filesystem_image_bundle_groups_multiple_artifacts_under_same_project(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+
+    from agent import image_gen_provider as provider_mod
+
+    source = tmp_path / "output" / "grouped_00001_.png"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(PNG_1PX)
+
+    monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
+
+    common_prompt_payload = {
+        "prompt": "a",
+        "negative_prompt": "",
+        "width": 512,
+        "height": 512,
+        "batch_size": 1,
+        "seed": 1,
+        "sampler": "euler",
+        "steps": 1,
+        "cfg": 1,
+        "denoise": 1,
+        "raw_prompt_payload": {},
+    }
+    common_metadata = {
+        "provider": "comfy-local",
+        "api_base_url": "http://172.22.224.1:8188",
+        "checkpoint": "AOM3A1_orangemixs.safetensors",
+        "vae": "animevae.pt",
+        "loras": [],
+        "controlnet_used": False,
+        "sampler": "euler",
+        "steps": 1,
+        "cfg": 1,
+        "denoise": 1,
+        "created_at": "2026-06-05T00:00:00Z",
+    }
+
+    bundle_a = provider_mod.publish_filesystem_image_bundle(
+        source,
+        prefix="qualification",
+        project_name="ANG_TXT_001_qualification",
+        artifact_name="ang_txt_001_por_01",
+        category="portrait",
+        workflow_json={},
+        prompt_payload=dict(common_prompt_payload, seed=1),
+        metadata=dict(common_metadata, prompt_id="pid-a", seed=1),
+    )
+    bundle_b = provider_mod.publish_filesystem_image_bundle(
+        source,
+        prefix="qualification",
+        project_name="ANG_TXT_001_qualification",
+        artifact_name="ang_txt_001_fb_01",
+        category="full_body",
+        workflow_json={},
+        prompt_payload=dict(common_prompt_payload, seed=2),
+        metadata=dict(common_metadata, prompt_id="pid-b", seed=2),
+    )
+    bundle_c = provider_mod.publish_filesystem_image_bundle(
+        source,
+        prefix="qualification",
+        project_name="ANG_TXT_001_qualification",
+        artifact_name="ang_txt_001_env_01",
+        category="environment",
+        workflow_json={},
+        prompt_payload=dict(common_prompt_payload, seed=3),
+        metadata=dict(common_metadata, prompt_id="pid-c", seed=3),
+    )
+
+    assert bundle_a["published_dir"] == bundle_b["published_dir"] == bundle_c["published_dir"]
+    files = sorted(p.name for p in bundle_a["published_dir"].iterdir())
+    assert "ang_txt_001_por_01_v1.png" in files
+    assert "ang_txt_001_fb_01_v1.png" in files
+    assert "ang_txt_001_env_01_v1.png" in files
+
+
+def test_run_manifest_and_qualification_report_can_be_written_for_grouped_publish(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+
+    from agent import image_gen_provider as provider_mod
+
+    published_dir = tmp_path / "HermesWork" / "Image" / "260605_ANG_TXT_001_qualification"
+    published_dir.mkdir(parents=True, exist_ok=True)
+
+    artifacts = [
+        {
+            "run_id": "ANG-TXT-001-POR-01",
+            "artifact_name": "ang_txt_001_por_01",
+            "primary_image": "ang_txt_001_por_01_v1.png",
+            "workflow_json": "ang_txt_001_por_01_v1.workflow.json",
+            "prompt_json": "ang_txt_001_por_01_v1.prompt.json",
+            "metadata_json": "ang_txt_001_por_01_v1.metadata.json",
+            "category": "portrait",
+            "seed": 21001,
+            "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pass"},
+        },
+        {
+            "run_id": "ANG-TXT-001-FB-01",
+            "artifact_name": "ang_txt_001_fb_01",
+            "primary_image": "ang_txt_001_fb_01_v1.png",
+            "workflow_json": "ang_txt_001_fb_01_v1.workflow.json",
+            "prompt_json": "ang_txt_001_fb_01_v1.prompt.json",
+            "metadata_json": "ang_txt_001_fb_01_v1.metadata.json",
+            "category": "full_body",
+            "seed": 22001,
+            "status": {"technical_result": "Pass", "publish_status": "Pass", "nas_hook_status": "Pass", "slack_status": "Pass"},
+        },
+    ]
+
+    run_manifest_path = provider_mod.write_run_manifest(
+        published_dir,
+        workflow_code="ANG-TXT-001",
+        workflow_name="TXT2IMG Basic",
+        run_kind="qualification",
+        project_name="ANG_TXT_001_qualification",
+        project_id="260605_ANG_TXT_001_qualification",
+        artifacts=artifacts,
+        summary={"total_runs": 2, "artifact_count": 2},
+    )
+    report_path = provider_mod.write_qualification_report(
+        published_dir,
+        {
+            "workflow_code": "ANG-TXT-001",
+            "workflow_name": "TXT2IMG Basic",
+            "test_name": "ANG-TXT-001 Production Qualification Test",
+            "run_date": "2026-06-05",
+            "production_gate_result": "Hold",
+            "summary": {"total_runs": 2, "technical_pass_count": 2, "visual_pass_count": 1, "visual_warning_count": 1, "visual_fail_count": 0, "full_body_face_eye_fail_count": 0, "publish_success_count": 2, "nas_hook_success_count": 2, "slack_success_count": 2},
+            "runs": [{"run_id": "ANG-TXT-001-POR-01", "category": "portrait", "prompt_summary": "heroine close-up portrait", "seed": 21001, "image_path": "ang_txt_001_por_01_v1.png", "technical_status": "Pass", "visual_qc": "Pass", "full_body_face_eye_qc": "NA", "final_decision": "Accept", "reviewer_note": "ok"}],
+            "lifecycle_after_proposed": {"core_pipeline_status": "Production", "use_case_status": {"portrait": "Production Candidate", "full_body": "MVP", "environment": "MVP"}},
+            "user_feedback": [],
+            "known_risks": ["full body character outputs may suffer degraded eye/pupil alignment due to small face scale"],
+            "next_actions": ["tighten QC"],
+        },
+    )
+
+    run_manifest = _read_json(run_manifest_path)
+    report = _read_json(report_path)
+
+    assert run_manifest["manifest_type"] == "run_summary"
+    assert run_manifest["workflow_code"] == "ANG-TXT-001"
+    assert len(run_manifest["artifacts"]) == 2
+    assert run_manifest["artifacts"][0]["artifact_name"] == "ang_txt_001_por_01"
+    assert report["workflow_code"] == "ANG-TXT-001"
+    assert report["lifecycle_after_proposed"]["core_pipeline_status"] == "Production"
+    assert report["lifecycle_after_proposed"]["use_case_status"]["full_body"] == "MVP"
