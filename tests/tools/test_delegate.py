@@ -41,6 +41,7 @@ from tools.delegate_tool import (
     _resolve_specialist_profile,
     _resolve_specialist_worker_label,
     _strip_blocked_tools,
+    _strip_delegate_routing_context_prefixes,
     _resolve_child_credential_pool,
     _resolve_delegation_credentials,
 )
@@ -231,6 +232,33 @@ class TestDelegateRequirements(unittest.TestCase):
                 "다른 profile 상태도 같이 확인해줘",
                 "다른 worker 결과와 비교해줘",
             ),
+            None,
+        )
+
+    def test_routing_context_prefixes_are_ignored_for_specialist_inference(self):
+        contaminated = (
+            '[Replying to: "[WORKER: Palette] old"]\n\n'
+            "[Thread context — prior messages in this thread (not yet in conversation history):]\n"
+            "[thread parent] 두목: [WORKER: Palette] 이전 지시\n"
+            "[End of thread context]\n\n"
+            "[WORKER: Eclipse]\ncron-fast 상태도 확인해줘"
+        )
+        self.assertEqual(
+            _strip_delegate_routing_context_prefixes(contaminated),
+            "[WORKER: Eclipse]\ncron-fast 상태도 확인해줘",
+        )
+        self.assertEqual(
+            _resolve_specialist_profile("coder", contaminated, None),
+            "coder",
+        )
+
+    def test_reply_context_worker_hint_does_not_create_conflict(self):
+        contaminated = (
+            '[Replying to: "[WORKER: Eclipse] old"]\n\n'
+            "오늘 상태 알려줘"
+        )
+        self.assertEqual(
+            _resolve_specialist_profile(None, contaminated, None),
             None,
         )
 

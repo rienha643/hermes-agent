@@ -854,6 +854,32 @@ _SPECIALIST_PROFILE_PATTERNS = [
     for profile in _PROFILE_TO_WORKER
 ]
 
+_DELEGATE_REPLY_CONTEXT_PREFIX_RE = re.compile(
+    r'^\[Replying to:\s*".+?"\]\s*', re.IGNORECASE | re.DOTALL
+)
+_DELEGATE_THREAD_CONTEXT_BLOCK_RE = re.compile(
+    r"^\[Thread context — prior messages in this thread \(not yet in conversation history\):\]\s*"
+    r".*?"
+    r"\[End of thread context\]\s*",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_delegate_routing_context_prefixes(text: Optional[str]) -> Optional[str]:
+    """Drop gateway-injected reply/thread prefixes before specialist inference."""
+    if text is None:
+        return None
+    cleaned = str(text).lstrip()
+    while True:
+        updated = cleaned
+        updated = _DELEGATE_REPLY_CONTEXT_PREFIX_RE.sub("", updated, count=1)
+        updated = _DELEGATE_THREAD_CONTEXT_BLOCK_RE.sub("", updated, count=1)
+        updated = updated.lstrip()
+        if updated == cleaned:
+            break
+        cleaned = updated
+    return cleaned
+
 
 def _normalize_specialist_profile(raw_profile: Optional[str]) -> Optional[str]:
     """Normalize a worker label or profile id to the canonical profile id.
@@ -1107,7 +1133,7 @@ def _infer_specialist_profile(*texts: Optional[str]) -> Optional[str]:
     for text in texts:
         if not text:
             continue
-        text_value = str(text)
+        text_value = _strip_delegate_routing_context_prefixes(text) or ""
         for pattern, profile in _SPECIALIST_PROFILE_PATTERNS:
             if pattern.search(text_value) and profile not in seen:
                 seen.append(profile)
@@ -1123,7 +1149,7 @@ def _has_specialist_profile_hint(*texts: Optional[str]) -> bool:
     for text in texts:
         if not text:
             continue
-        text_value = str(text)
+        text_value = _strip_delegate_routing_context_prefixes(text) or ""
         for pattern, _profile in _SPECIALIST_PROFILE_PATTERNS:
             if pattern.search(text_value):
                 return True

@@ -135,6 +135,13 @@ _GATEWAY_SECRET_PATTERNS = (
 )
 
 _EXPLICIT_WORKER_DIRECTIVE_RE = re.compile(r"\[WORKER:\s*([^\]]+?)\s*\]", re.IGNORECASE)
+_REPLY_CONTEXT_PREFIX_RE = re.compile(r'^\[Replying to:\s*".+?"\]\s*', re.IGNORECASE | re.DOTALL)
+_THREAD_CONTEXT_BLOCK_RE = re.compile(
+    r"^\[Thread context — prior messages in this thread \(not yet in conversation history\):\]\s*"
+    r".*?"
+    r"\[End of thread context\]\s*",
+    re.IGNORECASE | re.DOTALL,
+)
 _DIRECT_HANDLING_ESCAPE_RE = re.compile(
     r"(Nebris가\s*직접\s*답해|직접\s*처리해|delegation\s*하지\s*마)",
     re.IGNORECASE,
@@ -149,17 +156,56 @@ _GATEWAY_WORKER_PROFILE_MAP = {
 
 
 def _extract_explicit_worker_label(message: Any) -> Optional[str]:
+    labels = _extract_explicit_worker_labels(message)
+    if len(labels) != 1:
+        return None
+    return labels[0]
+
+
+def _extract_explicit_worker_labels(message: Any) -> List[str]:
     if not isinstance(message, str):
-        return None
-    match = _EXPLICIT_WORKER_DIRECTIVE_RE.search(message)
-    if not match:
-        return None
-    label = match.group(1).strip()
-    return label or None
+        return []
+    message = _strip_routing_context_prefixes(message)
+    seen: set[str] = set()
+    labels: List[str] = []
+    for match in _EXPLICIT_WORKER_DIRECTIVE_RE.finditer(message):
+        label = match.group(1).strip()
+        if not label:
+            continue
+        normalized = label.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        labels.append(label)
+    return labels
+
+
+def _strip_routing_context_prefixes(message: Any) -> Any:
+    """Remove gateway-injected reply/thread context from the start of a message.
+
+    These blocks are prepended for conversational understanding, but they must
+    not participate in explicit worker directive parsing or specialist-routing
+    heuristics for the current turn.
+    """
+    if not isinstance(message, str):
+        return message
+
+    cleaned = message.lstrip()
+    while True:
+        updated = cleaned
+        updated = _REPLY_CONTEXT_PREFIX_RE.sub("", updated, count=1)
+        updated = _THREAD_CONTEXT_BLOCK_RE.sub("", updated, count=1)
+        updated = updated.lstrip()
+        if updated == cleaned:
+            break
+        cleaned = updated
+    return cleaned or message
 
 
 def _explicit_worker_direct_handling_allowed(message: Any) -> bool:
-    return isinstance(message, str) and bool(_DIRECT_HANDLING_ESCAPE_RE.search(message))
+    return isinstance(message, str) and bool(
+        _DIRECT_HANDLING_ESCAPE_RE.search(_strip_routing_context_prefixes(message))
+    )
 
 
 def _strip_explicit_worker_directives(message: Any) -> Any:
@@ -171,9 +217,27 @@ def _strip_explicit_worker_directives(message: Any) -> Any:
 
 
 def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[str, Any]]:
-    worker_label = _extract_explicit_worker_label(message)
-    if not worker_label or _explicit_worker_direct_handling_allowed(message):
+    sanitized_message = _strip_routing_context_prefixes(message)
+    worker_labels = _extract_explicit_worker_labels(sanitized_message)
+    if not worker_labels or _explicit_worker_direct_handling_allowed(message):
         return None
+    if len(worker_labels) > 1:
+        final = (
+            "[WORKER RESULT: MULTI_WORKER_UNSUPPORTED]\n\n"
+            "multi-worker delegation is not supported in one turn. "
+            "Please split the task into separate worker requests."
+        )
+        return {
+            "final_response": final,
+            "messages": [],
+            "api_calls": 0,
+            "completed": False,
+            "failed": True,
+            "error": "multi-worker delegation is not supported in one turn",
+            "tools": [],
+        }
+
+    worker_label = worker_labels[0]
 
     mapped_profile = _GATEWAY_WORKER_PROFILE_MAP.get(worker_label)
     from tools.delegate_tool import delegate_task, _format_specialist_result_frame
@@ -190,7 +254,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "tools": [],
         }
 
-    delegated_goal = _strip_explicit_worker_directives(message)
+    delegated_goal = _strip_explicit_worker_directives(sanitized_message)
     raw = delegate_task(goal=str(delegated_goal), profile=mapped_profile, parent_agent=agent)
     try:
         payload = json.loads(raw)
