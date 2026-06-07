@@ -9,6 +9,7 @@ import hermes_constants
 from hermes_constants import (
     VALID_REASONING_EFFORTS,
     get_default_hermes_root,
+    get_hermes_work_root,
     is_container,
     parse_reasoning_effort,
     secure_parent_dir,
@@ -67,6 +68,36 @@ class TestGetDefaultHermesRoot:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setenv("HERMES_HOME", str(profile))
         assert get_default_hermes_root() == docker_root
+
+
+class TestGetHermesWorkRoot:
+    """Tests for get_hermes_work_root() fallback behavior."""
+
+    def test_env_override_wins(self, tmp_path, monkeypatch):
+        override = tmp_path / "CustomHermesWork"
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(override))
+        assert get_hermes_work_root() == override
+
+    def test_macos_uses_canonical_home_not_profile_home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("HERMES_WORK_ROOT", raising=False)
+        monkeypatch.setattr(hermes_constants.os, "name", "posix")
+        monkeypatch.setattr(hermes_constants.sys, "platform", "darwin")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / ".hermes" / "profiles" / "comfy" / "home")
+
+        class _PwRecord:
+            pw_dir = str(tmp_path / "Users" / "hermes")
+
+        monkeypatch.setattr(hermes_constants.os, "getuid", lambda: 501)
+        monkeypatch.setattr("pwd.getpwuid", lambda uid: _PwRecord())
+
+        assert get_hermes_work_root() == tmp_path / "Users" / "hermes" / "HermesWork"
+
+    def test_non_macos_falls_back_to_path_home(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("HERMES_WORK_ROOT", raising=False)
+        monkeypatch.setattr(hermes_constants.os, "name", "posix")
+        monkeypatch.setattr(hermes_constants.sys, "platform", "linux")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "profile-home")
+        assert get_hermes_work_root() == tmp_path / "profile-home" / "HermesWork"
 
 
 class TestIsContainer:

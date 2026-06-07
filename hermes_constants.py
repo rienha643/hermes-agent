@@ -5,6 +5,7 @@ without risk of circular imports.
 """
 
 import os
+import sys
 import sysconfig
 from contextvars import ContextVar, Token
 from pathlib import Path
@@ -140,6 +141,27 @@ def get_default_hermes_root() -> Path:
     return env_path
 
 
+def _get_canonical_home_for_hermeswork() -> Path:
+    """Return the OS-level canonical home for HermesWork placement.
+
+    On macOS, Hermes subprocesses may intentionally run with ``HOME`` pointed at
+    ``{HERMES_HOME}/home`` for per-profile tool isolation. HermesWork is a
+    machine-level artifact root, not a per-profile tool-config directory, so its
+    fallback must ignore that overridden ``HOME`` and anchor to the login user's
+    actual home directory.
+    """
+    if sys.platform == "darwin":
+        try:
+            import pwd
+
+            pw_dir = pwd.getpwuid(os.getuid()).pw_dir
+            if pw_dir:
+                return Path(pw_dir)
+        except Exception:
+            pass
+    return Path.home()
+
+
 def get_hermes_work_root() -> Path:
     """Return the standard HermesWork artifact root.
 
@@ -147,7 +169,7 @@ def get_hermes_work_root() -> Path:
         1. ``HERMES_WORK_ROOT`` environment override
         2. WSL default mount for the Windows path requested by policy
         3. Native Windows path when running on Windows
-        4. Local fallback under the current user's home directory
+        4. Local fallback under the current user's canonical home directory
     """
     override = os.getenv("HERMES_WORK_ROOT", "").strip()
     if override:
@@ -160,7 +182,7 @@ def get_hermes_work_root() -> Path:
     if wsl_default.exists():
         return wsl_default
 
-    return Path.home() / "HermesWork"
+    return _get_canonical_home_for_hermeswork() / "HermesWork"
 
 
 def get_hermes_work_dir(*parts: str) -> Path:
