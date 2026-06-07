@@ -282,7 +282,7 @@ def create_games_project_tree(
 ) -> Path:
     """Create the canonical Games project folder tree and return its root."""
     record = project_record or register_project(project_name, created_on, registry_path=registry_path)
-    games_root = (work_root or get_hermes_work_dir("Games")).resolve(strict=False)
+    games_root = Path(work_root or get_hermes_work_dir("Games")).expanduser()
     project_root = games_root / record.project_id
 
     folders = [
@@ -357,5 +357,5 @@ def resolve_project_artifact_dir(
     """Return the stable project record and canonical publish directory."""
     created = created_on or date.today()
     record = register_project(project_name, created, registry_path=registry_path)
-    category_root = (work_root or get_hermes_work_dir(category)).resolve(strict=False)
+    category_root = Path(work_root or get_hermes_work_dir(category)).expanduser()
     return record, category_root / record.project_id

@@ -133,6 +133,42 @@ def _is_under_root(path: Path, root: Path) -> bool:
         return False
 
 
+def _absolute_path(path: str | Path) -> Path:
+    candidate = Path(path).expanduser()
+    return candidate if candidate.is_absolute() else candidate.absolute()
+
+
+def _is_under_root_consistent(path: str | Path, root: str | Path) -> bool:
+    logical_path = _absolute_path(path)
+    logical_root = _absolute_path(root)
+    if _is_under_root(logical_path, logical_root):
+        return True
+    try:
+        return _is_under_root(logical_path.resolve(strict=False), logical_root.resolve(strict=False))
+    except Exception:
+        return False
+
+
+def _relative_to_root_consistent(path: str | Path, root: str | Path) -> Path:
+    logical_path = _absolute_path(path)
+    logical_root = _absolute_path(root)
+    try:
+        return logical_path.relative_to(logical_root)
+    except ValueError:
+        return logical_path.resolve(strict=False).relative_to(logical_root.resolve(strict=False))
+
+
+def _paths_equivalent(left: str | Path, right: str | Path) -> bool:
+    left_path = _absolute_path(left)
+    right_path = _absolute_path(right)
+    if left_path == right_path:
+        return True
+    try:
+        return left_path.resolve(strict=False) == right_path.resolve(strict=False)
+    except Exception:
+        return False
+
+
 def _scope_tokens(*values: str) -> set[str]:
     tokens: set[str] = set()
     for value in values:
@@ -331,29 +367,30 @@ def is_document_artifact_path(path: str | Path) -> bool:
 
 def _display_document_artifact_path(path: str | Path) -> str:
     """Prefer a HermesWork-relative path when the artifact lives under it."""
-    resolved = Path(path).expanduser().resolve(strict=False)
-    work_root = get_hermes_work_dir().resolve(strict=False)
+    logical_path = _absolute_path(path)
+    work_root = _absolute_path(get_hermes_work_dir())
     try:
-        relative = resolved.relative_to(work_root)
+        relative = _relative_to_root_consistent(logical_path, work_root)
     except ValueError:
         try:
-            idx = next(i for i, part in enumerate(resolved.parts) if part.casefold() == "hermeswork")
-            relative = Path(*resolved.parts[idx + 1 :])
+            fallback = logical_path.resolve(strict=False)
+            idx = next(i for i, part in enumerate(fallback.parts) if part.casefold() == "hermeswork")
+            relative = Path(*fallback.parts[idx + 1 :])
         except StopIteration:
-            return str(resolved)
+            return str(logical_path)
     if not relative.parts:
         return "HermesWork"
     return f"HermesWork/{relative.as_posix()}"
 
 
 def _document_artifact_category_scope(path: Path) -> tuple[Optional[str], Optional[str]]:
-    resolved = path.expanduser().resolve(strict=False)
-    story_root = get_hermes_work_dir("Story").resolve(strict=False)
-    documents_root = get_hermes_work_dir("Documents").resolve(strict=False)
+    logical_path = _absolute_path(path)
+    story_root = _absolute_path(get_hermes_work_dir("Story"))
+    documents_root = _absolute_path(get_hermes_work_dir("Documents"))
 
-    if _is_under_root(resolved, story_root):
+    if _is_under_root_consistent(logical_path, story_root):
         try:
-            relative_parent = resolved.parent.relative_to(story_root)
+            relative_parent = _relative_to_root_consistent(logical_path.parent, story_root)
         except ValueError:
             relative_parent = Path()
         if not relative_parent.parts:
@@ -363,9 +400,9 @@ def _document_artifact_category_scope(path: Path) -> tuple[Optional[str], Option
             return "story", ""
         return "story", first
 
-    if _is_under_root(resolved, documents_root):
+    if _is_under_root_consistent(logical_path, documents_root):
         try:
-            relative_parent = resolved.parent.relative_to(documents_root)
+            relative_parent = _relative_to_root_consistent(logical_path.parent, documents_root)
         except ValueError:
             relative_parent = Path()
         scope = "" if str(relative_parent) == "." else relative_parent.as_posix()
@@ -653,7 +690,7 @@ def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None
     """
     if not isinstance(source, Path):
         source = Path(source)
-    source = source.expanduser().resolve(strict=False)
+    source = _absolute_path(source)
     if not source.exists() or not source.is_file() or not is_document_artifact_path(source):
         return source
 
@@ -664,16 +701,17 @@ def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None
         resolved_story_root = story_root.resolve(strict=False)
         if _looks_like_story_artifact(source, resolved_story_root, folder_name=folder_name):
             scope = _normalized_story_scope(source, resolved_story_root, folder_name=folder_name)
-            if _is_under_root(source, resolved_story_root):
-                canonical_relative = _canonical_story_relative_path(source, resolved_story_root)
-                published_path = resolved_story_root / canonical_relative
+            if _is_under_root_consistent(source, story_root):
+                canonical_relative = _relative_to_root_consistent(source, story_root)
+                canonical_relative = _canonical_story_relative_path(story_root / canonical_relative, story_root)
+                published_path = story_root / canonical_relative
                 source_root = story_root
                 _cleanup_story_duplicate_tree(story_root)
             else:
                 _, published_dir = resolve_project_artifact_dir("Story", project_name)
                 published_dir.mkdir(parents=True, exist_ok=True)
                 published_path = next_versioned_child_path(published_dir, source.name)
-                if published_path.resolve(strict=False) != source:
+                if not _paths_equivalent(published_path, source):
                     try:
                         shutil.copy2(source, published_path)
                     except PermissionError as exc:
@@ -697,17 +735,16 @@ def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None
             return published_path
 
         documents_root = get_hermes_work_dir("Documents")
-        resolved_documents_root = documents_root.resolve(strict=False)
-        if _is_under_root(source, resolved_documents_root):
+        if _is_under_root_consistent(source, documents_root):
             published_path = source
-            relative_parent = published_path.parent.relative_to(resolved_documents_root)
+            relative_parent = _relative_to_root_consistent(published_path.parent, documents_root)
             scope = "" if str(relative_parent) == "." else str(relative_parent).replace("/", os.sep)
             source_root = published_path.parent
         else:
             _, published_dir = resolve_project_artifact_dir("Documents", project_name)
             published_dir.mkdir(parents=True, exist_ok=True)
             published_path = next_versioned_child_path(published_dir, source.name)
-            if published_path.resolve(strict=False) != source:
+            if not _paths_equivalent(published_path, source):
                 try:
                     shutil.copy2(source, published_path)
                 except PermissionError as exc:
