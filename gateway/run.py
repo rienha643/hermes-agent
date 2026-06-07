@@ -134,6 +134,141 @@ _GATEWAY_SECRET_PATTERNS = (
     re.compile(r"(?i)\b(Bearer\s+)[A-Za-z0-9._\-]{20,}\b"),
 )
 
+_EXPLICIT_WORKER_DIRECTIVE_RE = re.compile(r"\[WORKER:\s*([^\]]+?)\s*\]", re.IGNORECASE)
+_DIRECT_HANDLING_ESCAPE_RE = re.compile(
+    r"(Nebris가\s*직접\s*답해|직접\s*처리해|delegation\s*하지\s*마)",
+    re.IGNORECASE,
+)
+_GATEWAY_WORKER_PROFILE_MAP = {
+    "Eclipse": "coder",
+    "Sylvia": "designer",
+    "Palette": "artist",
+    "Luvencia": "cron-fast",
+    "Angelica": "comfy",
+}
+
+
+def _extract_explicit_worker_label(message: Any) -> Optional[str]:
+    if not isinstance(message, str):
+        return None
+    match = _EXPLICIT_WORKER_DIRECTIVE_RE.search(message)
+    if not match:
+        return None
+    label = match.group(1).strip()
+    return label or None
+
+
+def _explicit_worker_direct_handling_allowed(message: Any) -> bool:
+    return isinstance(message, str) and bool(_DIRECT_HANDLING_ESCAPE_RE.search(message))
+
+
+def _strip_explicit_worker_directives(message: Any) -> Any:
+    if not isinstance(message, str):
+        return message
+    cleaned = _EXPLICIT_WORKER_DIRECTIVE_RE.sub("", message)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned or message
+
+
+def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[str, Any]]:
+    worker_label = _extract_explicit_worker_label(message)
+    if not worker_label or _explicit_worker_direct_handling_allowed(message):
+        return None
+
+    mapped_profile = _GATEWAY_WORKER_PROFILE_MAP.get(worker_label)
+    from tools.delegate_tool import delegate_task, _format_specialist_result_frame
+
+    if not mapped_profile:
+        final = f"[WORKER RESULT: {worker_label}]\n\ndelegation failed\nUnknown worker label: {worker_label}"
+        return {
+            "final_response": final,
+            "messages": [],
+            "api_calls": 0,
+            "completed": False,
+            "failed": True,
+            "error": f"Unknown worker label: {worker_label}",
+            "tools": [],
+        }
+
+    delegated_goal = _strip_explicit_worker_directives(message)
+    raw = delegate_task(goal=str(delegated_goal), profile=mapped_profile, parent_agent=agent)
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        final = f"[WORKER RESULT: {worker_label}]\n\ndelegation failed\nInvalid delegation payload"
+        return {
+            "final_response": final,
+            "messages": [],
+            "api_calls": 0,
+            "completed": False,
+            "failed": True,
+            "error": "Invalid delegation payload",
+            "tools": [],
+        }
+
+    if isinstance(payload, dict) and payload.get("error"):
+        final = f"[WORKER RESULT: {worker_label}]\n\ndelegation failed\n{payload.get('error')}"
+        return {
+            "final_response": final,
+            "messages": [],
+            "api_calls": 0,
+            "completed": False,
+            "failed": True,
+            "error": payload.get("error"),
+            "tools": [],
+        }
+
+    first = None
+    if isinstance(payload, dict):
+        results = payload.get("results")
+        if isinstance(results, list) and results:
+            first = results[0]
+    if not isinstance(first, dict):
+        final = f"[WORKER RESULT: {worker_label}]\n\ndelegation failed\nMissing child result"
+        return {
+            "final_response": final,
+            "messages": [],
+            "api_calls": 0,
+            "completed": False,
+            "failed": True,
+            "error": "Missing child result",
+            "tools": [],
+        }
+
+    summary = first.get("summary") or payload.get("summary") or ""
+    status = first.get("status") or "completed"
+    if status != "completed":
+        final = f"[WORKER RESULT: {worker_label}]\n\ndelegation failed\n{summary or status}"
+        return {
+            "final_response": final,
+            "messages": [],
+            "api_calls": int(first.get("api_calls") or 0),
+            "completed": False,
+            "failed": True,
+            "error": summary or status,
+            "tools": [],
+        }
+
+    final = _format_specialist_result_frame(
+        worker_label,
+        status=status,
+        task_type=first.get("task_type"),
+        preview=summary,
+        summary=summary,
+        artifacts=first.get("artifacts"),
+        output_tail=first.get("output_tail"),
+        api_calls=first.get("api_calls"),
+        exit_reason=first.get("exit_reason"),
+        follow_up=first.get("follow_up") or first.get("additional_check") or first.get("next_steps"),
+    )
+    return {
+        "final_response": final,
+        "messages": [],
+        "api_calls": int(first.get("api_calls") or 0),
+        "completed": True,
+        "tools": [],
+    }
+
 
 def _gateway_platform_value(platform: Any) -> str:
     """Return a normalized gateway platform value for enums or raw strings."""
@@ -17443,48 +17578,52 @@ class GatewayRunner:
             _approval_session_token = set_current_session_key(_approval_session_key)
             register_gateway_notify(_approval_session_key, _approval_notify_sync)
             try:
-                # If _prepare_inbound_message_text buffered image paths for native
-                # attachment, wrap the user turn as an OpenAI-style multimodal
-                # content list. Consume-and-clear so subsequent turns on the same
-                # runner instance don't re-attach stale images.
-                _native_imgs = self._consume_pending_native_image_paths(session_key)
-                if _native_imgs:
-                    try:
-                        from agent.image_routing import build_native_content_parts
-                        _parts, _skipped = build_native_content_parts(
-                            message,
-                            _native_imgs,
-                        )
-                        if _skipped:
-                            logger.warning(
-                                "Native image attachment: skipped %d unreadable path(s): %s",
-                                len(_skipped), _skipped,
-                            )
-                        if any(p.get("type") == "image_url" for p in _parts):
-                            _run_message: Any = _parts
-                        else:
-                            # All images failed to read — fall back to plain text.
-                            _run_message = message
-                    except Exception as _img_exc:
-                        logger.warning(
-                            "Native image attachment failed, falling back to text: %s",
-                            _img_exc,
-                        )
-                        _run_message = message
+                _explicit_worker_result = _run_explicit_worker_delegation(agent, message)
+                if _explicit_worker_result is not None:
+                    result = _explicit_worker_result
                 else:
-                    _run_message = message
+                    # If _prepare_inbound_message_text buffered image paths for native
+                    # attachment, wrap the user turn as an OpenAI-style multimodal
+                    # content list. Consume-and-clear so subsequent turns on the same
+                    # runner instance don't re-attach stale images.
+                    _native_imgs = self._consume_pending_native_image_paths(session_key)
+                    if _native_imgs:
+                        try:
+                            from agent.image_routing import build_native_content_parts
+                            _parts, _skipped = build_native_content_parts(
+                                message,
+                                _native_imgs,
+                            )
+                            if _skipped:
+                                logger.warning(
+                                    "Native image attachment: skipped %d unreadable path(s): %s",
+                                    len(_skipped), _skipped,
+                                )
+                            if any(p.get("type") == "image_url" for p in _parts):
+                                _run_message: Any = _parts
+                            else:
+                                # All images failed to read — fall back to plain text.
+                                _run_message = message
+                        except Exception as _img_exc:
+                            logger.warning(
+                                "Native image attachment failed, falling back to text: %s",
+                                _img_exc,
+                            )
+                            _run_message = message
+                    else:
+                        _run_message = message
 
-                _api_run_message = _wrap_current_message_with_observed_context(
-                    _run_message,
-                    observed_group_context,
-                )
-                _conversation_kwargs = {
-                    "conversation_history": agent_history,
-                    "task_id": session_id,
-                }
-                if observed_group_context:
-                    _conversation_kwargs["persist_user_message"] = message
-                result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
+                    _api_run_message = _wrap_current_message_with_observed_context(
+                        _run_message,
+                        observed_group_context,
+                    )
+                    _conversation_kwargs = {
+                        "conversation_history": agent_history,
+                        "task_id": session_id,
+                    }
+                    if observed_group_context:
+                        _conversation_kwargs["persist_user_message"] = message
+                    result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
             finally:
                 unregister_gateway_notify(_approval_session_key)
                 # Cancel any pending clarify entries so blocked agent
