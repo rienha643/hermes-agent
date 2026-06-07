@@ -16315,8 +16315,11 @@ class GatewayRunner:
                 return
 
 
-            # Only act on tool.started events (ignore tool.completed, reasoning.available, etc.)
-            if event_type not in {"tool.started",}:
+            # User-facing gateway progress accepts ordinary tool start bubbles and
+            # delegated-worker start frames.  Keep completion/result events out of
+            # this channel so worker results continue to come from the final
+            # assistant message instead of duplicate progress bubbles.
+            if event_type not in {"tool.started", "subagent.start"}:
                 return
 
             # Suppress tool-progress bubbles once the user has sent `stop`.
@@ -16340,6 +16343,12 @@ class GatewayRunner:
                 return
             last_tool[0] = tool_name
             
+            if event_type == "subagent.start":
+                msg = preview or tool_name or ""
+                if msg:
+                    progress_queue.put(msg)
+                return
+
             # Build progress message with primary argument preview
             from agent.display import get_tool_emoji
             emoji = get_tool_emoji(tool_name, default="⚙️")

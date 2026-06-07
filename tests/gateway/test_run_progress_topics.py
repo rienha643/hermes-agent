@@ -179,6 +179,28 @@ class DelayedProgressAgent:
         }
 
 
+class SubagentStartAgent:
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+        self.tools = []
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        cb(
+            "subagent.start",
+            None,
+            "[WORKER: Eclipse]\n\nEclipse가 해당 작업을 수행합니다.",
+            None,
+        )
+        time.sleep(0.35)
+        return {
+            "final_response": "[WORKER RESULT: Eclipse]\n\nUX_VALIDATION_OK",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
 class ManyProgressLinesAgent:
     """Emits enough tool-progress lines to exceed a single platform bubble."""
 
@@ -290,6 +312,47 @@ async def test_run_agent_progress_stays_in_originating_topic(monkeypatch, tmp_pa
     ]
     assert adapter.edits
     assert all(call["metadata"] == {"thread_id": "17585"} for call in adapter.typing)
+
+
+@pytest.mark.asyncio
+async def test_slack_subagent_start_progress_is_rendered(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_TOOL_PROGRESS_MODE", "all")
+
+    fake_dotenv = types.ModuleType("dotenv")
+    fake_dotenv.load_dotenv = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "dotenv", fake_dotenv)
+
+    fake_run_agent = types.ModuleType("run_agent")
+    fake_run_agent.AIAgent = SubagentStartAgent
+    monkeypatch.setitem(sys.modules, "run_agent", fake_run_agent)
+
+    adapter = ProgressCaptureAdapter(platform=Platform.SLACK)
+    runner = _make_runner(adapter)
+    gateway_run = importlib.import_module("gateway.run")
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "fake"})
+    source = SessionSource(
+        platform=Platform.SLACK,
+        chat_id="C123",
+        chat_type="channel",
+        thread_id="thread-ts",
+    )
+
+    result = await runner._run_agent(
+        message="hello",
+        context_prompt="",
+        history=[],
+        source=source,
+        session_id="sess-slack-subagent-start",
+        session_key="agent:main:slack:channel:C123:thread-ts",
+    )
+
+    assert result["final_response"] == "[WORKER RESULT: Eclipse]\n\nUX_VALIDATION_OK"
+    rendered = " ".join(c["content"] for c in adapter.sent) + " " + " ".join(
+        c["content"] for c in adapter.edits
+    )
+    assert "[WORKER: Eclipse]" in rendered
+    assert "Eclipse가 해당 작업을 수행합니다." in rendered
 
 
 @pytest.mark.asyncio
