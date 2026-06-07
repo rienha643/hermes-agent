@@ -1134,18 +1134,16 @@ def _resolve_specialist_profile(
     explicit_profile: Optional[str],
     *texts: Optional[str],
 ) -> Optional[str]:
-    """Resolve an explicit profile plus any free-text hints to one profile id."""
+    """Resolve a specialist profile from routing source precedence.
+
+    Explicit profiles are authoritative and must not be overridden by free-text
+    hints in the task body. Free-text inference is only used when no explicit
+    profile is available.
+    """
     normalized_explicit = _normalize_specialist_profile(explicit_profile)
-    inferred = _infer_specialist_profile(*texts)
-    if normalized_explicit and inferred and normalized_explicit != inferred:
-        worker_hint = _PROFILE_TO_WORKER.get(inferred, inferred)
-        explicit_worker = _PROFILE_TO_WORKER.get(normalized_explicit, normalized_explicit)
-        raise ValueError(
-            f"Specialist routing mismatch: requested profile='{normalized_explicit}' "
-            f"({explicit_worker}) but task text points to '{inferred}' "
-            f"({worker_hint}). Use the matching profile id."
-        )
-    return normalized_explicit or inferred
+    if normalized_explicit:
+        return normalized_explicit
+    return _infer_specialist_profile(*texts)
 
 
 # ---------------------------------------------------------------------------

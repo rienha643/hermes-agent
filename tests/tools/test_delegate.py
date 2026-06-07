@@ -38,6 +38,7 @@ from tools.delegate_tool import (
     _format_specialist_result_frame,
     _infer_delegate_image_metadata,
     _is_single_output_image_task,
+    _resolve_specialist_profile,
     _resolve_specialist_worker_label,
     _strip_blocked_tools,
     _resolve_child_credential_pool,
@@ -212,6 +213,26 @@ class TestDelegateRequirements(unittest.TestCase):
         )
         self.assertIn(f"up to {_get_max_concurrent_children()}", fn["description"])
         self.assertIn(f"max_spawn_depth={_get_max_spawn_depth()}", fn["description"])
+
+    def test_explicit_profile_wins_over_free_text_mentions(self):
+        self.assertEqual(
+            _resolve_specialist_profile(
+                "coder",
+                "다른 profile 상태도 같이 확인해줘",
+                "다른 worker 결과와 비교해줘",
+            ),
+            "coder",
+        )
+
+    def test_free_text_only_used_when_no_explicit_profile(self):
+        self.assertEqual(
+            _resolve_specialist_profile(
+                None,
+                "다른 profile 상태도 같이 확인해줘",
+                "다른 worker 결과와 비교해줘",
+            ),
+            None,
+        )
 
 
 class TestChildSystemPrompt(unittest.TestCase):
@@ -916,7 +937,7 @@ class TestDelegateTask(unittest.TestCase):
                 mock_build.reset_mock()
                 mock_run.reset_mock()
 
-    def test_profile_execution_rejects_mismatched_worker_label(self):
+    def test_profile_execution_prefers_explicit_profile_over_free_text_mentions(self):
         parent = _make_mock_parent(depth=0)
 
         with patch(
@@ -931,17 +952,30 @@ class TestDelegateTask(unittest.TestCase):
                 "api_key": None,
                 "api_mode": None,
             },
-        ):
+        ), patch("tools.delegate_tool._build_child_agent") as mock_build, patch(
+            "tools.delegate_tool._run_single_child"
+        ) as mock_run:
+            mock_child = MagicMock()
+            mock_build.return_value = mock_child
+            mock_run.return_value = {
+                "task_index": 0,
+                "status": "completed",
+                "summary": "done",
+                "api_calls": 1,
+                "duration_seconds": 0.1,
+            }
+
             result = json.loads(
                 delegate_task(
-                    goal="Celia가 담당. Forge로 강아지 이미지를 1장 생성해줘.",
+                    goal="Celia가 담당. 이 코드를 고쳐줘.",
                     profile="artist",
                     parent_agent=parent,
                 )
             )
 
-        self.assertIn("error", result)
-        self.assertIn("mismatch", result["error"].lower())
+        self.assertEqual(result["results"][0]["status"], "completed")
+        self.assertEqual(mock_build.call_args.kwargs["profile"], "artist")
+        self.assertNotIn("error", result)
 
     def test_profile_execution_keeps_unknown_worker_label_fallback(self):
         parent = _make_mock_parent(depth=0)
