@@ -56,6 +56,8 @@ _GENERIC_SECRET_ASSIGN_RE = re.compile(
     r"\b(access_token|api[_-]?key|auth[_-]?token|signature|sig)\s*=\s*([^\s,;]+)",
     re.IGNORECASE,
 )
+_ALLOW_TOP_LEVEL_DIRECTIVE = "[[allow_top_level]]"
+_WORKER_STYLE_MESSAGE_RE = re.compile(r"^\s*\[(WORKER|WORKER RESULT):", re.IGNORECASE)
 
 
 def _sanitize_error_text(text) -> str:
@@ -69,6 +71,60 @@ def _sanitize_error_text(text) -> str:
 def _error(message: str) -> dict:
     """Build a standardized error payload with redacted content."""
     return {"error": _sanitize_error_text(message)}
+
+
+def _is_worker_probe_message(message: str) -> bool:
+    return bool(_WORKER_STYLE_MESSAGE_RE.match(str(message or "")))
+
+
+def _resolve_slack_thread_safety(
+    *,
+    platform_name: str,
+    chat_id: str | None,
+    thread_id: str | None,
+    used_home_channel: bool,
+    message_text: str,
+):
+    """Auto-preserve Slack thread context and block unsafe top-level worker probes."""
+    if platform_name != "slack":
+        return {
+            "thread_id": thread_id,
+            "target_kind": "thread_reply" if thread_id else "top_level",
+            "blocked": False,
+            "auto_threaded": False,
+        }
+
+    from gateway.session_context import get_session_env
+
+    session_platform = get_session_env("HERMES_SESSION_PLATFORM", "").strip().lower()
+    session_chat_id = get_session_env("HERMES_SESSION_CHAT_ID", "").strip()
+    session_thread_id = get_session_env("HERMES_SESSION_THREAD_ID", "").strip() or None
+
+    allow_top_level = _ALLOW_TOP_LEVEL_DIRECTIVE in message_text
+    worker_probe = _is_worker_probe_message(message_text)
+    auto_threaded = False
+    resolved_thread_id = thread_id
+
+    if (
+        not resolved_thread_id
+        and session_platform == "slack"
+        and session_thread_id
+        and chat_id
+        and session_chat_id == str(chat_id)
+    ):
+        resolved_thread_id = session_thread_id
+        auto_threaded = True
+
+    blocked = bool(worker_probe and not resolved_thread_id and not allow_top_level)
+    target_kind = "thread_reply" if resolved_thread_id else "top_level"
+    return {
+        "thread_id": resolved_thread_id,
+        "target_kind": target_kind,
+        "blocked": blocked,
+        "auto_threaded": auto_threaded,
+        "allow_top_level": allow_top_level,
+        "session_thread_id": session_thread_id,
+    }
 
 
 def _normalize_media_files_arg(media_files) -> list[tuple[str, bool]]:
@@ -282,8 +338,10 @@ def _handle_send(args, media_files=None):
     # instead of send_photo so the original bytes survive (e.g. info-graph
     # JPGs where Telegram's sendPhoto recompresses to 1280px).
     force_document_attachments = "[[as_document]]" in message
+    raw_message = message
 
     extracted_media_files, cleaned_message = BasePlatformAdapter.extract_media(message)
+    cleaned_message = cleaned_message.replace(_ALLOW_TOP_LEVEL_DIRECTIVE, "").strip()
     media_files = BasePlatformAdapter.filter_media_delivery_paths(
         list(extracted_media_files) + list(media_files or [])
     )
@@ -310,6 +368,42 @@ def _handle_send(args, media_files=None):
     duplicate_skip = _maybe_skip_cron_duplicate_send(platform_name, chat_id, thread_id)
     if duplicate_skip:
         return json.dumps(duplicate_skip)
+
+    slack_thread_safety = _resolve_slack_thread_safety(
+        platform_name=platform_name,
+        chat_id=str(chat_id) if chat_id is not None else None,
+        thread_id=thread_id,
+        used_home_channel=used_home_channel,
+        message_text=raw_message,
+    )
+    thread_id = slack_thread_safety.get("thread_id")
+    target_kind = slack_thread_safety.get("target_kind", "top_level")
+    blocked_top_level_worker_probe = bool(slack_thread_safety.get("blocked"))
+    if blocked_top_level_worker_probe:
+        logger.warning(
+            "send_message blocked unsafe Slack worker/probe top-level send: channel=%s thread_ts=%s target_kind=%s blocked_top_level_worker_probe=true",
+            chat_id,
+            thread_id or "",
+            target_kind,
+        )
+        return json.dumps(
+            {
+                "error": "Blocked unsafe Slack top-level send for worker/probe message. Use a thread target (slack:<channel>:<thread_ts>) or include [[allow_top_level]] to override.",
+                "blocked_top_level_worker_probe": True,
+                "target_kind": target_kind,
+                "chat_id": chat_id,
+                "thread_ts": thread_id or "",
+            }
+        )
+    logger.info(
+        "send_message target resolved: platform=%s channel=%s thread_ts=%s target_kind=%s auto_threaded=%s blocked_top_level_worker_probe=%s",
+        platform_name,
+        chat_id,
+        thread_id or "",
+        target_kind,
+        bool(slack_thread_safety.get("auto_threaded")),
+        blocked_top_level_worker_probe,
+    )
 
     # Slack: resolve user IDs (U...) to DM channel IDs via conversations.open
     if platform_name == "slack" and chat_id and chat_id.startswith("U"):
@@ -346,6 +440,11 @@ def _handle_send(args, media_files=None):
                 force_document=force_document_attachments,
             )
         )
+        if isinstance(result, dict) and result.get("success"):
+            result["target_kind"] = target_kind
+            result["thread_ts"] = thread_id or result.get("thread_ts") or ""
+            result["blocked_top_level_worker_probe"] = blocked_top_level_worker_probe
+            result["auto_threaded"] = bool(slack_thread_safety.get("auto_threaded"))
         if used_home_channel and isinstance(result, dict) and result.get("success"):
             result["note"] = f"Sent to {platform_name} home channel (chat_id: {chat_id})"
 
