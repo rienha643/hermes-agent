@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from gateway.config import Platform
-from gateway.platforms.base import SendResult
-from tests.e2e.conftest import make_event, send_and_capture
+from gateway.platforms.base import MessageEvent, SendResult
+from tests.e2e.conftest import make_event, make_source, send_and_capture
 
 
 class TestSlashCommands:
@@ -184,6 +184,36 @@ class TestSessionLifecycle:
         await send_and_capture(adapter, "/new", platform)
         assert runner.session_store.reset_session.call_count == 2
 
+    @pytest.mark.asyncio
+    async def test_empty_inbound_event_without_message_id_is_dropped(self, adapter, runner, platform):
+        """Empty text + empty message_id should be silently dropped (no user-facing response)."""
+        runner._handle_message_with_agent.reset_mock()
+        adapter.send.reset_mock()
+
+        empty_event = MessageEvent(
+            text="",
+            source=make_source(platform),
+            message_id="",
+        )
+        await adapter.handle_message(empty_event)
+        await asyncio.sleep(0.3)
+
+        adapter.send.assert_not_called()
+        if hasattr(runner, "_handle_message_with_agent"):
+            runner._handle_message_with_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_text_with_message_id_is_processed(self, adapter, platform):
+        """An explicit empty text with a real message_id should still be processed."""
+        event = MessageEvent(
+            text="",
+            source=make_source(platform),
+            message_id="msg-001",
+        )
+        await adapter.handle_message(event)
+        await asyncio.sleep(0.3)
+
+        adapter.send.assert_called_once()
 
 class TestAuthorization:
     """Verify the pipeline handles unauthorized users."""
