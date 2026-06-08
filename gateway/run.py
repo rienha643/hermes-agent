@@ -4323,6 +4323,7 @@ class GatewayRunner:
                     entry for entry in self.session_store._entries.values()  # noqa: SLF001
                     if entry.resume_pending
                     and not entry.suspended
+                    and not entry.pending_delivery_text
                     and entry.origin is not None
                     and entry.resume_reason in self._AUTO_RESUME_REASONS
                 ]
@@ -4366,6 +4367,61 @@ class GatewayRunner:
                 "Scheduled auto-resume for %d restart-interrupted session(s)",
                 scheduled,
             )
+        return scheduled
+
+    def _schedule_pending_delivery_recovery(self) -> int:
+        """Send final responses that completed during drain but were not delivered before restart."""
+        window = _auto_continue_freshness_window()
+        try:
+            with self.session_store._lock:  # noqa: SLF001
+                self.session_store._ensure_loaded_locked()  # noqa: SLF001
+                candidates = [
+                    entry for entry in self.session_store._entries.values()  # noqa: SLF001
+                    if entry.pending_delivery_text and entry.origin is not None and not entry.suspended
+                ]
+        except Exception as exc:
+            logger.warning("Failed to enumerate pending-delivery sessions: %s", exc)
+            return 0
+
+        now = datetime.now()
+        scheduled = 0
+        for entry in candidates:
+            marker = entry.pending_delivery_saved_at or entry.last_resume_marked_at or entry.updated_at
+            if marker is not None and (now - marker).total_seconds() > window:
+                continue
+
+            source = entry.origin
+            adapter = self.adapters.get(source.platform)
+            if adapter is None:
+                continue
+            pending_text = entry.pending_delivery_text or ""
+            if not pending_text:
+                continue
+
+            async def _deliver_pending(entry=entry, source=source, adapter=adapter, pending_text=pending_text):
+                metadata = self._thread_metadata_for_source(source)
+                logger.info(
+                    "pending_delivery_recovered: session_id=%s session_key=%s",
+                    entry.session_id,
+                    entry.session_key,
+                )
+                result = await adapter.send(source.chat_id, pending_text, metadata=metadata)
+                if getattr(result, "success", False):
+                    self.session_store.clear_pending_delivery(entry.session_key)
+                    self.session_store.clear_resume_pending(entry.session_key)
+                    logger.info(
+                        "pending_delivery_cleared: session_id=%s session_key=%s",
+                        entry.session_id,
+                        entry.session_key,
+                    )
+
+            task = asyncio.create_task(_deliver_pending())
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+            scheduled += 1
+
+        if scheduled:
+            logger.info("Scheduled pending-delivery recovery for %d session(s)", scheduled)
         return scheduled
 
     async def start(self) -> bool:
@@ -4665,6 +4721,7 @@ class GatewayRunner:
                 success = await self._connect_adapter_with_timeout(adapter, platform)
                 if success:
                     self.adapters[platform] = adapter
+                    setattr(adapter, "gateway_runner", self)
                     self._sync_voice_mode_state_to_adapter(adapter)
                     connected_count += 1
                     self._update_platform_runtime_status(
@@ -4857,6 +4914,8 @@ class GatewayRunner:
             await self._send_home_channel_startup_notifications(
                 skip_targets=skip_home_targets,
             )
+
+        self._schedule_pending_delivery_recovery()
 
         # Automatically continue fresh sessions that were interrupted by the
         # previous gateway restart/shutdown.  The resume_pending flag is cleared
@@ -6362,6 +6421,7 @@ class GatewayRunner:
                     success = await self._connect_adapter_with_timeout(adapter, platform)
                     if success:
                         self.adapters[platform] = adapter
+                        setattr(adapter, "gateway_runner", self)
                         self._sync_voice_mode_state_to_adapter(adapter)
                         self.delivery_router.adapters = self.adapters
                         del self._failed_platforms[platform]
@@ -6546,6 +6606,13 @@ class GatewayRunner:
                 for _sk in _pre_drain_keys:
                     if _sk not in self._running_agents:
                         try:
+                            _pending_delivery = self.session_store.get_pending_delivery(_sk)
+                            if _pending_delivery:
+                                logger.info(
+                                    "drain_completed_but_delivery_pending: session_key=%s",
+                                    _sk,
+                                )
+                                continue
                             self.session_store.clear_resume_pending(_sk)
                         except Exception as _e:
                             logger.debug(

@@ -490,6 +490,8 @@ class SessionEntry:
     resume_pending: bool = False
     resume_reason: Optional[str] = None  # e.g. "restart_timeout"
     last_resume_marked_at: Optional[datetime] = None
+    pending_delivery_text: Optional[str] = None
+    pending_delivery_saved_at: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = {
@@ -515,6 +517,12 @@ class SessionEntry:
             "last_resume_marked_at": (
                 self.last_resume_marked_at.isoformat()
                 if self.last_resume_marked_at
+                else None
+            ),
+            "pending_delivery_text": self.pending_delivery_text,
+            "pending_delivery_saved_at": (
+                self.pending_delivery_saved_at.isoformat()
+                if self.pending_delivery_saved_at
                 else None
             ),
             "is_fresh_reset": self.is_fresh_reset,
@@ -547,6 +555,14 @@ class SessionEntry:
             except (TypeError, ValueError):
                 last_resume_marked_at = None
 
+        pending_delivery_saved_at = None
+        _pdsa = data.get("pending_delivery_saved_at")
+        if _pdsa:
+            try:
+                pending_delivery_saved_at = datetime.fromisoformat(_pdsa)
+            except (TypeError, ValueError):
+                pending_delivery_saved_at = None
+
         return cls(
             session_key=data["session_key"],
             session_id=data["session_id"],
@@ -569,6 +585,8 @@ class SessionEntry:
             resume_pending=data.get("resume_pending", False),
             resume_reason=data.get("resume_reason"),
             last_resume_marked_at=last_resume_marked_at,
+            pending_delivery_text=data.get("pending_delivery_text"),
+            pending_delivery_saved_at=pending_delivery_saved_at,
             is_fresh_reset=data.get("is_fresh_reset", False),
             was_auto_reset=data.get("was_auto_reset", False),
             auto_reset_reason=data.get("auto_reset_reason"),
@@ -1033,6 +1051,42 @@ class SessionStore:
             entry.last_resume_marked_at = None
             self._save()
             return True
+
+    def mark_pending_delivery(self, session_key: str, final_text: str) -> bool:
+        """Persist a final response that completed during restart drain but was not delivered yet."""
+        with self._lock:
+            self._ensure_loaded_locked()
+            entry = self._entries.get(session_key)
+            if entry is None or not final_text:
+                return False
+            entry.pending_delivery_text = str(final_text)
+            entry.pending_delivery_saved_at = _now()
+            self._save()
+            return True
+
+    def clear_pending_delivery(self, session_key: str) -> bool:
+        with self._lock:
+            self._ensure_loaded_locked()
+            entry = self._entries.get(session_key)
+            if entry is None or (not entry.pending_delivery_text and not entry.pending_delivery_saved_at):
+                return False
+            entry.pending_delivery_text = None
+            entry.pending_delivery_saved_at = None
+            self._save()
+            return True
+
+    def get_pending_delivery(self, session_key: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            self._ensure_loaded_locked()
+            entry = self._entries.get(session_key)
+            if entry is None or not entry.pending_delivery_text:
+                return None
+            return {
+                "text": entry.pending_delivery_text,
+                "saved_at": entry.pending_delivery_saved_at,
+                "origin": entry.origin,
+                "session_id": entry.session_id,
+            }
 
     def prune_old_entries(self, max_age_days: int) -> int:
         """Drop SessionEntry records older than max_age_days.

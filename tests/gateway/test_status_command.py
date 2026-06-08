@@ -1,16 +1,18 @@
 """Tests for gateway /status behavior and token persistence."""
 
+import asyncio
 from datetime import datetime
 import hashlib
 import time
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from gateway.config import GatewayConfig, Platform, PlatformConfig
-from gateway.platforms.base import MessageEvent
-from gateway.session import SessionEntry, SessionSource, build_session_key
+from gateway.platforms.base import MessageEvent, SendResult
+from gateway.session import SessionEntry, SessionSource, SessionStore, build_session_key
 
 
 def _make_source(platform: Platform = Platform.TELEGRAM) -> SessionSource:
@@ -850,6 +852,117 @@ async def test_explicit_worker_same_sha_with_fresh_execution_is_allowed(monkeypa
 
     assert payload in result
     assert runner._last_response_signature_by_session[session_entry.session_key]["response_sha"] == payload_sha
+
+
+@pytest.mark.asyncio
+async def test_schedule_pending_delivery_recovery_sends_once_and_clears_flags(tmp_path):
+    from gateway.run import GatewayRunner
+
+    source = _make_source()
+    session_key = build_session_key(source)
+    session_entry = SessionEntry(
+        session_key=session_key,
+        session_id="sess-pending-delivery",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        origin=source,
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        resume_pending=True,
+        resume_reason="restart_timeout",
+        pending_delivery_text="Recovered final response",
+        pending_delivery_saved_at=datetime.now(),
+    )
+
+    runner = object.__new__(GatewayRunner)
+    runner.adapters = {Platform.TELEGRAM: MagicMock()}
+    runner.adapters[Platform.TELEGRAM].send = AsyncMock(return_value=SendResult(success=True, message_id="m1"))
+    runner._background_tasks = set()
+    runner._thread_metadata_for_source = lambda source, reply_to_message_id=None: None
+    runner.session_store = SessionStore(tmp_path / "sessions", GatewayConfig(platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="***")}))
+    runner.session_store._entries[session_key] = session_entry
+    runner.session_store._loaded = True
+
+    scheduled = runner._schedule_pending_delivery_recovery()
+    assert scheduled == 1
+    await asyncio.gather(*list(runner._background_tasks))
+
+    runner.adapters[Platform.TELEGRAM].send.assert_awaited_once_with(source.chat_id, "Recovered final response", metadata=None)
+    pending = runner.session_store.get_pending_delivery(session_key)
+    assert pending is None
+    assert runner.session_store._entries[session_key].resume_pending is False
+
+
+@pytest.mark.asyncio
+async def test_schedule_resume_pending_sessions_skips_pending_delivery_entries(tmp_path):
+    from gateway.run import GatewayRunner
+
+    source = _make_source()
+    session_key = build_session_key(source)
+    entry = SessionEntry(
+        session_key=session_key,
+        session_id="sess-skip-resume",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        origin=source,
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        resume_pending=True,
+        resume_reason="restart_timeout",
+        pending_delivery_text="Recovered final response",
+        pending_delivery_saved_at=datetime.now(),
+    )
+
+    runner = object.__new__(GatewayRunner)
+    adapter = MagicMock()
+    adapter.handle_message = AsyncMock()
+    runner.adapters = {Platform.TELEGRAM: adapter}
+    runner._background_tasks = set()
+    runner.session_store = SessionStore(tmp_path / "sessions", GatewayConfig(platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="***")}))
+    runner.session_store._entries[session_key] = entry
+    runner.session_store._loaded = True
+
+    scheduled = runner._schedule_resume_pending_sessions()
+    assert scheduled == 0
+    adapter.handle_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pending_delivery_remains_when_send_fails(tmp_path):
+    from gateway.run import GatewayRunner
+
+    source = _make_source()
+    session_key = build_session_key(source)
+    session_entry = SessionEntry(
+        session_key=session_key,
+        session_id="sess-pending-delivery-fail",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        origin=source,
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+        resume_pending=True,
+        resume_reason="restart_timeout",
+        pending_delivery_text="Recovered final response",
+        pending_delivery_saved_at=datetime.now(),
+    )
+
+    runner = object.__new__(GatewayRunner)
+    runner.adapters = {Platform.TELEGRAM: MagicMock()}
+    runner.adapters[Platform.TELEGRAM].send = AsyncMock(return_value=SendResult(success=False, error="boom"))
+    runner._background_tasks = set()
+    runner._thread_metadata_for_source = lambda source, reply_to_message_id=None: None
+    runner.session_store = SessionStore(tmp_path / "sessions", GatewayConfig(platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="***")}))
+    runner.session_store._entries[session_key] = session_entry
+    runner.session_store._loaded = True
+
+    scheduled = runner._schedule_pending_delivery_recovery()
+    assert scheduled == 1
+    await asyncio.gather(*list(runner._background_tasks))
+
+    pending = runner.session_store.get_pending_delivery(session_key)
+    assert pending is not None
+    assert runner.session_store._entries[session_key].resume_pending is True
 
 
 
