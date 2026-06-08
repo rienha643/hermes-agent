@@ -158,9 +158,9 @@ MEMORY_GUIDANCE = (
 
 DOCUMENT_STYLE_GUIDANCE = (
     "When producing document artifacts or long-form content, keep the user's reply style "
-    "separate from the artifact's internal writing style. The user's conversational replies "
-    "may be in Korean honorific speech, but document prose should follow the document's own "
-    "genre: worldbuilding in narrative prose, setting docs in encyclopedic tone, scripts in "
+    "separate from the artifact's internal writing style. User-facing replies may default "
+    "to Korean, but document prose should follow the document's own genre and let tone be "
+    "determined by that genre: worldbuilding in narrative prose, setting docs in encyclopedic tone, scripts in "
     "screenplay form, plans in report style, READMEs in technical documentation style, and "
     "QA outputs in analytical/report style unless the user explicitly requests otherwise. "
     "When the user requests document outputs, generate only the explicitly requested "
