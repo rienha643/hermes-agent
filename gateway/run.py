@@ -16683,9 +16683,14 @@ class GatewayRunner:
             last_tool[0] = tool_name
             
             if event_type == "subagent.start":
-                msg = preview or tool_name or ""
-                if msg:
-                    progress_queue.put(msg)
+                worker_label = str(
+                    kwargs.get("worker_label") or tool_name or ""
+                ).strip()
+                if worker_label:
+                    msg = f"[WORKER: {worker_label}]\n\n{worker_label}가 해당 작업을 수행합니다."
+                else:
+                    msg = "작업을 시작합니다."
+                progress_queue.put(msg)
                 return
 
             # Build progress message with primary argument preview

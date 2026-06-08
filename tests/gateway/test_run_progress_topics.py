@@ -180,6 +180,13 @@ class DelayedProgressAgent:
 
 
 class SubagentStartAgent:
+    LONG_TASK = (
+        "이번 worker start notification에는 사용자 원문 지시문이 노출되면 안 됩니다. "
+        "Slack-facing progress는 짧은 배너만 보여야 하고, 내부 preview/body는 유지되더라도 "
+        "사용자에게는 전달되지 않아야 합니다. "
+        "이 문장은 고의로 길게 작성한 회귀 테스트용 원문입니다."
+    )
+
     def __init__(self, **kwargs):
         self.tool_progress_callback = kwargs.get("tool_progress_callback")
         self.tools = []
@@ -190,8 +197,10 @@ class SubagentStartAgent:
         cb(
             "subagent.start",
             None,
-            "[WORKER: Eclipse]\n\nEclipse가 해당 작업을 수행합니다.",
+            self.LONG_TASK,
             None,
+            worker_label="Eclipse",
+            goal=self.LONG_TASK,
         )
         time.sleep(0.35)
         return {
@@ -353,6 +362,8 @@ async def test_slack_subagent_start_progress_is_rendered(monkeypatch, tmp_path):
     )
     assert "[WORKER: Eclipse]" in rendered
     assert "Eclipse가 해당 작업을 수행합니다." in rendered
+    assert SubagentStartAgent.LONG_TASK not in rendered
+    assert "사용자 원문 지시문" not in rendered
 
 
 @pytest.mark.asyncio

@@ -1524,6 +1524,8 @@ def _build_child_progress_callback(
             kw["model"] = model
         if toolsets is not None:
             kw["toolsets"] = list(toolsets)
+        if specialist_worker_label is not None:
+            kw["worker_label"] = specialist_worker_label
         kw["tool_count"] = _tool_count[0]
         return kw
 
@@ -1548,7 +1550,6 @@ def _build_child_progress_callback(
             start_preview = _format_specialist_frame(
                 specialist_worker_label,
                 "start",
-                preview or goal_label or "",
             )
             if spinner and start_preview:
                 short = (

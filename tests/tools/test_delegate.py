@@ -3453,7 +3453,12 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
             artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text("done", encoding="utf-8")
 
-            callback_fn("subagent.start", preview="Update the formatter")
+            raw_start_preview = (
+                "이번 subagent.start preview에는 원문 작업 지시문이 섞여 있어도 안 됩니다. "
+                "이 문장은 회귀 테스트용으로만 사용됩니다."
+            )
+
+            callback_fn("subagent.start", preview=raw_start_preview)
             callback_fn(
                 "subagent.complete",
                 preview="Implemented the requested change.",
@@ -3478,6 +3483,7 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertTrue(complete_calls)
         self.assertTrue(start_calls[0].args[2].startswith("[WORKER: Eclipse]"))
         self.assertIn("Eclipse가 해당 작업을 수행합니다.", start_calls[0].args[2])
+        self.assertNotIn("원문 작업 지시문", start_calls[0].args[2])
 
         complete_preview = complete_calls[0].args[2]
         self.assertTrue(complete_preview.startswith("[WORKER RESULT: Eclipse]"))
