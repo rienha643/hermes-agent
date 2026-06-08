@@ -136,6 +136,7 @@ _GATEWAY_SECRET_PATTERNS = (
 )
 
 _EXPLICIT_WORKER_DIRECTIVE_RE = re.compile(r"\[WORKER:\s*([^\]]+?)\s*\]", re.IGNORECASE)
+_EXPLICIT_WORKER_RESULT_FRAME_RE = re.compile(r"\[WORKER RESULT:\s*([^\]]+?)\s*\]", re.IGNORECASE)
 _REPLY_CONTEXT_PREFIX_RE = re.compile(r'^\[Replying to:\s*".+?"\]\s*', re.IGNORECASE | re.DOTALL)
 _THREAD_CONTEXT_BLOCK_RE = re.compile(
     r"^\[Thread context — prior messages in this thread \(not yet in conversation history\):\]\s*"
@@ -164,21 +165,59 @@ def _extract_explicit_worker_label(message: Any) -> Optional[str]:
     return labels[0]
 
 
+def _is_placeholder_worker_label(label: str) -> bool:
+    normalized = str(label or "").strip()
+    if not normalized:
+        return True
+    lowered = normalized.casefold()
+    if lowered in {"...", "…", "multi_worker_unsupported", "worker", "result"}:
+        return True
+    if _EXPLICIT_WORKER_RESULT_FRAME_RE.fullmatch(normalized):
+        return True
+    return False
+
+
 def _extract_explicit_worker_labels(message: Any) -> List[str]:
     if not isinstance(message, str):
         return []
     message = _strip_routing_context_prefixes(message)
+    if not isinstance(message, str):
+        return []
+
+    lines = message.splitlines()
+    first_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip():
+            first_idx = idx
+            break
+    if first_idx is None:
+        return []
+
+    first_line = lines[first_idx].strip()
+    first_match = _EXPLICIT_WORKER_DIRECTIVE_RE.fullmatch(first_line)
+    if not first_match:
+        return []
+
     seen: set[str] = set()
     labels: List[str] = []
-    for match in _EXPLICIT_WORKER_DIRECTIVE_RE.finditer(message):
+    scan_idx = first_idx
+    while scan_idx < len(lines):
+        line = lines[scan_idx].strip()
+        if not line:
+            scan_idx += 1
+            continue
+        match = _EXPLICIT_WORKER_DIRECTIVE_RE.fullmatch(line)
+        if not match:
+            break
         label = match.group(1).strip()
-        if not label:
+        if not label or _is_placeholder_worker_label(label):
+            scan_idx += 1
             continue
         normalized = label.casefold()
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        labels.append(label)
+        if normalized not in seen:
+            seen.add(normalized)
+            labels.append(label)
+        scan_idx += 1
     return labels
 
 
@@ -213,9 +252,36 @@ def _explicit_worker_direct_handling_allowed(message: Any) -> bool:
 def _strip_explicit_worker_directives(message: Any) -> Any:
     if not isinstance(message, str):
         return message
-    cleaned = _EXPLICIT_WORKER_DIRECTIVE_RE.sub("", message)
+    cleaned_message = _strip_routing_context_prefixes(message)
+    if not isinstance(cleaned_message, str):
+        return message
+
+    lines = cleaned_message.splitlines()
+    first_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip():
+            first_idx = idx
+            break
+    if first_idx is None:
+        return cleaned_message.strip() or message
+
+    if not _EXPLICIT_WORKER_DIRECTIVE_RE.fullmatch(lines[first_idx].strip()):
+        return cleaned_message.strip() or message
+
+    scan_idx = first_idx
+    while scan_idx < len(lines):
+        line = lines[scan_idx].strip()
+        if not line:
+            scan_idx += 1
+            continue
+        if not _EXPLICIT_WORKER_DIRECTIVE_RE.fullmatch(line):
+            break
+        scan_idx += 1
+
+    remaining = lines[scan_idx:]
+    cleaned = "\n".join(remaining)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned or message
+    return cleaned or cleaned_message.strip() or message
 
 
 def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[str, Any]]:

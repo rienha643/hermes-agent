@@ -44,6 +44,24 @@ def test_extract_explicit_worker_labels_returns_multiple_distinct_workers():
     assert _extract_explicit_worker_label(message) is None
 
 
+def test_extract_explicit_worker_labels_ignores_body_example_directives():
+    message = "작업 설명입니다.\n\n본문 예시: [WORKER: Eclipse]\n[WORKER: Palette] 예시도 포함"
+    assert _extract_explicit_worker_labels(message) == []
+    assert _extract_explicit_worker_label(message) is None
+
+
+def test_extract_explicit_worker_labels_ignores_placeholder_first_line():
+    message = "[WORKER: ...]\n설명 텍스트"
+    assert _extract_explicit_worker_labels(message) == []
+    assert _extract_explicit_worker_label(message) is None
+
+
+def test_extract_explicit_worker_labels_allows_leading_blank_lines():
+    message = "\n\n   [WORKER: Eclipse]   \n한 줄 설명"
+    assert _extract_explicit_worker_labels(message) == ["Eclipse"]
+    assert _extract_explicit_worker_label(message) == "Eclipse"
+
+
 def test_strip_routing_context_prefixes_preserves_current_body():
     message = (
         '[Replying to: "[WORKER: Palette] old"]\n\n'
@@ -153,6 +171,33 @@ def test_reply_context_direct_handling_uses_current_body_only():
     mocked.assert_not_called()
 
 
+def test_body_example_worker_directives_do_not_trigger_delegation():
+    agent = DummyAgent()
+    message = "본문에 [WORKER: Eclipse] 예시가 있지만 실제 지시는 아님\n[WORKER: Palette] 예시도 포함"
+    with patch("tools.delegate_tool.delegate_task") as mocked:
+        result = _run_explicit_worker_delegation(agent, message)
+    assert result is None
+    mocked.assert_not_called()
+
+
+def test_worker_result_frame_text_is_not_mistaken_for_worker_directive():
+    agent = DummyAgent()
+    message = "[WORKER RESULT: Eclipse]\n\n이전 결과 예시 본문"
+    with patch("tools.delegate_tool.delegate_task") as mocked:
+        result = _run_explicit_worker_delegation(agent, message)
+    assert result is None
+    mocked.assert_not_called()
+
+
+def test_placeholder_worker_directive_falls_back_to_normal_routing():
+    agent = DummyAgent()
+    message = "[WORKER: ...]\n본문 예시"
+    with patch("tools.delegate_tool.delegate_task") as mocked:
+        result = _run_explicit_worker_delegation(agent, message)
+    assert result is None
+    mocked.assert_not_called()
+
+
 def test_duplicate_same_worker_directives_delegate_once():
     agent = DummyAgent()
     payload = {
@@ -173,6 +218,27 @@ def test_duplicate_same_worker_directives_delegate_once():
     assert "[WORKER RESULT: Eclipse]" in result["final_response"]
 
 
+def test_first_directive_routes_even_when_body_contains_worker_example():
+    agent = DummyAgent()
+    payload = {
+        "results": [
+            {
+                "status": "completed",
+                "summary": "ECLIPSE_OK",
+                "api_calls": 1,
+                "artifacts": [],
+            }
+        ]
+    }
+    message = "[WORKER: Eclipse]\n본문 예시: [WORKER: Palette] 는 설명 텍스트일 뿐임"
+    with patch("tools.delegate_tool.delegate_task", return_value=json.dumps(payload)) as mocked:
+        result = _run_explicit_worker_delegation(agent, message)
+    assert result is not None
+    mocked.assert_called_once()
+    assert mocked.call_args.kwargs["profile"] == "coder"
+    assert "Palette" in mocked.call_args.kwargs["goal"]
+
+
 def test_multi_worker_directives_return_unsupported_message_without_delegation():
     agent = DummyAgent()
     with patch("tools.delegate_tool.delegate_task") as mocked:
@@ -182,3 +248,12 @@ def test_multi_worker_directives_return_unsupported_message_without_delegation()
     assert result["completed"] is False
     assert "[WORKER RESULT: MULTI_WORKER_UNSUPPORTED]" in result["final_response"]
     assert "multi-worker delegation is not supported in one turn" in result["final_response"]
+
+
+def test_multi_worker_examples_in_body_do_not_trigger_unsupported_error():
+    agent = DummyAgent()
+    message = "설명 본문\n\n예시1: [WORKER: Eclipse]\n예시2: [WORKER: Palette]"
+    with patch("tools.delegate_tool.delegate_task") as mocked:
+        result = _run_explicit_worker_delegation(agent, message)
+    assert result is None
+    mocked.assert_not_called()
