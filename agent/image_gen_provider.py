@@ -178,6 +178,36 @@ def _images_cache_dir() -> Path:
     return path
 
 
+_SSD_IMAGE_ROOT = Path("/Volumes/SSD_Hermes/HermesWork/Image")
+
+
+def _verify_image_storage_root(published_dir: Path) -> Dict[str, Any]:
+    """Return image-root storage diagnostics and enforce SSD anchoring in production."""
+    image_root = Path(published_dir).parent
+    resolved_image_root = image_root.resolve()
+    resolved_ssd_root = _SSD_IMAGE_ROOT.resolve()
+    is_ssd_root = (
+        resolved_image_root == resolved_ssd_root
+        or resolved_image_root.is_relative_to(resolved_ssd_root)
+    )
+
+    verification = {
+        "logical_path": str(image_root),
+        "realpath": str(resolved_image_root),
+        "is_symlink": image_root.is_symlink() or image_root.parent.is_symlink(),
+        "is_ssd_root": is_ssd_root,
+        "expected_ssd_root": str(resolved_ssd_root),
+    }
+
+    if not is_ssd_root and "PYTEST_CURRENT_TEST" not in os.environ:
+        raise RuntimeError(
+            "Image artifact publish requires Image root on SSD-backed HermesWork path "
+            f"({resolved_ssd_root})."
+        )
+
+    return verification
+
+
 def _publish_image_artifact(
     source: Path,
     *,
@@ -229,14 +259,17 @@ def publish_filesystem_image_bundle(
 
     project_record, published_dir = resolve_project_artifact_dir("Image", project_key)
     published_dir.mkdir(parents=True, exist_ok=True)
+    storage_verification = _verify_image_storage_root(published_dir)
     primary_image_path = next_versioned_child_path(published_dir, f"{artifact_key}{source.suffix}")
     shutil.copyfile(source, primary_image_path)
 
     versioned_stem = primary_image_path.stem
-    workflow_path = published_dir / f"{versioned_stem}.workflow.json"
-    prompt_path = published_dir / f"{versioned_stem}.prompt.json"
-    metadata_path = published_dir / f"{versioned_stem}.metadata.json"
-    manifest_path = published_dir / "manifest.json"
+    sidecar_dir = published_dir / "_sidecars"
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+    workflow_path = sidecar_dir / f"{versioned_stem}.workflow.json"
+    prompt_path = sidecar_dir / f"{versioned_stem}.prompt.json"
+    metadata_path = sidecar_dir / f"{versioned_stem}.metadata.json"
+    manifest_path = sidecar_dir / "manifest.json"
 
     metadata_payload = dict(metadata)
     metadata_payload.update(
@@ -245,6 +278,12 @@ def publish_filesystem_image_bundle(
             "output_source_path": str(source),
             "published_primary_path": str(primary_image_path),
             "published_dir": str(published_dir),
+            "published_sidecar_dir": str(sidecar_dir),
+            "workflow_path": str(workflow_path),
+            "prompt_path": str(prompt_path),
+            "metadata_sidecar_path": str(metadata_path),
+            "manifest_path": str(manifest_path),
+            "storage_verification": storage_verification,
         }
     )
 
@@ -268,14 +307,17 @@ def publish_filesystem_image_bundle(
         "primary_image": primary_image_path.name,
         "files": [
             primary_image_path.name,
-            workflow_path.name,
-            prompt_path.name,
-            metadata_path.name,
+            f"{sidecar_dir.name}/{workflow_path.name}",
+            f"{sidecar_dir.name}/{prompt_path.name}",
+            f"{sidecar_dir.name}/{metadata_path.name}",
+            f"{sidecar_dir.name}/{manifest_path.name}",
         ],
         "sidecars": {
             "workflow": workflow_path.name,
             "prompt": prompt_path.name,
             "metadata": metadata_path.name,
+            "manifest": manifest_path.name,
+            "dir": str(sidecar_dir),
         },
         "prompt_id": metadata_payload.get("prompt_id", ""),
         "engine": metadata_payload.get("provider", ""),
@@ -299,6 +341,8 @@ def publish_filesystem_image_bundle(
         "manifest_path": manifest_path,
         "primary_image": primary_image_path.name,
         "sidecars": manifest_payload["sidecars"],
+        "storage_verification": storage_verification,
+        "sidecar_dir": sidecar_dir,
         "nas_hook_requested": nas_hook_requested,
     }
 
