@@ -487,6 +487,163 @@ async def test_handle_message_stale_result_keeps_newer_generation_callback(monke
     assert adapter._post_delivery_callbacks[session_key][0] == 2
 
 
+@pytest.mark.asyncio
+async def test_response_ready_log_includes_attribution_fields(monkeypatch, caplog):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-attr",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+    )
+    runner = _make_runner(session_entry)
+    runner.session_store.load_transcript.return_value = []
+    runner._run_agent = AsyncMock(
+        return_value={
+            "final_response": "[WORKER RESULT: Eclipse]\n\nPONG",
+            "messages": [],
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 10,
+            "input_tokens": 12,
+            "output_tokens": 5,
+            "model": "openai/test-model",
+            "api_calls": 1,
+            "owner_kind": "explicit_worker",
+            "delegated_target_profile": "coder",
+        }
+    )
+
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
+    monkeypatch.setattr(
+        "agent.model_metadata.get_model_context_length",
+        lambda *_args, **_kwargs: 100000,
+    )
+    monkeypatch.setattr(gateway_run, "_resolve_active_profile_for_attribution", lambda: "speedy")
+
+    with caplog.at_level("INFO"):
+        result = await runner._handle_message(_make_event("[WORKER: Eclipse]\nPING"))
+
+    assert "PONG" in result
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "response ready:" in joined
+    assert "session_id=sess-attr" in joined
+    assert f"session_key={session_entry.session_key}" in joined
+    assert "run_generation=1" in joined
+    assert "inbound_message_id=m1" in joined
+    assert "owner_kind=explicit_worker" in joined
+    assert "active_profile=speedy" in joined
+    assert "delegated_target_profile=coder" in joined
+
+
+@pytest.mark.asyncio
+async def test_handle_message_discards_stale_final_response_before_delivery(monkeypatch):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-final-stale",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+    )
+    runner = _make_runner(session_entry)
+    runner.session_store.load_transcript.return_value = []
+    runner._run_agent = AsyncMock(
+        return_value={
+            "final_response": "late reply",
+            "messages": [],
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 80,
+            "input_tokens": 120,
+            "output_tokens": 45,
+            "model": "openai/test-model",
+            "api_calls": 50,
+            "owner_kind": "explicit_worker",
+            "delegated_target_profile": "coder",
+        }
+    )
+
+    state = {"calls": 0}
+
+    def _fake_is_current(_session_key, _generation):
+        state["calls"] += 1
+        return state["calls"] == 1
+
+    runner._is_session_run_current = _fake_is_current
+
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
+    monkeypatch.setattr(
+        "agent.model_metadata.get_model_context_length",
+        lambda *_args, **_kwargs: 100000,
+    )
+
+    result = await runner._handle_message(_make_event("[WORKER: Eclipse]\nPING"))
+
+    assert result is None
+    runner.session_store.append_to_transcript.assert_not_called()
+    sent_payloads = [call.args[1] for call in runner.adapters[Platform.TELEGRAM].send.await_args_list]
+    assert all("late reply" not in payload for payload in sent_payloads)
+
+
+@pytest.mark.asyncio
+async def test_worker_labelled_request_does_not_reemit_old_worker_result_on_stale_generation(monkeypatch):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-worker-stale",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+    )
+    runner = _make_runner(session_entry)
+    runner.session_store.load_transcript.return_value = []
+    stale_payload = "[WORKER RESULT: Eclipse]\n\nOLD_RESULT"
+    runner._run_agent = AsyncMock(
+        return_value={
+            "final_response": stale_payload,
+            "messages": [],
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 80,
+            "input_tokens": 120,
+            "output_tokens": 45,
+            "model": "openai/test-model",
+            "api_calls": 50,
+            "owner_kind": "explicit_worker",
+            "delegated_target_profile": "coder",
+        }
+    )
+
+    state = {"calls": 0}
+
+    def _fake_is_current(_session_key, _generation):
+        state["calls"] += 1
+        return state["calls"] == 1
+
+    runner._is_session_run_current = _fake_is_current
+
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
+    monkeypatch.setattr(
+        "agent.model_metadata.get_model_context_length",
+        lambda *_args, **_kwargs: 100000,
+    )
+
+    result = await runner._handle_message(_make_event("[WORKER: Eclipse]\nComfyUI Smoke Test"))
+
+    assert result is None
+    runner.session_store.append_to_transcript.assert_not_called()
+    sent_payloads = [call.args[1] for call in runner.adapters[Platform.TELEGRAM].send.await_args_list]
+    assert all(stale_payload not in payload for payload in sent_payloads)
+
+
 
 @pytest.mark.asyncio
 async def test_status_command_bypasses_active_session_guard():

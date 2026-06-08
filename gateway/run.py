@@ -146,6 +146,7 @@ _DIRECT_HANDLING_ESCAPE_RE = re.compile(
     r"(Nebris가\s*직접\s*답해|직접\s*처리해|delegation\s*하지\s*마)",
     re.IGNORECASE,
 )
+_DIRECT_TASK_RE = re.compile(r"\[DIRECT TASK[^\]]*\]", re.IGNORECASE)
 _GATEWAY_WORKER_PROFILE_MAP = {
     "Eclipse": "coder",
     "Sylvia": "designer",
@@ -234,6 +235,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "completed": False,
             "failed": True,
             "error": "multi-worker delegation is not supported in one turn",
+            "owner_kind": "explicit_worker",
             "tools": [],
         }
 
@@ -251,6 +253,8 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "completed": False,
             "failed": True,
             "error": f"Unknown worker label: {worker_label}",
+            "owner_kind": "explicit_worker",
+            "delegated_target_profile": None,
             "tools": [],
         }
 
@@ -267,6 +271,8 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "completed": False,
             "failed": True,
             "error": "Invalid delegation payload",
+            "owner_kind": "explicit_worker",
+            "delegated_target_profile": mapped_profile,
             "tools": [],
         }
 
@@ -279,6 +285,8 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "completed": False,
             "failed": True,
             "error": payload.get("error"),
+            "owner_kind": "explicit_worker",
+            "delegated_target_profile": mapped_profile,
             "tools": [],
         }
 
@@ -296,6 +304,8 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "completed": False,
             "failed": True,
             "error": "Missing child result",
+            "owner_kind": "explicit_worker",
+            "delegated_target_profile": mapped_profile,
             "tools": [],
         }
 
@@ -310,6 +320,8 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "completed": False,
             "failed": True,
             "error": summary or status,
+            "owner_kind": "explicit_worker",
+            "delegated_target_profile": mapped_profile,
             "tools": [],
         }
 
@@ -330,8 +342,38 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
         "messages": [],
         "api_calls": int(first.get("api_calls") or 0),
         "completed": True,
+        "owner_kind": "explicit_worker",
+        "delegated_target_profile": mapped_profile,
+        "worker_label": worker_label,
         "tools": [],
     }
+
+
+def _classify_response_owner(message_text: Any, agent_result: Optional[Dict[str, Any]] = None) -> str:
+    """Classify the logical owner of a response for attribution logs."""
+    if isinstance(agent_result, dict):
+        owner_kind = str(agent_result.get("owner_kind") or "").strip()
+        if owner_kind:
+            return owner_kind
+
+    if not isinstance(message_text, str):
+        return "normal"
+
+    if _extract_explicit_worker_label(message_text):
+        return "explicit_worker"
+    if _DIRECT_TASK_RE.search(message_text):
+        return "direct_task"
+    return "normal"
+
+
+def _resolve_active_profile_for_attribution() -> str:
+    """Best-effort active profile name for gateway attribution logs."""
+    try:
+        from agent.file_safety import _resolve_active_profile_name
+
+        return _resolve_active_profile_name()
+    except Exception:
+        return "default"
 
 
 def _gateway_platform_value(platform: Any) -> str:
@@ -9201,10 +9243,21 @@ class GatewayRunner:
                 pass
 
             if not self._is_session_run_current(_quick_key, run_generation):
+                _current_generation = None
+                if _quick_key:
+                    _current_generation = self._session_run_generation.get(_quick_key)
+                _owner_kind = _classify_response_owner(message_text, agent_result)
+                _response_preview = agent_result.get("final_response") or ""
                 logger.info(
-                    "Discarding stale agent result for %s — generation %d is no longer current",
+                    "Discarding stale agent result for %s — expected_generation=%s current_generation=%s session_id=%s inbound_message_id=%s owner_kind=%s response=%d chars api_calls=%d",
                     _quick_key or "?",
                     run_generation,
+                    _current_generation,
+                    session_entry.session_id,
+                    self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                    _owner_kind,
+                    len(_response_preview),
+                    int(agent_result.get("api_calls", 0) or 0),
                 )
                 _stale_adapter = self.adapters.get(source.platform)
                 if getattr(type(_stale_adapter), "pop_post_delivery_callback", None) is not None:
@@ -9217,6 +9270,11 @@ class GatewayRunner:
                 return None
 
             response = agent_result.get("final_response") or ""
+            _owner_kind = _classify_response_owner(message_text, agent_result)
+            _delegated_target_profile = None
+            if isinstance(agent_result, dict):
+                _delegated_target_profile = agent_result.get("delegated_target_profile")
+            _active_profile = _resolve_active_profile_for_attribution()
 
             # Convert the agent's internal "(empty)" sentinel into a
             # user-friendly message.  "(empty)" means the model failed to
@@ -9234,9 +9292,19 @@ class GatewayRunner:
             _api_calls = agent_result.get("api_calls", 0)
             _resp_len = len(response)
             logger.info(
-                "response ready: platform=%s chat=%s time=%.1fs api_calls=%d response=%d chars",
-                _platform_name, source.chat_id or "unknown",
-                _response_time, _api_calls, _resp_len,
+                "response ready: platform=%s chat=%s session_id=%s session_key=%s run_generation=%s inbound_message_id=%s owner_kind=%s active_profile=%s delegated_target_profile=%s time=%.1fs api_calls=%d response=%d chars",
+                _platform_name,
+                source.chat_id or "unknown",
+                session_entry.session_id,
+                _quick_key or "",
+                run_generation,
+                self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                _owner_kind,
+                _active_profile,
+                _delegated_target_profile or "",
+                _response_time,
+                _api_calls,
+                _resp_len,
             )
 
             # Successful turn — clear any stuck-loop counter for this session.
@@ -9456,6 +9524,26 @@ class GatewayRunner:
                     "maximum context size and could not be compressed further. "
                     "Your next message will start a fresh session."
                 )
+
+            # Final run-generation guard before transcript persistence / delivery.
+            # This prevents an older run from writing an assistant reply that now
+            # belongs to a newer inbound request.
+            if not self._is_session_run_current(_quick_key, run_generation):
+                _current_generation = None
+                if _quick_key:
+                    _current_generation = self._session_run_generation.get(_quick_key)
+                logger.info(
+                    "Discarding stale final response before persistence/delivery for %s — expected_generation=%s current_generation=%s session_id=%s inbound_message_id=%s owner_kind=%s response=%d chars api_calls=%d",
+                    _quick_key or "?",
+                    run_generation,
+                    _current_generation,
+                    session_entry.session_id,
+                    self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                    _owner_kind,
+                    len(response),
+                    int(agent_result.get("api_calls", 0) or 0),
+                )
+                return None
 
             ts = datetime.now().isoformat()
             
