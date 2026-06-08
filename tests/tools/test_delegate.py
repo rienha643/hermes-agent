@@ -1881,6 +1881,104 @@ class TestDelegationCredentialResolution(unittest.TestCase):
         self.assertIn("Cannot resolve", str(ctx.exception))
 
     @patch("hermes_cli.runtime_provider.resolve_runtime_provider")
+    def test_provider_resolution_uses_target_profile_context_when_profile_scoped(self, mock_resolve):
+        seen = {}
+
+        def _capture(**kwargs):
+            from hermes_cli.auth import _auth_file_path
+            from hermes_constants import get_hermes_home
+
+            seen["requested"] = kwargs.get("requested")
+            seen["target_model"] = kwargs.get("target_model")
+            seen["home"] = os.environ.get("HOME")
+            seen["hermes_home"] = os.environ.get("HERMES_HOME")
+            seen["auth_path"] = str(_auth_file_path())
+            seen["resolved_home"] = str(get_hermes_home())
+            return {
+                "provider": "openai-codex",
+                "base_url": "https://chatgpt.com/backend-api/codex",
+                "api_key": "codex-key",
+                "api_mode": "codex_responses",
+            }
+
+        mock_resolve.side_effect = _capture
+        parent = _make_mock_parent(depth=0)
+        cfg = {"model": "gpt-5.4-mini", "provider": "openai-codex"}
+
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / ".hermes"
+            speedy_home = root / "profiles" / "speedy"
+            coder_home = root / "profiles" / "coder"
+            for home in (speedy_home, coder_home):
+                home.mkdir(parents=True)
+                (home / "config.yaml").write_text("", encoding="utf-8")
+                (home / ".env").write_text("", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HERMES_HOME": str(speedy_home),
+                    "HOME": str(speedy_home / "home"),
+                },
+                clear=False,
+            ):
+                with self.assertLogs("tools.delegate_tool", level="INFO") as logs:
+                    creds = _resolve_delegation_credentials(cfg, parent, profile="coder")
+
+        self.assertEqual(creds["provider"], "openai-codex")
+        self.assertEqual(seen["requested"], "openai-codex")
+        self.assertEqual(seen["target_model"], "gpt-5.4-mini")
+        self.assertEqual(Path(seen["hermes_home"]).resolve(), coder_home.resolve())
+        self.assertEqual(Path(seen["resolved_home"]).resolve(), coder_home.resolve())
+        self.assertEqual(Path(seen["auth_path"]).resolve(), (coder_home / "auth.json").resolve())
+        joined = "\n".join(logs.output)
+        self.assertIn("active_profile=coder", joined)
+        self.assertIn(f"auth_path={(coder_home / 'auth.json').resolve()}", joined)
+
+    @patch("hermes_cli.runtime_provider.resolve_runtime_provider")
+    def test_provider_resolution_uses_current_context_without_profile(self, mock_resolve):
+        seen = {}
+
+        def _capture(**kwargs):
+            from hermes_cli.auth import _auth_file_path
+            from hermes_constants import get_hermes_home
+
+            seen["hermes_home"] = os.environ.get("HERMES_HOME")
+            seen["auth_path"] = str(_auth_file_path())
+            seen["resolved_home"] = str(get_hermes_home())
+            return {
+                "provider": "openai-codex",
+                "base_url": "https://chatgpt.com/backend-api/codex",
+                "api_key": "codex-key",
+                "api_mode": "codex_responses",
+            }
+
+        mock_resolve.side_effect = _capture
+        parent = _make_mock_parent(depth=0)
+        cfg = {"model": "gpt-5.4-mini", "provider": "openai-codex"}
+
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / ".hermes"
+            speedy_home = root / "profiles" / "speedy"
+            speedy_home.mkdir(parents=True)
+            (speedy_home / "config.yaml").write_text("", encoding="utf-8")
+            (speedy_home / ".env").write_text("", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HERMES_HOME": str(speedy_home),
+                    "HOME": str(speedy_home / "home"),
+                },
+                clear=False,
+            ):
+                _resolve_delegation_credentials(cfg, parent)
+
+        self.assertEqual(Path(seen["hermes_home"]).resolve(), speedy_home.resolve())
+        self.assertEqual(Path(seen["resolved_home"]).resolve(), speedy_home.resolve())
+        self.assertEqual(Path(seen["auth_path"]).resolve(), (speedy_home / "auth.json").resolve())
+
+    @patch("hermes_cli.runtime_provider.resolve_runtime_provider")
     def test_provider_resolves_but_no_api_key_raises(self, mock_resolve):
         """When provider resolves but has no API key, ValueError is raised."""
         mock_resolve.return_value = {
@@ -1989,6 +2087,39 @@ class TestDelegationCredentialResolution(unittest.TestCase):
 
 class TestDelegationProviderIntegration(unittest.TestCase):
     """Integration tests: delegation config → _run_single_child → AIAgent construction."""
+
+    @patch("tools.delegate_tool._build_child_agent")
+    @patch("tools.delegate_tool._resolve_delegation_credentials")
+    @patch("tools.delegate_tool._load_config")
+    def test_delegate_task_resolves_credentials_per_task_profile(self, mock_cfg, mock_creds, mock_build_child):
+        mock_cfg.return_value = {
+            "max_iterations": 45,
+            "model": "gpt-5.4-mini",
+            "provider": "openai-codex",
+        }
+        mock_creds.return_value = {
+            "model": "gpt-5.4-mini",
+            "provider": "openai-codex",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+            "api_key": "codex-key",
+            "api_mode": "codex_responses",
+            "command": None,
+            "args": [],
+        }
+        mock_build_child.return_value = MagicMock()
+        parent = _make_mock_parent(depth=0)
+
+        with patch("tools.delegate_tool._run_single_child") as mock_run_single:
+            mock_run_single.return_value = {
+                "task_index": 0,
+                "status": "completed",
+                "summary": "done",
+                "api_calls": 1,
+                "duration_seconds": 0.1,
+            }
+            delegate_task(goal="Check auth", profile="coder", parent_agent=parent)
+
+        mock_creds.assert_called_once_with(mock_cfg.return_value, parent, profile="coder")
 
     @patch("tools.delegate_tool._load_config")
     @patch("tools.delegate_tool._resolve_delegation_credentials")

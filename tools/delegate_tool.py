@@ -3169,16 +3169,6 @@ def delegate_task(
         )
     effective_max_iter = default_max_iter
 
-    # Resolve delegation credentials (provider:model pair).
-    # When delegation.provider is configured, this resolves the full credential
-    # bundle (base_url, api_key, api_mode) via the same runtime provider system
-    # used by CLI/gateway startup.  When unconfigured, returns None values so
-    # children inherit from the parent.
-    try:
-        creds = _resolve_delegation_credentials(cfg, parent_agent)
-    except ValueError as exc:
-        return tool_error(str(exc))
-
     # Normalize to task list
     max_children = _get_max_concurrent_children()
     recovered_tasks, tasks_error = _recover_tasks_from_json_string(tasks)
@@ -3271,6 +3261,14 @@ def delegate_task(
     children = []
     try:
         for i, t in enumerate(task_list):
+            try:
+                task_creds = _resolve_delegation_credentials(
+                    cfg,
+                    parent_agent,
+                    profile=t.get("profile"),
+                )
+            except ValueError as exc:
+                return tool_error(str(exc))
             task_acp_args = t.get("acp_args") if "acp_args" in t else None
             # Per-task role beats top-level; normalise again so unknown
             # per-task values warn and degrade to leaf uniformly.
@@ -3280,21 +3278,21 @@ def delegate_task(
                 goal=t["goal"],
                 context=t.get("context"),
                 toolsets=t.get("toolsets") or toolsets,
-                model=creds["model"],
+                model=task_creds["model"],
                 max_iterations=effective_max_iter,
                 task_count=n_tasks,
                 parent_agent=parent_agent,
-                override_provider=creds["provider"],
-                override_base_url=creds["base_url"],
-                override_api_key=creds["api_key"],
-                override_api_mode=creds["api_mode"],
+                override_provider=task_creds["provider"],
+                override_base_url=task_creds["base_url"],
+                override_api_key=task_creds["api_key"],
+                override_api_mode=task_creds["api_mode"],
                 override_acp_command=t.get("acp_command")
                 or acp_command
-                or creds.get("command"),
+                or task_creds.get("command"),
                 override_acp_args=(
                     task_acp_args
                     if task_acp_args is not None
-                    else (acp_args if acp_args is not None else creds.get("args"))
+                    else (acp_args if acp_args is not None else task_creds.get("args"))
                 ),
                 role=effective_role,
                 profile=t.get("profile"),
@@ -3588,7 +3586,40 @@ def _resolve_child_credential_pool(effective_provider: Optional[str], parent_age
     return None
 
 
-def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
+def _current_auth_lookup_context() -> Dict[str, Optional[str]]:
+    """Return the active profile/auth lookup context for diagnostics."""
+    from hermes_constants import get_hermes_home
+
+    profile_home = get_hermes_home()
+    active_profile = None
+    try:
+        if profile_home.parent.name == "profiles":
+            active_profile = profile_home.name
+    except Exception:
+        active_profile = None
+
+    auth_path = None
+    try:
+        from hermes_cli.auth import _auth_file_path
+
+        auth_path = str(_auth_file_path())
+    except Exception:
+        auth_path = None
+
+    return {
+        "active_profile": active_profile,
+        "hermes_home": str(profile_home),
+        "home": os.environ.get("HOME"),
+        "auth_path": auth_path,
+    }
+
+
+def _resolve_delegation_credentials(
+    cfg: dict,
+    parent_agent,
+    *,
+    profile: Optional[str] = None,
+) -> dict:
     """Resolve credentials for subagent delegation.
 
     If ``delegation.base_url`` is configured, subagents use that direct
@@ -3671,11 +3702,35 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
             "api_mode": None,
         }
 
-    # Provider is configured — resolve full credentials
-    try:
+    # Provider is configured — resolve full credentials.
+    # For profile-scoped delegated workers, provider resolution must happen in
+    # the TARGET profile context so auth/config lookups do not accidentally read
+    # the parent's auth store.
+    def _resolve_runtime_in_current_context():
         from hermes_cli.runtime_provider import resolve_runtime_provider
 
-        runtime = resolve_runtime_provider(requested=configured_provider, target_model=configured_model)
+        lookup = _current_auth_lookup_context()
+        logger.info(
+            "delegation provider resolution: requested_provider=%s target_model=%s active_profile=%s HERMES_HOME=%s HOME=%s auth_path=%s",
+            configured_provider,
+            configured_model,
+            lookup.get("active_profile") or "default",
+            lookup.get("hermes_home") or "",
+            lookup.get("home") or "",
+            lookup.get("auth_path") or "",
+        )
+        return resolve_runtime_provider(
+            requested=configured_provider,
+            target_model=configured_model,
+        )
+
+    try:
+        target_profile = str(profile or "").strip() or None
+        if target_profile:
+            with _profile_execution_runtime(target_profile):
+                runtime = _resolve_runtime_in_current_context()
+        else:
+            runtime = _resolve_runtime_in_current_context()
     except Exception as exc:
         raise ValueError(
             f"Cannot resolve delegation provider '{configured_provider}': {exc}. "
