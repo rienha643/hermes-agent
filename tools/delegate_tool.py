@@ -639,31 +639,44 @@ def _has_positive_multi_output_request(text: str) -> bool:
     return False
 
 
-def _single_output_cache_key(parent_task_id: Optional[str], profile: Optional[str]) -> Optional[str]:
+def _single_output_cache_key(
+    parent_task_id: Optional[str],
+    profile: Optional[str],
+    cache_scope: Optional[str] = None,
+) -> Optional[str]:
     task_id = str(parent_task_id or "").strip()
     if not task_id:
         return None
     label = str(profile or "").strip().lower() or "default"
-    return f"{task_id}:{label}"
+    scope = str(cache_scope or "").strip()
+    return f"{task_id}:{label}:{scope or 'global'}"
 
 
 def _get_cached_single_output_result(
-    parent_task_id: Optional[str], profile: Optional[str]
+    parent_task_id: Optional[str],
+    profile: Optional[str],
+    cache_scope: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    cache_key = _single_output_cache_key(parent_task_id, profile)
+    cache_key = _single_output_cache_key(parent_task_id, profile, cache_scope)
     if not cache_key:
         return None
     with _SINGLE_OUTPUT_IMAGE_RESULT_LOCK:
         cached = _SINGLE_OUTPUT_IMAGE_RESULT_CACHE.get(cache_key)
-        return json.loads(json.dumps(cached)) if cached else None
+        if not cached:
+            return None
+        cloned = json.loads(json.dumps(cached))
+        cloned["_cached_single_output_result"] = True
+        cloned["_cache_key"] = cache_key
+        return cloned
 
 
 def _store_cached_single_output_result(
     parent_task_id: Optional[str],
     profile: Optional[str],
     payload: Dict[str, Any],
+    cache_scope: Optional[str] = None,
 ) -> None:
-    cache_key = _single_output_cache_key(parent_task_id, profile)
+    cache_key = _single_output_cache_key(parent_task_id, profile, cache_scope)
     if not cache_key:
         return
     with _SINGLE_OUTPUT_IMAGE_RESULT_LOCK:
@@ -3234,9 +3247,11 @@ def delegate_task(
         task["_task_type"] = _normalize_delegate_task_type(task.get("task_type") or task.get("type"))
 
     if len(task_list) == 1 and task_list[0].get("_single_output_image"):
+        cache_scope = str(getattr(parent_agent, "_delegate_cache_scope", "") or "").strip() or None
         cached_payload = _get_cached_single_output_result(
             parent_task_id,
             task_list[0].get("profile"),
+            cache_scope,
         )
         if cached_payload:
             return json.dumps(cached_payload)
@@ -3544,10 +3559,12 @@ def delegate_task(
         "total_duration_seconds": total_duration,
     }
     if len(task_list) == 1 and task_list[0].get("_single_output_image"):
+        cache_scope = str(getattr(parent_agent, "_delegate_cache_scope", "") or "").strip() or None
         _store_cached_single_output_result(
             parent_task_id,
             task_list[0].get("profile"),
             payload,
+            cache_scope,
         )
 
     return json.dumps(payload, ensure_ascii=False)

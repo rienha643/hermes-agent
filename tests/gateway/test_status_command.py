@@ -1,6 +1,7 @@
 """Tests for gateway /status behavior and token persistence."""
 
 from datetime import datetime
+import hashlib
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -51,6 +52,7 @@ def _make_runner(session_entry: SessionEntry, *, platform: Platform = Platform.T
     runner.session_store.update_session = MagicMock()
     runner._running_agents = {}
     runner._session_run_generation = {}
+    runner._last_response_signature_by_session = {}
     runner._pending_messages = {}
     runner._pending_approvals = {}
     runner._session_db = MagicMock()
@@ -736,6 +738,118 @@ async def test_worker_labelled_request_does_not_reemit_old_worker_result_on_stal
     runner.session_store.append_to_transcript.assert_not_called()
     sent_payloads = [call.args[1] for call in runner.adapters[Platform.TELEGRAM].send.await_args_list]
     assert all(stale_payload not in payload for payload in sent_payloads)
+
+
+@pytest.mark.asyncio
+async def test_explicit_worker_cached_replay_with_same_sha_is_discarded(monkeypatch, caplog):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-explicit-replay",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+    )
+    runner = _make_runner(session_entry)
+    runner.session_store.load_transcript.return_value = []
+    stale_payload = "[WORKER RESULT: Eclipse]\n\nOLD_RESULT"
+    stale_sha = hashlib.sha256(stale_payload.encode()).hexdigest()
+    runner._last_response_signature_by_session[session_entry.session_key] = {
+        "response_sha": stale_sha,
+        "owner_kind": "explicit_worker",
+        "delegated_target_profile": "coder",
+        "run_generation": 7,
+        "fresh_execution_evidence": True,
+    }
+    runner._run_agent = AsyncMock(
+        return_value={
+            "final_response": stale_payload,
+            "messages": [],
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 80,
+            "input_tokens": 120,
+            "output_tokens": 45,
+            "model": "openai/test-model",
+            "api_calls": 27,
+            "owner_kind": "explicit_worker",
+            "delegated_target_profile": "coder",
+            "fresh_execution_evidence": False,
+        }
+    )
+
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
+    monkeypatch.setattr(
+        "agent.model_metadata.get_model_context_length",
+        lambda *_args, **_kwargs: 100000,
+    )
+
+    with caplog.at_level("WARNING"):
+        result = await runner._handle_message(_make_event("[WORKER: Eclipse]\nRetry"))
+
+    assert result is None
+    runner.session_store.append_to_transcript.assert_not_called()
+    sent_payloads = [call.args[1] for call in runner.adapters[Platform.TELEGRAM].send.await_args_list]
+    assert all(stale_payload not in payload for payload in sent_payloads)
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "Discarding stale explicit worker replay" in joined
+    assert f"response_sha={stale_sha}" in joined
+    assert f"previous_response_sha={stale_sha}" in joined
+    assert "fresh_execution_evidence=False" in joined
+
+
+@pytest.mark.asyncio
+async def test_explicit_worker_same_sha_with_fresh_execution_is_allowed(monkeypatch):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-explicit-fresh",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+    )
+    runner = _make_runner(session_entry)
+    runner.session_store.load_transcript.return_value = []
+    payload = "[WORKER RESULT: Eclipse]\n\nPING 확인했습니다."
+    payload_sha = hashlib.sha256(payload.encode()).hexdigest()
+    runner._last_response_signature_by_session[session_entry.session_key] = {
+        "response_sha": payload_sha,
+        "owner_kind": "explicit_worker",
+        "delegated_target_profile": "coder",
+        "run_generation": 2,
+        "fresh_execution_evidence": True,
+    }
+    runner._run_agent = AsyncMock(
+        return_value={
+            "final_response": payload,
+            "messages": [],
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 10,
+            "input_tokens": 12,
+            "output_tokens": 5,
+            "model": "openai/test-model",
+            "api_calls": 1,
+            "owner_kind": "explicit_worker",
+            "delegated_target_profile": "coder",
+            "fresh_execution_evidence": True,
+        }
+    )
+
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
+    monkeypatch.setattr(
+        "agent.model_metadata.get_model_context_length",
+        lambda *_args, **_kwargs: 100000,
+    )
+
+    result = await runner._handle_message(_make_event("[WORKER: Eclipse]\nPING"))
+
+    assert payload in result
+    assert runner._last_response_signature_by_session[session_entry.session_key]["response_sha"] == payload_sha
 
 
 

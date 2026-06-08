@@ -458,6 +458,63 @@ class TestDelegateTask(unittest.TestCase):
         self.assertEqual(second["artifacts"], ["/tmp/current-image.png"])
         self.assertEqual(mock_run_child.call_count, 1)
         self.assertEqual(mock_build_child.call_count, 1)
+        self.assertTrue(second.get("_cached_single_output_result"))
+
+    @patch("tools.delegate_tool._run_single_child")
+    @patch("tools.delegate_tool._build_child_agent")
+    def test_single_output_image_cache_scope_prevents_cross_turn_replay(self, mock_build_child, mock_run_child):
+        parent = _make_mock_parent()
+        parent._current_task_id = "parent-task-1"
+        parent._delegate_cache_scope = "turn-1"
+
+        child = MagicMock()
+        child._delegate_role = "leaf"
+        child.session_id = "child-session"
+        mock_build_child.return_value = child
+        mock_run_child.side_effect = [
+            {
+                "task_index": 0,
+                "status": "completed",
+                "summary": "/tmp/first-image.png",
+                "artifacts": ["/tmp/first-image.png"],
+                "api_calls": 1,
+                "duration_seconds": 0.2,
+                "_child_role": "leaf",
+            },
+            {
+                "task_index": 0,
+                "status": "completed",
+                "summary": "/tmp/second-image.png",
+                "artifacts": ["/tmp/second-image.png"],
+                "api_calls": 1,
+                "duration_seconds": 0.2,
+                "_child_role": "leaf",
+            },
+        ]
+
+        first = json.loads(
+            delegate_task(
+                goal="Forge로 고양이 이미지를 1장 생성",
+                toolsets=["image_gen", "terminal", "file", "vision"],
+                profile="forge",
+                parent_agent=parent,
+            )
+        )
+        parent._delegate_cache_scope = "turn-2"
+        second = json.loads(
+            delegate_task(
+                goal="Forge로 고양이 이미지를 1장 생성",
+                toolsets=["image_gen", "terminal", "file", "vision"],
+                profile="forge",
+                parent_agent=parent,
+            )
+        )
+
+        self.assertEqual(first["artifacts"], ["/tmp/first-image.png"])
+        self.assertEqual(second["artifacts"], ["/tmp/second-image.png"])
+        self.assertEqual(mock_run_child.call_count, 2)
+        self.assertEqual(mock_build_child.call_count, 2)
+        self.assertFalse(second.get("_cached_single_output_result", False))
 
     def test_task_missing_goal(self):
         parent = _make_mock_parent()

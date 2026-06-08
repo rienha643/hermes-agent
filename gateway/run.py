@@ -26,6 +26,7 @@ except ModuleNotFoundError:
 
 import asyncio
 import dataclasses
+import hashlib
 import inspect
 import json
 import logging
@@ -316,6 +317,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
 
     summary = first.get("summary") or payload.get("summary") or ""
     status = first.get("status") or "completed"
+    fresh_execution_evidence = not bool(payload.get("_cached_single_output_result"))
     if status != "completed":
         final = f"[WORKER RESULT: {worker_label}]\n\ndelegation failed\n{summary or status}"
         return {
@@ -328,6 +330,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "owner_kind": "explicit_worker",
             "worker_label": worker_label,
             "delegated_target_profile": mapped_profile,
+            "fresh_execution_evidence": fresh_execution_evidence,
             "tools": [],
         }
 
@@ -351,6 +354,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
         "owner_kind": "explicit_worker",
         "delegated_target_profile": mapped_profile,
         "worker_label": worker_label,
+        "fresh_execution_evidence": fresh_execution_evidence,
         "tools": [],
     }
 
@@ -2163,6 +2167,7 @@ class GatewayRunner:
         self._pending_native_image_paths_by_session: Dict[str, List[str]] = {}
         self._busy_ack_ts: Dict[str, float] = {}  # last busy-ack timestamp per session (debounce)
         self._session_run_generation: Dict[str, int] = {}
+        self._last_response_signature_by_session: Dict[str, Dict[str, Any]] = {}
         # LRU cache of live SessionSources keyed by session_key. Used by
         # fallback routing paths (shutdown notifications, synthetic
         # background-process events) when the persisted origin is missing
@@ -9314,6 +9319,35 @@ class GatewayRunner:
                 agent_result,
                 _owner_kind,
             )
+            _fresh_execution_evidence = bool(agent_result.get("fresh_execution_evidence", True))
+            _response_sha = hashlib.sha256(response.encode("utf-8", errors="replace")).hexdigest() if response else ""
+            _previous_signature = (
+                self._last_response_signature_by_session.get(_quick_key or "")
+                if _quick_key
+                else None
+            )
+            _previous_response_sha = str((_previous_signature or {}).get("response_sha") or "")
+            if (
+                _owner_kind == "explicit_worker"
+                and not _fresh_execution_evidence
+                and _response_sha
+                and _previous_response_sha
+                and _response_sha == _previous_response_sha
+            ):
+                logger.warning(
+                    "Discarding stale explicit worker replay for %s — session_id=%s session_key=%s run_generation=%s inbound_message_id=%s owner_kind=%s delegated_target_profile=%s response_sha=%s previous_response_sha=%s fresh_execution_evidence=%s",
+                    _quick_key or "?",
+                    session_entry.session_id,
+                    _quick_key or "",
+                    run_generation,
+                    self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                    _owner_kind,
+                    _delegated_target_profile or "",
+                    _response_sha,
+                    _previous_response_sha,
+                    _fresh_execution_evidence,
+                )
+                return None
             if _owner_kind == "explicit_worker" and not _delegated_target_profile:
                 logger.warning(
                     "response ready attribution missing delegated_target_profile: platform=%s chat=%s session_id=%s session_key=%s run_generation=%s inbound_message_id=%s owner_kind=%s active_profile=%s",
@@ -9690,6 +9724,14 @@ class GatewayRunner:
                 session_entry.session_key,
                 last_prompt_tokens=agent_result.get("last_prompt_tokens", 0),
             )
+            if _quick_key and _response_sha:
+                self._last_response_signature_by_session[_quick_key] = {
+                    "response_sha": _response_sha,
+                    "owner_kind": _owner_kind,
+                    "delegated_target_profile": _delegated_target_profile or "",
+                    "run_generation": run_generation,
+                    "fresh_execution_evidence": _fresh_execution_evidence,
+                }
 
             # Auto voice reply: send TTS audio before the text response
             _already_sent = bool(agent_result.get("already_sent"))
@@ -17786,6 +17828,17 @@ class GatewayRunner:
             _approval_session_key = session_key or ""
             _approval_session_token = set_current_session_key(_approval_session_key)
             register_gateway_notify(_approval_session_key, _approval_notify_sync)
+            _previous_delegate_cache_scope = getattr(agent, "_delegate_cache_scope", None)
+            _delegate_cache_scope = ":".join(
+                part
+                for part in [
+                    session_key or "",
+                    str(run_generation if run_generation is not None else ""),
+                    str(event_message_id or ""),
+                ]
+                if part
+            )
+            setattr(agent, "_delegate_cache_scope", _delegate_cache_scope or None)
             try:
                 _explicit_worker_result = _run_explicit_worker_delegation(agent, message)
                 if _explicit_worker_result is not None:
@@ -17835,6 +17888,13 @@ class GatewayRunner:
                     result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
             finally:
                 unregister_gateway_notify(_approval_session_key)
+                if _previous_delegate_cache_scope is None:
+                    try:
+                        delattr(agent, "_delegate_cache_scope")
+                    except Exception:
+                        pass
+                else:
+                    setattr(agent, "_delegate_cache_scope", _previous_delegate_cache_scope)
                 # Cancel any pending clarify entries so blocked agent
                 # threads don't hang past the end of the run (interrupt,
                 # completion, gateway shutdown).  Idempotent.
@@ -18049,6 +18109,7 @@ class GatewayRunner:
                 "session_id": effective_session_id,
                 "response_previewed": result.get("response_previewed", False),
                 "response_transformed": result.get("response_transformed", False),
+                "fresh_execution_evidence": result.get("fresh_execution_evidence", True),
             }
         
         # Start progress message sender if enabled
