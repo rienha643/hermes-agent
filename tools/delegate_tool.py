@@ -329,6 +329,119 @@ def _extract_output_tail(
     return tail
 
 
+def _snapshot_child_activity(child: Any, *, fallback_last_activity_ts: float) -> Dict[str, Any]:
+    """Normalize a child's activity summary for timeout/watchdog use.
+
+    ``AIAgent.get_activity_summary()`` already exposes last-activity data, but
+    delegated child doubles and mocks do not always populate every field.  This
+    helper clamps the shape into a consistent snapshot so the watchdog can make
+    an inactivity decision and the timeout logs can identify the exact child
+    state that was observed.
+    """
+    summary: Dict[str, Any] = {}
+    try:
+        raw_summary = child.get_activity_summary()
+        if isinstance(raw_summary, dict):
+            summary = raw_summary
+    except Exception as exc:
+        logger.debug("Could not read child activity summary: %s", exc)
+
+    last_activity_ts = summary.get("last_activity_ts")
+    try:
+        if last_activity_ts is not None:
+            last_activity_ts = float(last_activity_ts)
+    except (TypeError, ValueError):
+        last_activity_ts = None
+    if last_activity_ts is None:
+        last_activity_ts = float(fallback_last_activity_ts)
+
+    current_tool = summary.get("current_tool")
+    if current_tool is not None and not isinstance(current_tool, str):
+        current_tool = str(current_tool)
+
+    last_activity_desc = summary.get("last_activity_desc")
+    if last_activity_desc is None:
+        last_activity_desc = ""
+    elif not isinstance(last_activity_desc, str):
+        last_activity_desc = str(last_activity_desc)
+
+    api_call_count = summary.get("api_call_count", 0)
+    try:
+        api_call_count = int(api_call_count or 0)
+    except (TypeError, ValueError):
+        api_call_count = 0
+
+    max_iterations = summary.get("max_iterations", getattr(child, "max_iterations", 0))
+    try:
+        max_iterations = int(max_iterations or 0)
+    except (TypeError, ValueError):
+        max_iterations = 0
+
+    budget_used = summary.get("budget_used", 0)
+    try:
+        budget_used = int(budget_used or 0)
+    except (TypeError, ValueError):
+        budget_used = 0
+
+    budget_max = summary.get("budget_max", 0)
+    try:
+        budget_max = int(budget_max or 0)
+    except (TypeError, ValueError):
+        budget_max = 0
+
+    now = time.time()
+    seconds_since_activity = summary.get("seconds_since_activity")
+    try:
+        if seconds_since_activity is None:
+            seconds_since_activity = round(now - last_activity_ts, 1)
+        else:
+            seconds_since_activity = float(seconds_since_activity)
+    except (TypeError, ValueError):
+        seconds_since_activity = round(now - last_activity_ts, 1)
+
+    return {
+        "last_activity_ts": last_activity_ts,
+        "last_activity_desc": last_activity_desc,
+        "seconds_since_activity": seconds_since_activity,
+        "current_tool": current_tool,
+        "api_call_count": api_call_count,
+        "max_iterations": max_iterations,
+        "budget_used": budget_used,
+        "budget_max": budget_max,
+    }
+
+
+def _child_wait_mode(snapshot: Dict[str, Any]) -> str:
+    """Classify the child's observed wait mode for timeout diagnostics."""
+    current_tool = snapshot.get("current_tool")
+    if isinstance(current_tool, str) and current_tool:
+        return f"tool:{current_tool}"
+
+    desc = snapshot.get("last_activity_desc")
+    if not isinstance(desc, str) or not desc:
+        return "idle"
+
+    desc_norm = desc.strip().lower()
+    if "receiving stream response" in desc_norm:
+        return "provider_stream"
+    if "waiting for non-streaming api response" in desc_norm:
+        return "provider_non_stream"
+    if "waiting for provider response (streaming)" in desc_norm:
+        return "provider_stream_connect"
+    return f"activity:{desc_norm}"
+
+
+def _child_progress_marker(snapshot: Dict[str, Any]) -> tuple[Any, ...]:
+    """Return an observable progress signature for watchdog decisions."""
+    return (
+        snapshot.get("api_call_count", 0),
+        snapshot.get("current_tool") or "",
+        snapshot.get("last_activity_desc") or "",
+        snapshot.get("budget_used", 0),
+        snapshot.get("budget_max", 0),
+    )
+
+
 _ARTIFACT_PATH_RE = re.compile(
     r"(?<![/:\w.])(?:~/|/)(?:[\w.\-]+/)*[\w.\-]+\.(?:"
     r"png|jpg|jpeg|gif|webp|bmp|tiff|svg|mp4|mov|avi|mkv|webm|pdf|docx|doc|odt|rtf|"
@@ -801,7 +914,7 @@ _HEARTBEAT_INTERVAL = 30  # seconds between parent activity heartbeats during de
 #     operation (terminal command, web fetch, large file read)
 # The idle ceiling stays tight so genuinely stuck children don't mask the gateway
 # timeout. The in-tool ceiling is much higher so legit long-running tools get
-# time to finish; child_timeout_seconds (default 600s) is still the hard cap.
+# time to finish; child_timeout_seconds (default 600s) is the inactivity watchdog cap.
 _HEARTBEAT_STALE_CYCLES_IDLE = 15  # 15 * 30s = 450s idle between turns → stale
 _HEARTBEAT_STALE_CYCLES_IN_TOOL = 40  # 40 * 30s = 1200s stuck on same tool → stale
 DEFAULT_TOOLSETS = ["terminal", "file", "web"]
@@ -2292,9 +2405,13 @@ def _run_single_child(
             list(file_state.known_reads(parent_task_id)) if parent_task_id else []
         )
 
-        # Run child with a hard timeout to prevent indefinite blocking
-        # when the child's API call or tool-level HTTP request hangs.
+        # Wait on the child with an inactivity watchdog instead of a hard
+        # wall-clock cutoff.  Active children keep refreshing their own
+        # activity timestamps (stream chunks, non-streaming poll loops, tool
+        # progress), so the watchdog should only fire once the child has been
+        # quiet for the full timeout window.
         child_timeout = _get_child_timeout()
+        wait_poll_seconds = max(0.1, min(1.0, child_timeout / 10.0))
         _timeout_executor = ThreadPoolExecutor(
             max_workers=1,
             # Install a non-interactive approval callback in the worker thread
@@ -2351,98 +2468,168 @@ def _run_single_child(
 
         _child_future = _timeout_executor.submit(_run_with_thread_capture)
         try:
-            result = _child_future.result(timeout=child_timeout)
-        except Exception as _timeout_exc:
-            # Signal the child to stop so its thread can exit cleanly.
-            try:
-                if hasattr(child, "interrupt"):
-                    child.interrupt()
-                elif hasattr(child, "_interrupt_requested"):
-                    child._interrupt_requested = True
-            except Exception:
-                pass
-
-            is_timeout = isinstance(_timeout_exc, (FuturesTimeoutError, TimeoutError))
-            duration = round(time.monotonic() - child_start, 2)
-            logger.warning(
-                "Subagent %d %s after %.1fs",
-                task_index,
-                "timed out" if is_timeout else f"raised {type(_timeout_exc).__name__}",
-                duration,
+            result = None
+            _timeout_exc: Optional[BaseException] = None
+            _timeout_snapshot = _snapshot_child_activity(
+                child,
+                fallback_last_activity_ts=child_start,
             )
-
-            # When a subagent times out BEFORE making any API call, dump a
-            # diagnostic to help users (and us) see what the child was doing.
-            # See #14726 — without this, 0-API-call hangs are black boxes.
-            diagnostic_path: Optional[str] = None
-            child_api_calls = 0
-            try:
-                _summary = child.get_activity_summary()
-                child_api_calls = int(_summary.get("api_call_count", 0) or 0)
-            except Exception:
-                pass
-            if is_timeout and child_api_calls == 0:
-                diagnostic_path = _dump_subagent_timeout_diagnostic(
-                    child=child,
-                    task_index=task_index,
-                    timeout_seconds=float(child_timeout),
-                    duration_seconds=float(duration),
-                    worker_thread=_worker_thread_holder.get("t"),
-                    goal=goal,
-                )
-                if diagnostic_path:
-                    logger.warning(
-                        "Subagent %d 0-API-call timeout — diagnostic written to %s",
-                        task_index,
-                        diagnostic_path,
-                    )
-
-            if child_progress_cb:
+            _timeout_last_activity_ts = float(_timeout_snapshot["last_activity_ts"])
+            _timeout_observed_progress_ts = _timeout_last_activity_ts
+            _timeout_progress_marker = _child_progress_marker(_timeout_snapshot)
+            while True:
                 try:
-                    child_progress_cb(
-                        "subagent.complete",
-                        preview=(
-                            f"Timed out after {duration}s"
-                            if is_timeout
-                            else str(_timeout_exc)
-                        ),
-                        status="timeout" if is_timeout else "error",
-                        duration_seconds=duration,
-                        summary="",
+                    result = _child_future.result(timeout=wait_poll_seconds)
+                    break
+                except FuturesTimeoutError:
+                    _timeout_snapshot = _snapshot_child_activity(
+                        child,
+                        fallback_last_activity_ts=_timeout_last_activity_ts,
                     )
+                    _timeout_last_activity_ts = float(_timeout_snapshot["last_activity_ts"])
+                    _current_progress_marker = _child_progress_marker(_timeout_snapshot)
+                    if _current_progress_marker != _timeout_progress_marker:
+                        _timeout_observed_progress_ts = time.time()
+                        _timeout_progress_marker = _current_progress_marker
+                    _idle_basis_ts = max(_timeout_last_activity_ts, _timeout_observed_progress_ts)
+                    _idle_seconds = time.time() - _idle_basis_ts
+                    if _idle_seconds >= child_timeout:
+                        _timeout_exc = FuturesTimeoutError(
+                            f"Delegation watchdog timed out after {child_timeout}s "
+                            f"with no child activity (last watchdog-visible progress {_idle_seconds:.1f}s ago)"
+                        )
+                        break
+                    continue
+                except Exception as exc:
+                    _timeout_exc = exc
+                    break
+
+            if _timeout_exc is not None:
+                # Signal the child to stop so its thread can exit cleanly.
+                try:
+                    if hasattr(child, "interrupt"):
+                        child.interrupt()
+                    elif hasattr(child, "_interrupt_requested"):
+                        child._interrupt_requested = True
                 except Exception:
                     pass
 
-            if is_timeout:
-                if child_api_calls == 0:
-                    _err = (
-                        f"Subagent timed out after {child_timeout}s without "
-                        f"making any API call — the child never reached its "
-                        f"first LLM request (prompt construction, credential "
-                        f"resolution, or transport may be stuck)."
+                is_timeout = isinstance(_timeout_exc, (FuturesTimeoutError, TimeoutError))
+                duration = round(time.monotonic() - child_start, 2)
+                child_api_calls = int(_timeout_snapshot.get("api_call_count", 0) or 0)
+                child_tool = _timeout_snapshot.get("current_tool")
+                if not child_tool:
+                    child_tool = None
+                child_last_activity_desc = _timeout_snapshot.get("last_activity_desc") or "<none>"
+                child_last_activity_ts = float(_timeout_snapshot.get("last_activity_ts", child_start) or child_start)
+                child_seconds_since_activity = _timeout_snapshot.get("seconds_since_activity", 0.0)
+                child_max_iterations = int(_timeout_snapshot.get("max_iterations", 0) or 0)
+                child_budget_used = int(_timeout_snapshot.get("budget_used", 0) or 0)
+                child_budget_max = int(_timeout_snapshot.get("budget_max", 0) or 0)
+                child_wait_mode = _child_wait_mode(_timeout_snapshot)
+                child_future_state = (
+                    "cancelled" if _child_future.cancelled()
+                    else "done" if _child_future.done()
+                    else "running"
+                )
+                timeout_kind = (
+                    "Delegation watchdog timeout" if is_timeout else f"Subagent raised {type(_timeout_exc).__name__}"
+                )
+                logger.warning(
+                    "Subagent %d %s after %.1fs (future_state=%s, wait_mode=%s, "
+                    "child_activity_ts=%.3f, seconds_since_activity=%.1f, current_tool=%s, last_activity=%r, "
+                    "api_calls=%d, max_iterations=%d, budget=%d/%d)",
+                    task_index,
+                    timeout_kind,
+                    duration,
+                    child_future_state,
+                    child_wait_mode,
+                    child_last_activity_ts,
+                    float(child_seconds_since_activity or 0.0),
+                    child_tool or "<none>",
+                    child_last_activity_desc,
+                    child_api_calls,
+                    child_max_iterations,
+                    child_budget_used,
+                    child_budget_max,
+                )
+
+                # When a subagent times out BEFORE making any API call, dump a
+                # diagnostic to help users (and us) see what the child was doing.
+                # See #14726 — without this, 0-API-call hangs are black boxes.
+                diagnostic_path: Optional[str] = None
+                if is_timeout and child_api_calls == 0:
+                    diagnostic_path = _dump_subagent_timeout_diagnostic(
+                        child=child,
+                        task_index=task_index,
+                        timeout_seconds=float(child_timeout),
+                        duration_seconds=float(duration),
+                        worker_thread=_worker_thread_holder.get("t"),
+                        goal=goal,
                     )
                     if diagnostic_path:
-                        _err += f" Diagnostic: {diagnostic_path}"
-                else:
-                    _err = (
-                        f"Subagent timed out after {child_timeout}s with "
-                        f"{child_api_calls} API call(s) completed — likely "
-                        f"stuck on a slow API call or unresponsive network request."
-                    )
-            else:
-                _err = str(_timeout_exc)
+                        logger.warning(
+                            "Subagent %d 0-API-call timeout — diagnostic written to %s",
+                            task_index,
+                            diagnostic_path,
+                        )
 
-            return {
-                "task_index": task_index,
-                "status": "timeout" if is_timeout else "error",
-                "summary": None,
-                "error": _err,
-                "exit_reason": "timeout" if is_timeout else "error",
-                "api_calls": child_api_calls,
-                "duration_seconds": duration,
-                "_child_role": getattr(child, "_delegate_role", None),
-                "diagnostic_path": diagnostic_path,
-            }
+                if child_progress_cb:
+                    try:
+                        child_progress_cb(
+                            "subagent.complete",
+                            preview=(
+                                f"Timed out after {duration}s"
+                                if is_timeout
+                                else str(_timeout_exc)
+                            ),
+                            status="timeout" if is_timeout else "error",
+                            duration_seconds=duration,
+                            summary="",
+                        )
+                    except Exception:
+                        pass
+
+                if is_timeout:
+                    if child_api_calls == 0:
+                        _err = (
+                            f"Delegation watchdog timeout after {child_timeout}s "
+                            f"without any child API call — the child never reached "
+                            f"its first LLM request (prompt construction, credential "
+                            f"resolution, or transport may be stuck)."
+                        )
+                        if diagnostic_path:
+                            _err += f" Diagnostic: {diagnostic_path}"
+                    else:
+                        _err = (
+                            f"Delegation watchdog timeout after {child_timeout}s "
+                            f"with {child_api_calls} API call(s) completed; child "
+                            f"last activity was {float(child_seconds_since_activity or 0.0):.1f}s ago "
+                            f"({child_last_activity_desc}, wait_mode={child_wait_mode}, future_state={child_future_state})."
+                        )
+                else:
+                    _err = str(_timeout_exc)
+
+                return {
+                    "task_index": task_index,
+                    "status": "timeout" if is_timeout else "error",
+                    "summary": None,
+                    "error": _err,
+                    "exit_reason": "delegation_watchdog_timeout" if is_timeout else "error",
+                    "api_calls": child_api_calls,
+                    "duration_seconds": duration,
+                    "last_activity_ts": child_last_activity_ts,
+                    "last_activity_desc": child_last_activity_desc,
+                    "seconds_since_activity": float(child_seconds_since_activity or 0.0),
+                    "current_tool": child_tool,
+                    "max_iterations": child_max_iterations,
+                    "budget_used": child_budget_used,
+                    "budget_max": child_budget_max,
+                    "wait_mode": child_wait_mode,
+                    "future_state": child_future_state,
+                    "_child_role": getattr(child, "_delegate_role", None),
+                    "diagnostic_path": diagnostic_path,
+                }
         finally:
             # Shut down executor without waiting — if the child thread
             # is stuck on blocking I/O, wait=True would hang forever.
@@ -2474,6 +2661,11 @@ def _run_single_child(
             status = "failed"
 
         summary = raw_summary
+        final_activity_snapshot = _snapshot_child_activity(
+            child,
+            fallback_last_activity_ts=child_start,
+        )
+        final_wait_mode = _child_wait_mode(final_activity_snapshot)
 
         # Build tool trace from conversation messages (already in memory).
         # Uses tool_call_id to correctly pair parallel tool calls with results.
@@ -2568,6 +2760,14 @@ def _run_single_child(
             "duration_seconds": duration,
             "model": _model if isinstance(_model, str) else None,
             "exit_reason": exit_reason,
+            "last_activity_ts": float(final_activity_snapshot.get("last_activity_ts", child_start) or child_start),
+            "last_activity_desc": final_activity_snapshot.get("last_activity_desc") or "",
+            "seconds_since_activity": float(final_activity_snapshot.get("seconds_since_activity", 0.0) or 0.0),
+            "current_tool": final_activity_snapshot.get("current_tool"),
+            "max_iterations": int(final_activity_snapshot.get("max_iterations", 0) or 0),
+            "budget_used": int(final_activity_snapshot.get("budget_used", 0) or 0),
+            "budget_max": int(final_activity_snapshot.get("budget_max", 0) or 0),
+            "wait_mode": final_wait_mode,
             "tokens": {
                 "input": (
                     _input_tokens if isinstance(_input_tokens, (int, float)) else 0

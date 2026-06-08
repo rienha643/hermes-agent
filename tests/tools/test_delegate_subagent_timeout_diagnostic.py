@@ -41,6 +41,8 @@ class _StubChild:
         hang_seconds: float = 5.0,
         subagent_id: str = "sa-0-stubabc",
         tool_schema=None,
+        last_activity_desc: str = "waiting for non-streaming API response",
+        last_activity_age: float = 0.0,
     ):
         self._subagent_id = subagent_id
         self._delegate_depth = 1
@@ -64,14 +66,24 @@ class _StubChild:
         self._api_call_count = api_call_count
         self._hang = threading.Event()
         self._hang_seconds = hang_seconds
+        self._last_activity_desc = last_activity_desc
+        self._last_activity_ts = time.time() - float(last_activity_age)
 
     def get_activity_summary(self):
+        seconds_since_activity = round(time.time() - self._last_activity_ts, 1)
         return {
             "api_call_count": self._api_call_count,
             "max_iterations": self.max_iterations,
             "current_tool": None,
-            "seconds_since_activity": 60,
+            "seconds_since_activity": seconds_since_activity,
+            "last_activity_ts": self._last_activity_ts,
+            "last_activity_desc": self._last_activity_desc,
         }
+
+    def mark_activity(self, desc: str | None = None):
+        self._last_activity_ts = time.time()
+        if desc is not None:
+            self._last_activity_desc = desc
 
     def run_conversation(self, user_message, task_id=None):
         self._hang.wait(self._hang_seconds)
@@ -234,11 +246,11 @@ class TestRunSingleChildTimeoutDump:
     """The timeout branch in _run_single_child must emit the diagnostic
     dump when api_calls == 0, and must NOT emit it when api_calls > 0."""
 
-    def _invoke_with_short_timeout(self, child, monkeypatch):
+    def _invoke_with_short_timeout(self, child, monkeypatch, timeout_seconds=0.3):
         """Run _run_single_child with a tiny timeout to force the timeout branch."""
         from tools import delegate_tool
-        # Force a 0.3s timeout so the test is fast
-        monkeypatch.setattr(delegate_tool, "_get_child_timeout", lambda: 0.3)
+        # Force a short timeout so the test is fast
+        monkeypatch.setattr(delegate_tool, "_get_child_timeout", lambda: timeout_seconds)
 
         parent = MagicMock()
         parent._touch_activity = MagicMock()
@@ -261,8 +273,9 @@ class TestRunSingleChildTimeoutDump:
         assert dump_path.is_file()
         assert dump_path.parent == hermes_home / "logs"
 
-        # Error message surfaces the path and the "no API call" phrasing
-        assert "without making any API call" in result["error"]
+        # Error message surfaces the path and the watchdog phrasing
+        assert "Delegation watchdog timeout" in result["error"]
+        assert "without any child API call" in result["error"]
         assert "Diagnostic:" in result["error"]
         assert str(dump_path) in result["error"]
 
@@ -273,12 +286,96 @@ class TestRunSingleChildTimeoutDump:
         assert result["status"] == "timeout"
         assert result["api_calls"] == 5
         # No diagnostic file should be written for timeouts that made
-        # actual API calls — the old generic "stuck on slow call" message
-        # still applies.
+        # actual API calls — the error should still clearly identify the
+        # delegation watchdog and the last known activity.
         assert result.get("diagnostic_path") is None
-        assert "stuck on a slow API call" in result["error"]
+        assert "Delegation watchdog timeout" in result["error"]
+        assert "last activity was" in result["error"]
         # And no subagent-timeout-* file should exist under logs/
         logs_dir = hermes_home / "logs"
         if logs_dir.is_dir():
             dumps = list(logs_dir.glob("subagent-timeout-*.log"))
             assert dumps == []
+
+    def test_recent_activity_prevents_false_timeout(self, hermes_home, monkeypatch):
+        """A child that keeps refreshing activity should not be timed out
+        just because wall-clock time exceeds the watchdog window."""
+        child = _StubChild(api_call_count=2, hang_seconds=0.35)
+        original_summary = child.get_activity_summary
+
+        def refreshing_summary():
+            child.mark_activity("waiting for non-streaming API response")
+            return original_summary()
+
+        child.get_activity_summary = refreshing_summary
+        result = self._invoke_with_short_timeout(child, monkeypatch, timeout_seconds=0.2)
+
+        assert result["status"] == "failed"
+        assert result["exit_reason"] != "delegation_watchdog_timeout"
+        assert result["api_calls"] == 2
+        assert result["last_activity_desc"] == "waiting for non-streaming API response"
+
+    def test_timeout_result_includes_activity_snapshot(self, hermes_home, monkeypatch):
+        child = _StubChild(
+            api_call_count=3,
+            hang_seconds=0.35,
+            last_activity_desc="receiving stream response",
+            last_activity_age=999.0,
+        )
+
+        result = self._invoke_with_short_timeout(child, monkeypatch, timeout_seconds=0.2)
+
+        assert result["status"] == "timeout"
+        assert result["exit_reason"] == "delegation_watchdog_timeout"
+        assert result["current_tool"] is None
+        assert result["last_activity_desc"] == "receiving stream response"
+        assert result["seconds_since_activity"] >= 999.0
+        assert result["last_activity_ts"] is not None
+        assert result["wait_mode"] == "provider_stream"
+        assert result["future_state"] == "running"
+
+    def test_observed_progress_prevents_false_timeout_without_timestamp_refresh(self, hermes_home, monkeypatch):
+        """If the parent observes child progress in the summary, stale timestamps
+        alone must not trigger a false watchdog timeout."""
+        child = _StubChild(api_call_count=0, hang_seconds=0.35, last_activity_age=999.0)
+        progress = {"api_calls": 0}
+
+        def progressing_summary():
+            progress["api_calls"] += 1
+            return {
+                "api_call_count": progress["api_calls"],
+                "max_iterations": child.max_iterations,
+                "current_tool": None,
+                "seconds_since_activity": 999.0,
+                "last_activity_ts": child._last_activity_ts,
+                "last_activity_desc": "receiving stream response",
+            }
+
+        child.get_activity_summary = progressing_summary
+        result = self._invoke_with_short_timeout(child, monkeypatch, timeout_seconds=0.2)
+
+        assert result["status"] == "failed"
+        assert result["exit_reason"] != "delegation_watchdog_timeout"
+        assert result["last_activity_desc"] == "receiving stream response"
+        assert result["wait_mode"] == "provider_stream"
+
+    def test_timeout_result_reports_tool_wait_mode(self, hermes_home, monkeypatch):
+        child = _StubChild(
+            api_call_count=4,
+            hang_seconds=0.35,
+            last_activity_desc="executing tool: terminal",
+            last_activity_age=999.0,
+        )
+
+        original_summary = child.get_activity_summary
+        child.get_activity_summary = lambda: {
+            **original_summary(),
+            "current_tool": "terminal",
+            "last_activity_desc": "executing tool: terminal",
+        }
+
+        result = self._invoke_with_short_timeout(child, monkeypatch, timeout_seconds=0.2)
+
+        assert result["status"] == "timeout"
+        assert result["wait_mode"] == "tool:terminal"
+        assert result["future_state"] == "running"
