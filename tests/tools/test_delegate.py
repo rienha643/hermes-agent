@@ -3577,6 +3577,52 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
 
                 self.assertIn(format_document_artifact_block(artifact), frame)
 
+    def test_specialist_result_frame_localizes_english_report_headers_without_translating_body(self):
+        summary = (
+            "Root Cause\n"
+            "formatter passes through English section labels\n\n"
+            "Files Changed\n"
+            "tools/delegate_tool.py\n\n"
+            "Fix Summary\n"
+            "Keep function _format_specialist_result_frame unchanged in body semantics\n\n"
+            "Tests\n"
+            "pytest tests/tools/test_delegate.py -q"
+        )
+        frame = _format_specialist_result_frame(
+            "Eclipse",
+            status="completed",
+            task_type="general",
+            summary=summary,
+            follow_up="Remaining Risks\ncontext window errors may still surface",
+            exit_reason="completed",
+        )
+
+        self.assertIn("원인", frame)
+        self.assertIn("변경 파일", frame)
+        self.assertIn("수정 내용", frame)
+        self.assertIn("테스트", frame)
+        self.assertIn("잔여 위험", frame)
+        self.assertIn("_format_specialist_result_frame", frame)
+        self.assertIn("pytest tests/tools/test_delegate.py -q", frame)
+        self.assertNotIn("\n  Root Cause", frame)
+        self.assertNotIn("\n  Files Changed", frame)
+        self.assertNotIn("\n  Fix Summary", frame)
+
+    def test_specialist_result_frame_localizes_markdown_style_headers(self):
+        summary = "**Verification**\nAPIError: context window exceeded\n\n- Commit\n3fa0bf7cc"
+        frame = _format_specialist_result_frame(
+            "Eclipse",
+            status="completed",
+            task_type="general",
+            summary=summary,
+            exit_reason="completed",
+        )
+
+        self.assertIn("**검증**", frame)
+        self.assertIn("- 커밋", frame)
+        self.assertIn("APIError: context window exceeded", frame)
+        self.assertNotIn("**Verification**", frame)
+
     def test_progress_callback_uses_failure_frame_for_general_specialists(self):
         parent = _make_mock_parent(depth=0)
         parent._delegate_spinner = MagicMock()

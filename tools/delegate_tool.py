@@ -947,6 +947,98 @@ _UX_ARTIFACT_EXTENSIONS = {
     ".webp": "이미지",
     ".gif": "이미지",
 }
+_WORKER_RESULT_SECTION_HEADER_MAP = {
+    "overall": "전체 상태",
+    "start point": "시작 지점",
+    "suspected change": "의심 변경점",
+    "evidence": "근거",
+    "root cause": "원인",
+    "files changed": "변경 파일",
+    "fix summary": "수정 내용",
+    "tests": "테스트",
+    "verification": "검증",
+    "commit": "커밋",
+    "push": "푸시",
+    "remaining risks": "잔여 위험",
+    "recommendation": "권장 사항",
+    "git state": "Git 상태",
+    "auth state": "인증 상태",
+    "push result": "푸시 결과",
+    "runtime state": "런타임 상태",
+    "restart requirement": "재시작 필요 여부",
+    "verification procedure": "검증 절차",
+    "test scenarios": "테스트 시나리오",
+    "main merge gate": "main 반영 게이트",
+    "risk assessment": "위험 평가",
+    "direct response check": "직접 응답 확인",
+    "worker delegation check": "워커 위임 확인",
+    "attribution logs": "Attribution 로그",
+    "stale replay check": "Stale Replay 확인",
+    "discard logs": "Discard 로그",
+    "issues": "이슈",
+    "response body review": "응답 본문 검토",
+    "dispatch path": "디스패치 경로",
+    "log evidence": "로그 근거",
+    "metadata flow": "메타데이터 흐름",
+    "inbound": "인바운드",
+    "delegation": "위임",
+    "response attribution": "응답 Attribution",
+    "response body": "응답 본문",
+    "conclusion": "결론",
+}
+
+
+def _localize_worker_result_section_headers(text: Optional[str]) -> Optional[str]:
+    """Localize known worker-report section headers without translating bodies."""
+    if text is None:
+        return None
+    original = str(text)
+    if not original.strip():
+        return original
+
+    localized_lines: List[str] = []
+    for line in original.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            localized_lines.append(line)
+            continue
+
+        prefix_len = len(line) - len(line.lstrip())
+        prefix = line[:prefix_len]
+        content = line[prefix_len:]
+
+        marker = ""
+        body = content
+        for candidate in ("- ", "* "):
+            if body.startswith(candidate):
+                marker = candidate
+                body = body[len(candidate):]
+                break
+
+        emphasis = ""
+        trailing_emphasis = ""
+        if body.startswith("**") and body.endswith("**") and len(body) >= 4:
+            emphasis = trailing_emphasis = "**"
+            body = body[2:-2]
+        elif body.startswith("*") and body.endswith("*") and len(body) >= 2:
+            emphasis = trailing_emphasis = "*"
+            body = body[1:-1]
+
+        has_colon = body.endswith(":")
+        title = body[:-1] if has_colon else body
+        normalized = title.strip().lower()
+        localized = _WORKER_RESULT_SECTION_HEADER_MAP.get(normalized)
+        if not localized:
+            localized_lines.append(line)
+            continue
+
+        rebuilt = f"{prefix}{marker}{emphasis}{localized}{trailing_emphasis}"
+        if has_colon:
+            rebuilt += ":"
+        localized_lines.append(rebuilt)
+
+    return "\n".join(localized_lines)
+
 _SPECIALIST_PROFILE_PATTERNS = [
     (
         re.compile(
@@ -1161,7 +1253,8 @@ def _format_specialist_result_frame(
     intro = f"{label}가 작업을 완료했습니다." if not is_failure else f"{label}가 작업을 완료하지 못했습니다."
 
     sections: List[str] = []
-    primary_text = str(summary or preview or "").strip()
+    primary_text = _localize_worker_result_section_headers(summary or preview or "") or ""
+    primary_text = str(primary_text).strip()
     if primary_text:
         sections.append(
             "- "
@@ -1190,6 +1283,8 @@ def _format_specialist_result_frame(
 
     if not is_failure:
         follow_up_text = _normalize_delegate_follow_up(follow_up)
+        if follow_up_text is not None:
+            follow_up_text = _localize_worker_result_section_headers(follow_up_text)
         if follow_up_text is None and exit_reason:
             exit_reason_text = str(exit_reason).strip().lower()
             if exit_reason_text and exit_reason_text not in {"completed", "complete", "done", "success"}:
