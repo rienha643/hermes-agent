@@ -101,11 +101,14 @@ class TestComfyLocalImageGenProviderGenerate:
             denoise=1,
         )
 
+        assert calls["post"][0][1]["prompt"]
         assert calls["post"][0][0] == "http://172.22.224.1:8188/prompt"
         workflow = calls["post"][0][1]["prompt"]
         assert workflow["1"]["inputs"]["ckpt_name"] == "AOM3A1_orangemixs.safetensors"
-        assert workflow["6"]["inputs"]["vae_name"] == "animevae.pt"
+        assert workflow["7"]["inputs"]["vae"] == ["1", 2]
+        assert "6" not in workflow
         assert workflow["8"]["inputs"]["filename_prefix"] == "angelica_smoke"
+        assert all("/models/vae" not in endpoint for endpoint in calls["get"])
         assert result["success"] is True
         assert result["provider"] == "comfy-local"
         assert result["model"] == "AOM3A1_orangemixs.safetensors"
@@ -128,6 +131,154 @@ class TestComfyLocalImageGenProviderGenerate:
         assert str(result["prompt_path"]) in result["artifact_files"]
         assert str(result["metadata_path"]) in result["artifact_files"]
         assert str(result["manifest_path"]) in result["artifact_files"]
+
+    def test_generate_uses_explicit_vae_when_configured_and_present(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
+        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "comfy-output"))
+
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        output_dir = Path(tmp_path / "comfy-output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / "explicit_vae_00001_.png"
+        output_file.write_bytes(PNG_1PX)
+
+        calls = {"post": [], "get": []}
+
+        class Response:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, timeout=None):
+            calls["get"].append(url)
+            if url.endswith("/system_stats"):
+                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
+            if url.endswith("/models/checkpoints"):
+                return Response(["AOM3A1_orangemixs.safetensors", "Nullstyle_v20.safetensors"])
+            if url.endswith("/models/vae"):
+                return Response(["animevae.pt", "something_else.vae"])
+            if "/history/" in url:
+                return Response(
+                    {
+                        "pid-123": {
+                            "status": {"completed": True, "status_str": "success"},
+                            "outputs": {
+                                "8": {
+                                    "images": [
+                                        {"filename": "explicit_vae_00001_.png", "subfolder": "", "type": "output"}
+                                    ]
+                                }
+                            },
+                        }
+                    }
+                )
+            raise AssertionError(f"unexpected GET {url}")
+
+        def fake_post(url, json=None, timeout=None):
+            calls["post"].append((url, json, timeout))
+            return Response({"prompt_id": "pid-123", "number": 0, "node_errors": {}})
+
+        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
+        monkeypatch.setattr(comfy_mod.requests, "post", fake_post)
+        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
+        import agent.image_gen_provider as provider_mod
+        monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
+
+        result = ComfyLocalImageGenProvider().generate(
+            "simple cute anime girl, clean face, sharp eyes, game illustration style",
+            aspect_ratio="square",
+            project_name="angelica_smoke_test",
+            artifact_name="angelica_smoke",
+            vae="animevae.pt",
+        )
+
+        assert calls["post"][0][0] == "http://172.22.224.1:8188/prompt"
+        workflow = calls["post"][0][1]["prompt"]
+        assert workflow["6"]["inputs"]["vae_name"] == "animevae.pt"
+        assert workflow["7"]["inputs"]["vae"] == ["6", 0]
+        assert any("/models/vae" in endpoint for endpoint in calls["get"])
+        assert result["success"] is True
+
+    def test_generate_falls_back_when_configured_vae_is_unavailable(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
+        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "comfy-output"))
+
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        output_dir = Path(tmp_path / "comfy-output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / "fallback_vae_00001_.png"
+        output_file.write_bytes(PNG_1PX)
+
+        calls = {"post": [], "get": []}
+
+        class Response:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, timeout=None):
+            calls["get"].append(url)
+            if url.endswith("/system_stats"):
+                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
+            if url.endswith("/models/checkpoints"):
+                return Response(["AOM3A1_orangemixs.safetensors", "Nullstyle_v20.safetensors"])
+            if url.endswith("/models/vae"):
+                return Response(["different_vae.pt"])
+            if "/history/" in url:
+                return Response(
+                    {
+                        "pid-123": {
+                            "status": {"completed": True, "status_str": "success"},
+                            "outputs": {
+                                "8": {
+                                    "images": [
+                                        {"filename": "fallback_vae_00001_.png", "subfolder": "", "type": "output"}
+                                    ]
+                                }
+                            },
+                        }
+                    }
+                )
+            raise AssertionError(f"unexpected GET {url}")
+
+        def fake_post(url, json=None, timeout=None):
+            calls["post"].append((url, json, timeout))
+            return Response({"prompt_id": "pid-123", "number": 0, "node_errors": {}})
+
+        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
+        monkeypatch.setattr(comfy_mod.requests, "post", fake_post)
+        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
+        import agent.image_gen_provider as provider_mod
+        monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
+
+        result = ComfyLocalImageGenProvider().generate(
+            "simple cute anime girl, clean face, sharp eyes, game illustration style",
+            aspect_ratio="square",
+            project_name="angelica_smoke_test",
+            artifact_name="angelica_smoke",
+            vae="animevae.pt",
+        )
+
+        assert calls["post"][0][0] == "http://172.22.224.1:8188/prompt"
+        workflow = calls["post"][0][1]["prompt"]
+        assert "6" not in workflow
+        assert workflow["7"]["inputs"]["vae"] == ["1", 2]
+        assert any("/models/vae" in endpoint for endpoint in calls["get"])
+        assert result["success"] is True
 
     def test_generate_finds_output_via_fallback_output_dir(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
