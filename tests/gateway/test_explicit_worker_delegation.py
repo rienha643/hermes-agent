@@ -78,6 +78,8 @@ def test_explicit_worker_eclipse_forces_delegate_task():
     mocked.assert_called_once()
     assert mocked.call_args.kwargs["profile"] == "coder"
     assert "[WORKER:" not in mocked.call_args.kwargs["goal"]
+    assert result["delegated_target_profile"] == "coder"
+    assert result["worker_label"] == "Eclipse"
     assert "[WORKER RESULT: Eclipse]" in result["final_response"]
     assert "UX_VALIDATION_OK" in result["final_response"]
     assert result["completed"] is True
@@ -100,6 +102,8 @@ def test_explicit_worker_palette_forces_delegate_task():
     assert result is not None
     mocked.assert_called_once()
     assert mocked.call_args.kwargs["profile"] == "artist"
+    assert result["delegated_target_profile"] == "artist"
+    assert result["worker_label"] == "Palette"
     assert "[WORKER RESULT: Palette]" in result["final_response"]
     assert "PALETTE_OK" in result["final_response"]
 

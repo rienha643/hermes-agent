@@ -540,6 +540,100 @@ async def test_response_ready_log_includes_attribution_fields(monkeypatch, caplo
 
 
 @pytest.mark.asyncio
+async def test_response_ready_log_infers_delegated_target_profile_from_worker_label(monkeypatch, caplog):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-attr-infer",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+    )
+    runner = _make_runner(session_entry)
+    runner.session_store.load_transcript.return_value = []
+    runner._run_agent = AsyncMock(
+        return_value={
+            "final_response": "[WORKER RESULT: Eclipse]\n\nPONG",
+            "messages": [],
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 10,
+            "input_tokens": 12,
+            "output_tokens": 5,
+            "model": "openai/test-model",
+            "api_calls": 1,
+            "owner_kind": "explicit_worker",
+            "worker_label": "Eclipse",
+        }
+    )
+
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
+    monkeypatch.setattr(
+        "agent.model_metadata.get_model_context_length",
+        lambda *_args, **_kwargs: 100000,
+    )
+    monkeypatch.setattr(gateway_run, "_resolve_active_profile_for_attribution", lambda: "speedy")
+
+    with caplog.at_level("INFO"):
+        result = await runner._handle_message(_make_event("[WORKER: Eclipse]\nPING"))
+
+    assert "PONG" in result
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "response ready:" in joined
+    assert "delegated_target_profile=coder" in joined
+    assert "owner_kind=explicit_worker" in joined
+
+
+@pytest.mark.asyncio
+async def test_response_ready_logs_warning_when_explicit_worker_target_missing(monkeypatch, caplog):
+    import gateway.run as gateway_run
+
+    session_entry = SessionEntry(
+        session_key=build_session_key(_make_source()),
+        session_id="sess-attr-missing",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="dm",
+    )
+    runner = _make_runner(session_entry)
+    runner.session_store.load_transcript.return_value = []
+    runner._run_agent = AsyncMock(
+        return_value={
+            "final_response": "plain reply",
+            "messages": [],
+            "tools": [],
+            "history_offset": 0,
+            "last_prompt_tokens": 10,
+            "input_tokens": 12,
+            "output_tokens": 5,
+            "model": "openai/test-model",
+            "api_calls": 1,
+            "owner_kind": "explicit_worker",
+        }
+    )
+
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
+    monkeypatch.setattr(
+        "agent.model_metadata.get_model_context_length",
+        lambda *_args, **_kwargs: 100000,
+    )
+    monkeypatch.setattr(gateway_run, "_resolve_active_profile_for_attribution", lambda: "speedy")
+
+    with caplog.at_level("INFO"):
+        result = await runner._handle_message(_make_event("PING"))
+
+    assert "plain reply" in result
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "response ready:" in joined
+    assert "owner_kind=explicit_worker" in joined
+    assert "delegated_target_profile=" in joined
+    assert "response ready attribution missing delegated_target_profile" in joined
+
+
+@pytest.mark.asyncio
 async def test_handle_message_discards_stale_final_response_before_delivery(monkeypatch):
     import gateway.run as gateway_run
 

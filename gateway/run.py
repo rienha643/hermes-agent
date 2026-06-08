@@ -236,6 +236,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "failed": True,
             "error": "multi-worker delegation is not supported in one turn",
             "owner_kind": "explicit_worker",
+            "worker_label": ",".join(worker_labels),
             "tools": [],
         }
 
@@ -254,6 +255,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "failed": True,
             "error": f"Unknown worker label: {worker_label}",
             "owner_kind": "explicit_worker",
+            "worker_label": worker_label,
             "delegated_target_profile": None,
             "tools": [],
         }
@@ -272,6 +274,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "failed": True,
             "error": "Invalid delegation payload",
             "owner_kind": "explicit_worker",
+            "worker_label": worker_label,
             "delegated_target_profile": mapped_profile,
             "tools": [],
         }
@@ -286,6 +289,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "failed": True,
             "error": payload.get("error"),
             "owner_kind": "explicit_worker",
+            "worker_label": worker_label,
             "delegated_target_profile": mapped_profile,
             "tools": [],
         }
@@ -305,6 +309,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "failed": True,
             "error": "Missing child result",
             "owner_kind": "explicit_worker",
+            "worker_label": worker_label,
             "delegated_target_profile": mapped_profile,
             "tools": [],
         }
@@ -321,6 +326,7 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "failed": True,
             "error": summary or status,
             "owner_kind": "explicit_worker",
+            "worker_label": worker_label,
             "delegated_target_profile": mapped_profile,
             "tools": [],
         }
@@ -364,6 +370,38 @@ def _classify_response_owner(message_text: Any, agent_result: Optional[Dict[str,
     if _DIRECT_TASK_RE.search(message_text):
         return "direct_task"
     return "normal"
+
+
+def _resolve_delegated_target_profile(
+    message_text: Any,
+    agent_result: Optional[Dict[str, Any]] = None,
+    owner_kind: Optional[str] = None,
+) -> str:
+    """Best-effort delegated worker target profile for attribution logs."""
+    if not isinstance(agent_result, dict):
+        return ""
+
+    delegated_target_profile = str(agent_result.get("delegated_target_profile") or "").strip()
+    if delegated_target_profile:
+        return delegated_target_profile
+
+    kind = str(owner_kind or _classify_response_owner(message_text, agent_result) or "").strip()
+    if kind != "explicit_worker":
+        return ""
+
+    worker_label = str(agent_result.get("worker_label") or "").strip()
+    if not worker_label and isinstance(message_text, str):
+        worker_label = _extract_explicit_worker_label(message_text) or ""
+
+    if worker_label:
+        inferred = _GATEWAY_WORKER_PROFILE_MAP.get(worker_label)
+        if inferred:
+            agent_result["delegated_target_profile"] = inferred
+            if not agent_result.get("worker_label"):
+                agent_result["worker_label"] = worker_label
+            return inferred
+
+    return ""
 
 
 def _resolve_active_profile_for_attribution() -> str:
@@ -9271,9 +9309,23 @@ class GatewayRunner:
 
             response = agent_result.get("final_response") or ""
             _owner_kind = _classify_response_owner(message_text, agent_result)
-            _delegated_target_profile = None
-            if isinstance(agent_result, dict):
-                _delegated_target_profile = agent_result.get("delegated_target_profile")
+            _delegated_target_profile = _resolve_delegated_target_profile(
+                message_text,
+                agent_result,
+                _owner_kind,
+            )
+            if _owner_kind == "explicit_worker" and not _delegated_target_profile:
+                logger.warning(
+                    "response ready attribution missing delegated_target_profile: platform=%s chat=%s session_id=%s session_key=%s run_generation=%s inbound_message_id=%s owner_kind=%s active_profile=%s",
+                    _platform_name,
+                    source.chat_id or "unknown",
+                    session_entry.session_id,
+                    _quick_key or "",
+                    run_generation,
+                    self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                    _owner_kind,
+                    _resolve_active_profile_for_attribution(),
+                )
             _active_profile = _resolve_active_profile_for_attribution()
 
             # Convert the agent's internal "(empty)" sentinel into a
