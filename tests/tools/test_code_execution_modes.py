@@ -220,6 +220,22 @@ class TestResolveChildCwd(unittest.TestCase):
         with patch.dict(os.environ, {"TERMINAL_CWD": "~"}):
             self.assertEqual(_resolve_child_cwd("project", "/tmp/staging"), home)
 
+    def test_project_getcwd_filenotfound_falls_back_to_pwd(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            env = {"PWD": td, "TERMINAL_CWD": "/does/not/exist"}
+            with patch.dict(os.environ, env, clear=True), \
+                 patch("tools.code_execution_tool.os.getcwd", side_effect=FileNotFoundError(2, "No such file or directory")):
+                self.assertEqual(_resolve_child_cwd("project", "/tmp/staging"), td)
+
+    def test_project_getcwd_filenotfound_falls_back_to_repo_root(self):
+        import pathlib
+        repo_root = str(pathlib.Path(__file__).resolve().parents[2])
+        env = {"PWD": "/does/not/exist", "TERMINAL_CWD": "/also/missing"}
+        with patch.dict(os.environ, env, clear=True), \
+             patch("tools.code_execution_tool.os.getcwd", side_effect=FileNotFoundError(2, "No such file or directory")):
+            self.assertEqual(_resolve_child_cwd("project", "/tmp/staging"), repo_root)
+
 
 # ---------------------------------------------------------------------------
 # Schema description

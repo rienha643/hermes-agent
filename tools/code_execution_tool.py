@@ -1607,7 +1607,7 @@ def _resolve_child_cwd(mode: str, staging_dir: str) -> str:
 
     - ``strict``: the staging tmpdir (today's behavior).
     - ``project``: the session's TERMINAL_CWD (same as the terminal tool), or
-      ``os.getcwd()`` if TERMINAL_CWD is unset or doesn't point at a real dir.
+      a resilient cwd fallback if ``os.getcwd()`` is unavailable.
       Falls back to the staging tmpdir as a last resort so we never invoke
       Popen with a nonexistent cwd.
     """
@@ -1618,9 +1618,18 @@ def _resolve_child_cwd(mode: str, staging_dir: str) -> str:
         expanded = os.path.expanduser(raw)
         if os.path.isdir(expanded):
             return expanded
-    here = os.getcwd()
-    if os.path.isdir(here):
+    try:
+        here = os.getcwd()
+    except FileNotFoundError:
+        here = None
+    if here and os.path.isdir(here):
         return here
+
+    from tools.terminal_tool import _resolve_cwd_fallback
+
+    fallback = _resolve_cwd_fallback()
+    if fallback and os.path.isdir(fallback):
+        return fallback
     return staging_dir
 
 

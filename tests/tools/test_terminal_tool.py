@@ -1,6 +1,7 @@
 """Regression tests for sudo detection and sudo password handling."""
 
 import json
+from pathlib import Path
 
 import tools.terminal_tool as terminal_tool
 
@@ -257,3 +258,29 @@ def test_terminal_pending_approval_returns_metadata(monkeypatch):
     assert result["approval_metadata"]["purpose"] == "쉘 스크립트 실행 승인"
     assert result["approval_metadata"]["risk_type"] == "shell"
     assert result["approval_metadata"]["target"] == "/repo/scripts"
+
+
+def _raise_missing_cwd():
+    raise FileNotFoundError(2, "No such file or directory")
+
+
+def test_get_env_config_uses_pwd_when_getcwd_is_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setenv("TERMINAL_CWD", "/does/not/exist")
+    monkeypatch.setenv("PWD", str(tmp_path))
+    monkeypatch.setattr(terminal_tool.os, "getcwd", _raise_missing_cwd)
+
+    config = terminal_tool._get_env_config()
+
+    assert config["cwd"] == str(tmp_path)
+
+
+def test_get_env_config_uses_repo_root_when_getcwd_and_env_dirs_are_missing(monkeypatch):
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setenv("TERMINAL_CWD", "/does/not/exist")
+    monkeypatch.setenv("PWD", "/also/missing")
+    monkeypatch.setattr(terminal_tool.os, "getcwd", _raise_missing_cwd)
+
+    config = terminal_tool._get_env_config()
+
+    assert config["cwd"] == str(Path(terminal_tool.__file__).resolve().parents[1])

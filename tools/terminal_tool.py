@@ -37,6 +37,7 @@ import logging
 import os
 import platform
 import re
+import tempfile
 import time
 import threading
 import atexit
@@ -1106,6 +1107,58 @@ def _parse_env_var(name: str, default: str, converter=int, type_label: str = "in
         )
 
 
+def _first_existing_directory(candidates: List[Optional[str]]) -> str:
+    """Return the first existing directory from *candidates*."""
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        expanded = os.path.abspath(os.path.expanduser(candidate))
+        if expanded in seen:
+            continue
+        seen.add(expanded)
+        if os.path.isdir(expanded):
+            return expanded
+    return "/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir()
+
+
+def _repo_root_fallback() -> str:
+    """Return the repo root inferred from this module path."""
+    return str(Path(__file__).resolve().parents[1])
+
+
+def _resolve_cwd_fallback() -> str:
+    """Resolve a safe fallback cwd when the current cwd is unavailable.
+
+    Fallback order:
+    1. TERMINAL_CWD
+    2. WorkingDirectory surrogate (PWD)
+    3. repo root
+    4. HOME
+    5. /tmp
+    """
+    return _first_existing_directory([
+        os.getenv("TERMINAL_CWD", "").strip() or None,
+        os.getenv("PWD", "").strip() or None,
+        _repo_root_fallback(),
+        os.path.expanduser("~"),
+        "/tmp",
+    ])
+
+
+def _safe_getcwd_or_fallback() -> str:
+    """Return os.getcwd(), or a fallback when cwd has been deleted."""
+    try:
+        return os.getcwd()
+    except FileNotFoundError:
+        fallback = _resolve_cwd_fallback()
+        logger.warning(
+            "os.getcwd() failed while resolving terminal cwd; using fallback %r",
+            fallback,
+        )
+        return fallback
+
+
 def _get_env_config() -> Dict[str, Any]:
     """Get terminal environment configuration from environment variables."""
     # Default image with Python and Node.js for maximum compatibility
@@ -1118,7 +1171,7 @@ def _get_env_config() -> Dict[str, Any]:
     # remote home, and everything else starts in the backend's default
     # root-like cwd.
     if env_type == "local":
-        default_cwd = os.getcwd()
+        default_cwd = _safe_getcwd_or_fallback()
     elif env_type == "ssh":
         default_cwd = "~"
     else:
@@ -1131,10 +1184,21 @@ def _get_env_config() -> Dict[str, Any]:
     cwd = os.getenv("TERMINAL_CWD", default_cwd)
     if cwd:
         cwd = os.path.expanduser(cwd)
+    if env_type == "local" and cwd:
+        local_candidate = os.path.abspath(cwd)
+        if os.path.isdir(local_candidate):
+            cwd = local_candidate
+        else:
+            logger.info(
+                "Ignoring TERMINAL_CWD=%r for local backend (directory is missing). Using %r instead.",
+                cwd,
+                default_cwd,
+            )
+            cwd = default_cwd
     host_cwd = None
     host_prefixes = ("/Users/", "/home/", "C:\\", "C:/")
     if env_type == "docker" and mount_docker_cwd:
-        docker_cwd_source = os.getenv("TERMINAL_CWD") or os.getcwd()
+        docker_cwd_source = os.getenv("TERMINAL_CWD") or _safe_getcwd_or_fallback()
         candidate = os.path.abspath(os.path.expanduser(docker_cwd_source))
         if (
             any(candidate.startswith(p) for p in host_prefixes)
