@@ -387,3 +387,23 @@ def test_publish_document_artifact_falls_back_when_copy2_metadata_fails(monkeypa
     assert published_doc.read_text(encoding="utf-8") == "hello"
     assert copied == [(source, published_doc)]
     assert calls == [("documents", "260601_job_1", published_doc, published_doc.parent)]
+
+
+def test_queue_nas_sync_hook_reports_missing_script_as_warning(monkeypatch, tmp_path, caplog):
+    source_root = tmp_path / "source"
+    source_root.mkdir(parents=True)
+    artifact_path = source_root / "artifact.png"
+    artifact_path.write_bytes(b"x")
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profiles" / "coder"))
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_script", lambda: None)
+    monkeypatch.setattr(nas_sync_hooks, "_IN_PROCESS_LAST_LAUNCH", {})
+    caplog.set_level("WARNING")
+
+    assert not nas_sync_hooks.queue_nas_sync_hook(
+        category="image",
+        scope="task-1",
+        artifact_path=artifact_path,
+        source_root=source_root,
+    )
+    assert any("NAS sync hook script not found" in record.message for record in caplog.records)
