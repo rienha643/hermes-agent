@@ -1957,51 +1957,6 @@ def _normalize_empty_agent_response(
     return response
 
 
-def _normalize_structured_attachment_path(value: Any) -> str | None:
-    """Normalize a structured attachment candidate to an absolute local path."""
-    if not isinstance(value, str):
-        return None
-    from urllib.parse import unquote, urlparse
-
-    raw = value.strip().strip("`\"'")
-    if not raw:
-        return None
-    if raw.startswith("file://"):
-        parsed = urlparse(raw)
-        raw = unquote(parsed.path or "")
-    if not (raw.startswith("/") or raw.startswith("~/")):
-        return None
-    return os.path.abspath(os.path.expanduser(raw))
-
-
-def _file_delivery_signatures(paths: list[str] | tuple[str, ...]) -> dict[str, set[Any]]:
-    """Build absolute/realpath/size signatures for robust duplicate matching."""
-    abs_paths: set[str] = set()
-    real_paths: set[str] = set()
-    name_size_pairs: set[tuple[str, int]] = set()
-
-    for path in paths:
-        normalized = _normalize_structured_attachment_path(path)
-        if not normalized:
-            continue
-        abs_paths.add(normalized)
-        try:
-            real_paths.add(os.path.realpath(normalized))
-        except Exception:
-            real_paths.add(normalized)
-        try:
-            stat = os.stat(normalized)
-            name_size_pairs.add((os.path.basename(normalized), int(stat.st_size)))
-        except Exception:
-            continue
-
-    return {
-        "abs": abs_paths,
-        "real": real_paths,
-        "name_size": name_size_pairs,
-    }
-
-
 def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
     """Extract local attachment candidates from structured agent/tool results.
 
@@ -2010,16 +1965,28 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
     ``image_generate``. Only local filesystem paths are surfaced here; URL-based
     artifacts remain text-only.
     """
+    from urllib.parse import unquote, urlparse
+
     candidates: list[str] = []
     seen_paths: set[str] = set()
     seen_nodes: set[int] = set()
 
     def _maybe_add_path(value: Any) -> None:
-        normalized = _normalize_structured_attachment_path(value)
-        if not normalized or normalized in seen_paths:
+        if not isinstance(value, str):
             return
-        seen_paths.add(normalized)
-        candidates.append(normalized)
+        raw = value.strip().strip("`\"'")
+        if not raw:
+            return
+        if raw.startswith("file://"):
+            parsed = urlparse(raw)
+            raw = unquote(parsed.path or "")
+        if not (raw.startswith("/") or raw.startswith("~/")):
+            return
+        expanded = os.path.expanduser(raw)
+        if expanded in seen_paths:
+            return
+        seen_paths.add(expanded)
+        candidates.append(expanded)
 
     def _walk(node: Any) -> None:
         if isinstance(node, dict):
@@ -2041,12 +2008,6 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
                         _maybe_add_path(item)
                     elif isinstance(item, (list, tuple)) and item:
                         _maybe_add_path(item[0])
-
-            raw_artifact_files = node.get("artifact_files")
-            if isinstance(raw_artifact_files, (list, tuple)):
-                for item in raw_artifact_files:
-                    if isinstance(item, str):
-                        _maybe_add_path(item)
 
             for key in (
                 "image",
@@ -2101,72 +2062,6 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
     return candidates
 
 
-def _collect_tool_media_delivery_markers(agent_result: Any) -> set[str]:
-    """Collect explicit 'already delivered' local paths from structured tool outputs."""
-    delivered: set[str] = set()
-    seen_nodes: set[int] = set()
-
-    def _walk(node: Any) -> None:
-        if isinstance(node, dict):
-            node_id = id(node)
-            if node_id in seen_nodes:
-                return
-            seen_nodes.add(node_id)
-
-            if node.get("media_delivery_completed"):
-                for key in (
-                    "delivered_media_files",
-                    "already_delivered_media_paths",
-                    "delivered_artifact_files",
-                ):
-                    value = node.get(key)
-                    if isinstance(value, (list, tuple)):
-                        for item in value:
-                            normalized = _normalize_structured_attachment_path(item)
-                            if normalized:
-                                delivered.add(normalized)
-                for key in (
-                    "delivered_media_realpaths",
-                    "already_delivered_media_realpaths",
-                    "delivered_artifact_realpaths",
-                ):
-                    value = node.get(key)
-                    if isinstance(value, (list, tuple)):
-                        for item in value:
-                            normalized = _normalize_structured_attachment_path(item)
-                            if normalized:
-                                delivered.add(normalized)
-
-            for value in node.values():
-                if isinstance(value, (dict, list, tuple)):
-                    _walk(value)
-                elif isinstance(value, str):
-                    stripped = value.lstrip()
-                    if stripped.startswith("{") or stripped.startswith("["):
-                        try:
-                            _walk(json.loads(value))
-                        except Exception:
-                            pass
-        elif isinstance(node, (list, tuple)):
-            node_id = id(node)
-            if node_id in seen_nodes:
-                return
-            seen_nodes.add(node_id)
-            for item in node:
-                _walk(item)
-        elif isinstance(node, str):
-            stripped = node.lstrip()
-            if stripped.startswith("{") or stripped.startswith("["):
-                try:
-                    _walk(json.loads(node))
-                    return
-                except Exception:
-                    pass
-
-    _walk(agent_result)
-    return delivered
-
-
 def _slice_turn_messages(agent_result: dict, history_len: int) -> List[Dict[str, Any]]:
     """Return only the messages created during the current turn."""
     agent_messages = agent_result.get("messages", []) if isinstance(agent_result, dict) else []
@@ -2187,24 +2082,6 @@ def _collect_turn_scoped_structured_attachments(
     turn_messages = _slice_turn_messages(agent_result, history_len)
     turn_tool_messages = [msg for msg in turn_messages if str(msg.get("role") or "").lower() == "tool"]
     collected = _collect_structured_attachment_paths({"messages": turn_tool_messages})
-    delivered_markers = _collect_tool_media_delivery_markers(turn_tool_messages)
-    if delivered_markers:
-        delivered_signatures = _file_delivery_signatures(list(delivered_markers))
-        deduped: list[str] = []
-        for file_path in collected:
-            candidate = _normalize_structured_attachment_path(file_path)
-            if not candidate:
-                continue
-            if candidate in delivered_signatures["abs"] or os.path.realpath(candidate) in delivered_signatures["real"]:
-                continue
-            try:
-                st = os.stat(candidate)
-                if (os.path.basename(candidate), int(st.st_size)) in delivered_signatures["name_size"]:
-                    continue
-            except Exception:
-                pass
-            deduped.append(file_path)
-        collected = deduped
     debug = {
         "turn_messages_count": len(turn_messages),
         "turn_tool_messages_count": len(turn_tool_messages),
@@ -4446,7 +4323,6 @@ class GatewayRunner:
                     entry for entry in self.session_store._entries.values()  # noqa: SLF001
                     if entry.resume_pending
                     and not entry.suspended
-                    and not entry.pending_delivery_text
                     and entry.origin is not None
                     and entry.resume_reason in self._AUTO_RESUME_REASONS
                 ]
@@ -4490,61 +4366,6 @@ class GatewayRunner:
                 "Scheduled auto-resume for %d restart-interrupted session(s)",
                 scheduled,
             )
-        return scheduled
-
-    def _schedule_pending_delivery_recovery(self) -> int:
-        """Send final responses that completed during drain but were not delivered before restart."""
-        window = _auto_continue_freshness_window()
-        try:
-            with self.session_store._lock:  # noqa: SLF001
-                self.session_store._ensure_loaded_locked()  # noqa: SLF001
-                candidates = [
-                    entry for entry in self.session_store._entries.values()  # noqa: SLF001
-                    if entry.pending_delivery_text and entry.origin is not None and not entry.suspended
-                ]
-        except Exception as exc:
-            logger.warning("Failed to enumerate pending-delivery sessions: %s", exc)
-            return 0
-
-        now = datetime.now()
-        scheduled = 0
-        for entry in candidates:
-            marker = entry.pending_delivery_saved_at or entry.last_resume_marked_at or entry.updated_at
-            if marker is not None and (now - marker).total_seconds() > window:
-                continue
-
-            source = entry.origin
-            adapter = self.adapters.get(source.platform)
-            if adapter is None:
-                continue
-            pending_text = entry.pending_delivery_text or ""
-            if not pending_text:
-                continue
-
-            async def _deliver_pending(entry=entry, source=source, adapter=adapter, pending_text=pending_text):
-                metadata = self._thread_metadata_for_source(source)
-                logger.info(
-                    "pending_delivery_recovered: session_id=%s session_key=%s",
-                    entry.session_id,
-                    entry.session_key,
-                )
-                result = await adapter.send(source.chat_id, pending_text, metadata=metadata)
-                if getattr(result, "success", False):
-                    self.session_store.clear_pending_delivery(entry.session_key)
-                    self.session_store.clear_resume_pending(entry.session_key)
-                    logger.info(
-                        "pending_delivery_cleared: session_id=%s session_key=%s",
-                        entry.session_id,
-                        entry.session_key,
-                    )
-
-            task = asyncio.create_task(_deliver_pending())
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
-            scheduled += 1
-
-        if scheduled:
-            logger.info("Scheduled pending-delivery recovery for %d session(s)", scheduled)
         return scheduled
 
     async def start(self) -> bool:
@@ -4844,7 +4665,6 @@ class GatewayRunner:
                 success = await self._connect_adapter_with_timeout(adapter, platform)
                 if success:
                     self.adapters[platform] = adapter
-                    setattr(adapter, "gateway_runner", self)
                     self._sync_voice_mode_state_to_adapter(adapter)
                     connected_count += 1
                     self._update_platform_runtime_status(
@@ -5037,8 +4857,6 @@ class GatewayRunner:
             await self._send_home_channel_startup_notifications(
                 skip_targets=skip_home_targets,
             )
-
-        self._schedule_pending_delivery_recovery()
 
         # Automatically continue fresh sessions that were interrupted by the
         # previous gateway restart/shutdown.  The resume_pending flag is cleared
@@ -6544,7 +6362,6 @@ class GatewayRunner:
                     success = await self._connect_adapter_with_timeout(adapter, platform)
                     if success:
                         self.adapters[platform] = adapter
-                        setattr(adapter, "gateway_runner", self)
                         self._sync_voice_mode_state_to_adapter(adapter)
                         self.delivery_router.adapters = self.adapters
                         del self._failed_platforms[platform]
@@ -6729,13 +6546,6 @@ class GatewayRunner:
                 for _sk in _pre_drain_keys:
                     if _sk not in self._running_agents:
                         try:
-                            _pending_delivery = self.session_store.get_pending_delivery(_sk)
-                            if _pending_delivery:
-                                logger.info(
-                                    "drain_completed_but_delivery_pending: session_key=%s",
-                                    _sk,
-                                )
-                                continue
                             self.session_store.clear_resume_pending(_sk)
                         except Exception as _e:
                             logger.debug(
@@ -7505,23 +7315,6 @@ class GatewayRunner:
         # Internal events (e.g. background-process completion notifications)
         # are system-generated and must skip user authorization.
         is_internal = bool(getattr(event, "internal", False))
-
-        # Guardrail: drop restart-surface empty inbound events that have no trigger
-        # message id. These usually come from platform lifecycle noise (Slack/
-        # adapter/system metadata) and should not surface as user-visible replies.
-        # Keep user-authenticated empty messages that arrive with a real
-        # message id untouched (these should still be treated as explicit user input).
-        _message_id = str(getattr(event, "message_id", "") or "")
-        if not is_internal and not (event.text or "") and not _message_id:
-            source = event.source
-            logger.info(
-                "dropped_empty_inbound_event platform=%s chat=%s user=%s inbound_message_id=%s",
-                source.platform.value if source and source.platform else "unknown",
-                source.chat_id if source and source.chat_id else "unknown",
-                source.user_name or source.user_id or "unknown",
-                _message_id,
-            )
-            return None
 
         # Fire pre_gateway_dispatch plugin hook for user-originated messages.
         # Plugins receive the MessageEvent and may return a dict influencing flow:

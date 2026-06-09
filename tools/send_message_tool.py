@@ -60,55 +60,6 @@ _ALLOW_TOP_LEVEL_DIRECTIVE = "[[allow_top_level]]"
 _WORKER_STYLE_MESSAGE_RE = re.compile(r"^\s*\[(WORKER|WORKER RESULT):", re.IGNORECASE)
 
 
-def _normalize_media_delivery_path(path: str) -> str | None:
-    """Normalize a media path for dedupe markers and structured-attachment filtering."""
-    if not isinstance(path, str):
-        return None
-    raw = path.strip().strip("`\"'")
-    if not raw:
-        return None
-    if raw.startswith("file://"):
-        try:
-            from urllib.parse import unquote, urlparse
-
-            parsed = urlparse(raw)
-            raw = unquote(parsed.path or "")
-        except Exception:
-            return None
-    expanded = os.path.expanduser(raw)
-    if not expanded:
-        return None
-    return os.path.abspath(expanded)
-
-
-def _build_media_delivery_markers(media_file_pairs: list[tuple[str, bool]]) -> dict[str, list[str]]:
-    """Build ordered absolute/realpath marker lists for uploaded media files."""
-    ordered_abs: list[str] = []
-    ordered_real: list[str] = []
-    seen_abs: set[str] = set()
-    seen_real: set[str] = set()
-
-    for path, _ in media_file_pairs or []:
-        normalized = _normalize_media_delivery_path(path)
-        if not normalized:
-            continue
-        if normalized not in seen_abs:
-            ordered_abs.append(normalized)
-            seen_abs.add(normalized)
-        try:
-            real_path = os.path.realpath(normalized)
-        except Exception:
-            real_path = normalized
-        if real_path not in seen_real:
-            ordered_real.append(real_path)
-            seen_real.add(real_path)
-
-    return {
-        "delivered_media_files": ordered_abs,
-        "delivered_media_realpaths": ordered_real,
-    }
-
-
 def _sanitize_error_text(text) -> str:
     """Redact secrets from error text before surfacing it to users/models."""
     redacted = redact_sensitive_text(text)
@@ -131,34 +82,16 @@ def _resolve_slack_thread_safety(
     platform_name: str,
     chat_id: str | None,
     thread_id: str | None,
-    target_ref: str | None,
     used_home_channel: bool,
     message_text: str,
-    has_media_attachments: bool,
-) -> dict[str, object]:
-    """Resolve Slack target routing with inbound-context precedence.
-
-    Priority:
-    1. Explicit thread target (when provided)
-    2. Inbound thread context from the current Slack session
-    3. Inbound channel context from the current Slack session
-    4. Explicit channel target
-    5. home/default channel (for non-media messages only)
-
-    For media attachments, if neither inbound thread nor inbound channel is
-    available and no explicit Slack target is provided, this returns a blocked
-    result to prevent accidental home/top-level delivery.
-    """
+):
+    """Auto-preserve Slack thread context and block unsafe top-level worker probes."""
     if platform_name != "slack":
         return {
-            "chat_id": chat_id,
             "thread_id": thread_id,
             "target_kind": "thread_reply" if thread_id else "top_level",
             "blocked": False,
-            "block_reason": None,
             "auto_threaded": False,
-            "used_home_channel": used_home_channel,
-            "has_explicit_target": bool(target_ref),
         }
 
     from gateway.session_context import get_session_env
@@ -171,65 +104,26 @@ def _resolve_slack_thread_safety(
     worker_probe = _is_worker_probe_message(message_text)
     auto_threaded = False
     resolved_thread_id = thread_id
-    resolved_chat_id = chat_id
-    block_reason: str | None = None
 
-    has_explicit_target = bool(target_ref)
-    explicit_thread = bool(thread_id)
+    if (
+        not resolved_thread_id
+        and session_platform == "slack"
+        and session_thread_id
+        and chat_id
+        and session_chat_id == str(chat_id)
+    ):
+        resolved_thread_id = session_thread_id
+        auto_threaded = True
 
-    has_inbound_channel = bool(session_chat_id)
-    has_inbound_thread = bool(session_thread_id)
-
-    if not explicit_thread and session_platform == "slack":
-        # Explicit thread target always wins; do not rewrite to inbound context.
-        if has_explicit_target:
-            if has_inbound_thread and has_inbound_channel and resolved_chat_id == session_chat_id:
-                # Same-channel explicit target can still thread-reply for media uploads.
-                resolved_thread_id = session_thread_id
-                auto_threaded = True
-            elif has_media_attachments:
-                # Media uploads without explicit thread should never fall back to
-                # a top-level channel, even when an explicit channel was passed.
-                block_reason = "missing_inbound_slack_context_for_media"
-        elif has_inbound_channel:
-            # No explicit target: prefer inbound channel/thread context first.
-            resolved_chat_id = session_chat_id
-            if has_inbound_thread:
-                resolved_thread_id = session_thread_id
-                auto_threaded = True
-            elif has_media_attachments:
-                # For media, require explicit thread context; avoid unscoped uploads.
-                block_reason = "missing_inbound_slack_context_for_media"
-        elif has_media_attachments:
-            # No explicit target and no inbound context: avoid silent home/top-level media delivery.
-            block_reason = "missing_inbound_slack_context_for_media"
-
+    blocked = bool(worker_probe and not resolved_thread_id and not allow_top_level)
     target_kind = "thread_reply" if resolved_thread_id else "top_level"
-
-    # Keep the previous worker probe safety check for explicit top-level probe posts.
-    blocked = bool(block_reason) or bool(worker_probe and not resolved_thread_id and not allow_top_level)
-
-    if block_reason:
-        blocked = True
-
-    # Record whether home channel was effectively used after all context rewrites.
-    if chat_id is None:
-        resolved_from_home = False
-    else:
-        resolved_from_home = used_home_channel and str(resolved_chat_id) == str(chat_id)
-
     return {
-        "chat_id": resolved_chat_id,
         "thread_id": resolved_thread_id,
         "target_kind": target_kind,
         "blocked": blocked,
-        "block_reason": block_reason,
         "auto_threaded": auto_threaded,
         "allow_top_level": allow_top_level,
-        "session_chat_id": session_chat_id,
         "session_thread_id": session_thread_id,
-        "has_explicit_target": has_explicit_target,
-        "used_home_channel": resolved_from_home,
     }
 
 
@@ -335,12 +229,6 @@ SEND_MESSAGE_SCHEMA = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Optional explicit local media paths to send alongside the message. When provided, these are merged with MEDIA:<path> tags found in the message."
-            }
-            ,
-            "artifact_files": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Optional explicit artifact file paths to send alongside the message. These are uploaded directly by send_message and excluded from later structured delivery in the same turn."
             }
         },
         "required": []
@@ -454,14 +342,10 @@ def _handle_send(args, media_files=None):
 
     extracted_media_files, cleaned_message = BasePlatformAdapter.extract_media(message)
     cleaned_message = cleaned_message.replace(_ALLOW_TOP_LEVEL_DIRECTIVE, "").strip()
-    artifact_files = _normalize_media_files_arg(args.get("artifact_files"))
     media_files = BasePlatformAdapter.filter_media_delivery_paths(
-        list(extracted_media_files) + list(media_files or []) + list(artifact_files or [])
+        list(extracted_media_files) + list(media_files or [])
     )
-    media_direct_markers = _build_media_delivery_markers(media_files)
-    artifact_direct_markers = _build_media_delivery_markers(artifact_files or [])
     mirror_text = cleaned_message.strip() or _describe_media_for_mirror(media_files)
-    has_media_attachments = bool(media_files)
 
     used_home_channel = False
     if not chat_id:
@@ -489,18 +373,12 @@ def _handle_send(args, media_files=None):
         platform_name=platform_name,
         chat_id=str(chat_id) if chat_id is not None else None,
         thread_id=thread_id,
-        target_ref=target_ref,
         used_home_channel=used_home_channel,
         message_text=raw_message,
-        has_media_attachments=has_media_attachments,
     )
-    resolved_chat_id = slack_thread_safety.get("chat_id")
-    resolved_thread_id = slack_thread_safety.get("thread_id")
-    chat_id = str(resolved_chat_id) if resolved_chat_id else chat_id
-    thread_id = str(resolved_thread_id) if resolved_thread_id else None
+    thread_id = slack_thread_safety.get("thread_id")
     target_kind = slack_thread_safety.get("target_kind", "top_level")
     blocked_top_level_worker_probe = bool(slack_thread_safety.get("blocked"))
-    block_reason = slack_thread_safety.get("block_reason")
     if blocked_top_level_worker_probe:
         logger.warning(
             "send_message blocked unsafe Slack worker/probe top-level send: channel=%s thread_ts=%s target_kind=%s blocked_top_level_worker_probe=true",
@@ -508,19 +386,6 @@ def _handle_send(args, media_files=None):
             thread_id or "",
             target_kind,
         )
-        # Missing inbound context is a hard block for media attachments.
-        if block_reason == "missing_inbound_slack_context_for_media":
-            return json.dumps(
-                {
-                    "error": "Blocked media send: missing inbound Slack thread/channel context and no explicit target. "
-                    "Attach a thread via 'slack:<channel>:<thread_ts>' or specify both channel/thread in send target.",
-                    "warn": "No inbound Slack context available for media delivery.",
-                    "blocked_top_level_worker_probe": True,
-                    "target_kind": target_kind,
-                    "chat_id": chat_id,
-                    "thread_ts": thread_id or "",
-                }
-            )
         return json.dumps(
             {
                 "error": "Blocked unsafe Slack top-level send for worker/probe message. Use a thread target (slack:<channel>:<thread_ts>) or include [[allow_top_level]] to override.",
@@ -580,33 +445,10 @@ def _handle_send(args, media_files=None):
             result["thread_ts"] = thread_id or result.get("thread_ts") or ""
             result["blocked_top_level_worker_probe"] = blocked_top_level_worker_probe
             result["auto_threaded"] = bool(slack_thread_safety.get("auto_threaded"))
-
-            delivered_media_files: list[str] = list(media_direct_markers["delivered_media_files"])
-            delivered_media_realpaths: list[str] = list(media_direct_markers["delivered_media_realpaths"])
-            if artifact_direct_markers["delivered_media_files"]:
-                # Keep a single media marker surface for both direct media and artifact
-                # uploads so downstream dedupe can treat all direct tool uploads equally.
-                for path in artifact_direct_markers["delivered_media_files"]:
-                    if path not in delivered_media_files:
-                        delivered_media_files.append(path)
-                for path in artifact_direct_markers["delivered_media_realpaths"]:
-                    if path not in delivered_media_realpaths:
-                        delivered_media_realpaths.append(path)
-
-                # Back-compat alias used by older structured-dedup checks.
-                result["delivered_artifact_files"] = artifact_direct_markers["delivered_media_files"]
-                result["delivered_artifact_realpaths"] = artifact_direct_markers["delivered_media_realpaths"]
-
-            if delivered_media_files:
-                result["delivered_media_files"] = delivered_media_files
-                result["delivered_media_realpaths"] = delivered_media_realpaths
-                result["already_delivered_media_paths"] = delivered_media_files
-                result["already_delivered_media_realpaths"] = delivered_media_realpaths
-                result["media_delivery_completed"] = True
-        resolved_used_home_channel = bool(slack_thread_safety.get("used_home_channel"))
-        if resolved_used_home_channel and isinstance(result, dict) and result.get("success"):
+        if used_home_channel and isinstance(result, dict) and result.get("success"):
             result["note"] = f"Sent to {platform_name} home channel (chat_id: {chat_id})"
 
+        # Mirror the sent message into the target's gateway session
         if isinstance(result, dict) and result.get("success") and mirror_text:
             try:
                 from gateway.mirror import mirror_to_session
@@ -615,7 +457,7 @@ def _handle_send(args, media_files=None):
                 user_id = get_session_env("HERMES_SESSION_USER_ID", "") or None
                 if mirror_to_session(
                     platform_name,
-                    str(chat_id),
+                    chat_id,
                     mirror_text,
                     source_label=source_label,
                     thread_id=thread_id,

@@ -3802,16 +3802,6 @@ class BasePlatformAdapter(ABC):
                 # Send the text portion
                 if text_content and not _tts_caption_delivered:
                     logger.info("[%s] Sending response (%d chars) to %s", self.name, len(text_content), event.source.chat_id)
-                    _gateway_runner = getattr(self, "gateway_runner", None)
-                    if _gateway_runner is not None and getattr(_gateway_runner, "_draining", False):
-                        try:
-                            if _gateway_runner.session_store.mark_pending_delivery(session_key, text_content):
-                                logger.info(
-                                    "pending_delivery_saved: session_key=%s",
-                                    session_key,
-                                )
-                        except Exception as _pending_exc:
-                            logger.debug("pending_delivery save failed for %s: %s", session_key, _pending_exc)
                     _reply_anchor = _reply_anchor_for_event(event)
                     # Mark final response messages for notification delivery.
                     # Platform adapters that support per-message notification
@@ -3832,13 +3822,6 @@ class BasePlatformAdapter(ABC):
                         metadata=_thread_metadata,
                     )
                     _record_delivery(result)
-                    if _gateway_runner is not None and delivery_succeeded:
-                        try:
-                            if _gateway_runner.session_store.clear_pending_delivery(session_key):
-                                logger.info("pending_delivery_cleared: session_key=%s", session_key)
-                            _gateway_runner.session_store.clear_resume_pending(session_key)
-                        except Exception as _pending_clear_exc:
-                            logger.debug("pending_delivery clear failed for %s: %s", session_key, _pending_clear_exc)
 
                     # Schedule auto-deletion of system-notice replies.
                     # Detached so the handler returns immediately; errors

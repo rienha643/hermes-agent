@@ -301,232 +301,41 @@ class TestSendMessageTool:
             force_document=False,
         )
 
-    def test_slack_bare_target_uses_inbound_thread_context_for_media(self, tmp_path):
+    def test_slack_media_target_routes_to_adapter_with_thread_id(self, tmp_path):
         slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
-        home_chat = "C0B5S2FELDA"
-        session_thread = "1780983110.055149"
         config = SimpleNamespace(
             platforms={Platform.SLACK: slack_cfg},
-            get_home_channel=lambda _platform: SimpleNamespace(chat_id=home_chat),
+            get_home_channel=lambda _platform: None,
         )
-        image_path = tmp_path / "threaded.png"
-        image_path.write_bytes(b"png payload")
+        image_path = tmp_path / "screenshot.png"
+        image_path.write_bytes(b"not-a-real-png-but-good-enough-for-upload-test")
 
         with patch("gateway.config.load_gateway_config", return_value=config), \
              patch("tools.interrupt.is_interrupted", return_value=False), \
              patch("model_tools._run_async", side_effect=_run_async_immediately), \
-             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": home_chat, "message_id": "msg-ts"})) as slack_send_mock, \
-             patch("gateway.mirror.mirror_to_session", return_value=True), \
-             patch("gateway.session_context.get_session_env") as get_session_env:
-            get_session_env.side_effect = lambda name, default="": {
-                "HERMES_SESSION_PLATFORM": "slack",
-                "HERMES_SESSION_CHAT_ID": "C0B5W21GF8A",
-                "HERMES_SESSION_THREAD_ID": session_thread,
-            }.get(name, default)
+             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": "C0B5W21GF8A", "message_id": "msg_ts"})) as slack_send_mock, \
+             patch("gateway.mirror.mirror_to_session", return_value=True):
             result = json.loads(
                 send_message_tool(
                     {
                         "action": "send",
-                        "target": "slack",
-                        "message": f"thread fallback\nMEDIA:{image_path}",
+                        "target": "slack:C0B5W21GF8A:1780046010.326589",
+                        "message": f"live revalidation\nMEDIA:{image_path}",
                     }
                 )
             )
 
         assert result["success"] is True
-        assert result["auto_threaded"] is True
-        assert result["thread_ts"] == session_thread
-        await_call = slack_send_mock.await_args
-        assert await_call is not None
-        assert await_call.kwargs["thread_id"] == session_thread
-
-    def test_slack_explicit_channel_with_thread_context_uses_session_thread(self):
-        slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
-        target_chat = "C0B5W21GF8A"
-        session_thread = "1780983110.055149"
-        config = SimpleNamespace(
-            platforms={Platform.SLACK: slack_cfg},
-            get_home_channel=lambda _platform: SimpleNamespace(chat_id="C0B5S2FELDA"),
-        )
-
-        with patch("gateway.config.load_gateway_config", return_value=config), \
-             patch("tools.interrupt.is_interrupted", return_value=False), \
-             patch("model_tools._run_async", side_effect=_run_async_immediately), \
-             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": target_chat, "message_id": "msg-ts"})) as slack_send_mock, \
-             patch("gateway.mirror.mirror_to_session", return_value=True), \
-             patch("gateway.session_context.get_session_env") as get_session_env:
-            get_session_env.side_effect = lambda name, default="": {
-                "HERMES_SESSION_PLATFORM": "slack",
-                "HERMES_SESSION_CHAT_ID": target_chat,
-                "HERMES_SESSION_THREAD_ID": session_thread,
-            }.get(name, default)
-            result = json.loads(
-                send_message_tool(
-                    {
-                        "action": "send",
-                        "target": f"slack:{target_chat}",
-                        "message": "channel fallback",
-                    }
-                )
-            )
-
-        assert result["success"] is True
-        assert result["auto_threaded"] is True
-        assert result["thread_ts"] == session_thread
-        await_call = slack_send_mock.await_args
-        assert await_call is not None
-        assert await_call.kwargs["thread_id"] == session_thread
-
-    def test_slack_explicit_thread_target_preserved(self):
-        slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
-        target_chat = "C0B5W21GF8A"
-        config = SimpleNamespace(
-            platforms={Platform.SLACK: slack_cfg},
-            get_home_channel=lambda _platform: SimpleNamespace(chat_id="C0B5S2FELDA"),
-        )
-
-        with patch("gateway.config.load_gateway_config", return_value=config), \
-             patch("tools.interrupt.is_interrupted", return_value=False), \
-             patch("model_tools._run_async", side_effect=_run_async_immediately), \
-             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": target_chat, "message_id": "msg-ts"})) as slack_send_mock, \
-             patch("gateway.mirror.mirror_to_session", return_value=True), \
-             patch("gateway.session_context.get_session_env") as get_session_env:
-            get_session_env.side_effect = lambda name, default="": {
-                "HERMES_SESSION_PLATFORM": "slack",
-                "HERMES_SESSION_CHAT_ID": target_chat,
-                "HERMES_SESSION_THREAD_ID": "1780983110.055149",
-            }.get(name, default)
-            result = json.loads(
-                send_message_tool(
-                    {
-                        "action": "send",
-                        "target": "slack:C0B5W21GF8A:1780983110.055149",
-                        "message": "explicit thread stays",
-                    }
-                )
-            )
-
-        assert result["success"] is True
-        assert result["auto_threaded"] is False
-        assert result["thread_ts"] == "1780983110.055149"
-        await_call = slack_send_mock.await_args
-        assert await_call is not None
-        assert await_call.kwargs["thread_id"] == "1780983110.055149"
-
-    def test_slack_bare_target_with_inbound_channel_only_uses_current_channel_for_media(self, tmp_path):
-        slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
-        config = SimpleNamespace(
-            platforms={Platform.SLACK: slack_cfg},
-            get_home_channel=lambda _platform: SimpleNamespace(chat_id="C0B5S2FELDA"),
-        )
-        image_path = tmp_path / "media_only.png"
-        image_path.write_bytes(b"png payload")
-
-        with patch("gateway.config.load_gateway_config", return_value=config), \
-             patch("tools.interrupt.is_interrupted", return_value=False), \
-             patch("model_tools._run_async", side_effect=_run_async_immediately), \
-             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": "C0B5W21GF8A", "message_id": "msg-ts"})) as slack_send_mock, \
-             patch("gateway.mirror.mirror_to_session", return_value=True), \
-             patch("gateway.session_context.get_session_env") as get_session_env:
-            get_session_env.side_effect = lambda name, default="": {
-                "HERMES_SESSION_PLATFORM": "slack",
-                "HERMES_SESSION_CHAT_ID": "C0B5W21GF8A",
-                "HERMES_SESSION_THREAD_ID": "",
-            }.get(name, default)
-            result = json.loads(
-                send_message_tool(
-                    {
-                        "action": "send",
-                        "target": "slack",
-                        "message": f"channel fallback media\nMEDIA:{image_path}",
-                    }
-                )
-            )
-
-        assert result["success"] is True
-        assert result["auto_threaded"] is False
-        assert result["thread_ts"] == ""
-        await_call = slack_send_mock.await_args
-        assert await_call is not None
-        args = await_call.args
-        assert args[1] == "C0B5W21GF8A"
-        assert await_call.kwargs["thread_id"] is None
-
-    def test_slack_bare_target_without_inbound_context_and_media_blocks_with_warning(self, tmp_path):
-        slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
-        config = SimpleNamespace(
-            platforms={Platform.SLACK: slack_cfg},
-            get_home_channel=lambda _platform: SimpleNamespace(chat_id="C0B5S2FELDA"),
-        )
-        image_path = tmp_path / "media_only.png"
-        image_path.write_bytes(b"png payload")
-
-        with patch("gateway.config.load_gateway_config", return_value=config), \
-             patch("tools.interrupt.is_interrupted", return_value=False), \
-             patch("model_tools._run_async", side_effect=_run_async_immediately), \
-             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock()) as slack_send_mock, \
-             patch("gateway.mirror.mirror_to_session", return_value=True), \
-             patch("gateway.session_context.get_session_env") as get_session_env:
-            get_session_env.side_effect = lambda name, default="": {
-                "HERMES_SESSION_PLATFORM": "slack",
-                "HERMES_SESSION_CHAT_ID": "",
-                "HERMES_SESSION_THREAD_ID": "",
-            }.get(name, default)
-            result = json.loads(
-                send_message_tool(
-                    {
-                        "action": "send",
-                        "target": "slack",
-                        "message": f"blocked media\nMEDIA:{image_path}",
-                    }
-                )
-            )
-
-        assert result["success"] is False
-        assert "warn" in result
-        assert "No inbound Slack context" in result["warn"]
-        assert result["chat_id"] == "C0B5S2FELDA"
-        slack_send_mock.assert_not_called()
-
-    def test_slack_explicit_channel_with_current_thread_uses_thread_media(self, tmp_path):
-        slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
-        target_chat = "C0B5W21GF8A"
-        session_thread = "1780983110.055149"
-        config = SimpleNamespace(
-            platforms={Platform.SLACK: slack_cfg},
-            get_home_channel=lambda _platform: SimpleNamespace(chat_id="C0B5S2FELDA"),
-        )
-        image_path = tmp_path / "explicit_thread_media.png"
-        image_path.write_bytes(b"png payload")
-
-        with patch("gateway.config.load_gateway_config", return_value=config), \
-             patch("tools.interrupt.is_interrupted", return_value=False), \
-             patch("model_tools._run_async", side_effect=_run_async_immediately), \
-             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": target_chat, "message_id": "msg-ts"})) as slack_send_mock, \
-             patch("gateway.mirror.mirror_to_session", return_value=True), \
-             patch("gateway.session_context.get_session_env") as get_session_env:
-            get_session_env.side_effect = lambda name, default="": {
-                "HERMES_SESSION_PLATFORM": "slack",
-                "HERMES_SESSION_CHAT_ID": target_chat,
-                "HERMES_SESSION_THREAD_ID": session_thread,
-            }.get(name, default)
-            result = json.loads(
-                send_message_tool(
-                    {
-                        "action": "send",
-                        "target": f"slack:{target_chat}",
-                        "message": f"explicit channel thread fallback\nMEDIA:{image_path}",
-                    }
-                )
-            )
-
-        assert result["success"] is True
-        assert result["auto_threaded"] is True
-        assert result["thread_ts"] == session_thread
-        await_call = slack_send_mock.await_args
-        assert await_call is not None
-        kwargs = await_call.kwargs
-        assert kwargs["thread_id"] == session_thread
+        slack_send_mock.assert_awaited_once()
+        await_args = slack_send_mock.await_args
+        assert await_args is not None
+        _, chat_id, message = await_args.args[:3]
+        assert chat_id == "C0B5W21GF8A"
+        assert message == "live revalidation"
+        assert await_args.kwargs["thread_id"] == "1780046010.326589"
+        assert await_args.kwargs["force_document"] is False
+        media_files = await_args.kwargs["media_files"]
+        assert media_files == [(str(image_path), False)]
 
     def test_resolved_matrix_thread_name_preserves_thread_id(self):
         matrix_cfg = SimpleNamespace(
@@ -568,48 +377,6 @@ class TestSendMessageTool:
             media_files=[],
             force_document=False,
         )
-
-    def test_slack_send_result_records_direct_media_and_artifact_delivery_markers(self, tmp_path):
-        slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
-        media_path = tmp_path / "dedup-media.png"
-        artifact_path = tmp_path / "dedup-artifact.pdf"
-        media_path.write_bytes(b"png payload")
-        artifact_path.write_bytes(b"%PDF")
-
-        config = SimpleNamespace(
-            platforms={Platform.SLACK: slack_cfg},
-            get_home_channel=lambda _platform: None,
-        )
-
-        with patch("gateway.config.load_gateway_config", return_value=config), \
-             patch("tools.interrupt.is_interrupted", return_value=False), \
-             patch("model_tools._run_async", side_effect=_run_async_immediately), \
-             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": "C0B5W21GF8A", "message_id": "msg-ts"})) as slack_send_mock, \
-             patch("gateway.mirror.mirror_to_session", return_value=True):
-            result = json.loads(
-                send_message_tool(
-                    {
-                        "action": "send",
-                        "target": "slack:C0B5W21GF8A",
-                        "message": f"check markers\nMEDIA:{media_path}",
-                        "artifact_files": [str(artifact_path)],
-                    }
-                )
-            )
-
-        assert result["success"] is True
-        assert result["media_delivery_completed"] is True
-        assert sorted(result["delivered_media_files"]) == sorted([str(media_path), str(artifact_path)])
-        assert sorted(result["delivered_media_realpaths"]) == sorted([str(media_path), str(artifact_path)])
-        assert sorted(result["already_delivered_media_paths"]) == sorted(result["delivered_media_files"])
-        assert sorted(result["already_delivered_media_realpaths"]) == sorted(result["delivered_media_realpaths"])
-        assert slack_send_mock.await_args is not None
-        args = slack_send_mock.await_args.args
-        assert args[1] == "C0B5W21GF8A"
-        sent_media = args[3]
-        assert isinstance(sent_media, list)
-        assert len(sent_media) == 2
-
 
     def test_mirror_receives_current_session_user_id(self):
         config, _telegram_cfg = _make_config()

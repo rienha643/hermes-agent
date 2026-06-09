@@ -223,26 +223,6 @@ def test_collect_structured_attachment_paths_finds_delegate_and_image_results(tm
     assert _collect_structured_attachment_paths(agent_result) == [str(image_path), str(doc_path)]
 
 
-def test_collect_structured_attachment_paths_supports_artifact_files_array(tmp_path):
-    artifact_a = tmp_path / "artifact-a.png"
-    artifact_b = tmp_path / "artifact-b.txt"
-    artifact_a.write_bytes(b"png")
-    artifact_b.write_bytes(b"txt")
-
-    agent_result = {
-        "messages": [
-            {
-                "role": "tool",
-                "content": {
-                    "artifact_files": [str(artifact_a), str(artifact_b)],
-                },
-            },
-        ]
-    }
-
-    assert _collect_structured_attachment_paths(agent_result) == [str(artifact_a), str(artifact_b)]
-
-
 def test_slice_turn_messages_uses_history_offset_boundary():
     messages = [
         {"role": "user", "content": "old user"},
@@ -355,72 +335,6 @@ def test_turn_scoped_structured_attachments_collect_image_generate_fields_from_c
 
     assert collected == [str(image_path), str(output_path)]
     assert debug["turn_tool_messages_count"] == 1
-
-
-def test_turn_scoped_structured_attachments_dedups_send_message_delivered_media_markers(tmp_path):
-    image_path = tmp_path / "duplicate.png"
-    image_path.write_bytes(b"png")
-
-    agent_result = {
-        "messages": [
-            {
-                "role": "tool",
-                "tool_name": "send_message",
-                "content": {
-                    "success": True,
-                    "media_delivery_completed": True,
-                    "delivered_media_files": [str(image_path)],
-                    "delivered_media_realpaths": [str(image_path)],
-                },
-            },
-            {
-                "role": "tool",
-                "tool_name": "image_generate",
-                "content": {"image": str(image_path)},
-            },
-        ]
-    }
-
-    collected, debug = _collect_turn_scoped_structured_attachments(agent_result, 0)
-
-    assert collected == []
-    assert debug["turn_messages_count"] == 2
-    assert debug["turn_tool_messages_count"] == 2
-    assert debug["collected_count"] == 0
-
-
-def test_turn_scoped_structured_attachments_preserves_non_matching_artifact_candidates(tmp_path):
-    delivered = tmp_path / "delivered.png"
-    kept = tmp_path / "kept.png"
-    delivered.write_bytes(b"png")
-    kept.write_bytes(b"png")
-
-    agent_result = {
-        "messages": [
-            {
-                "role": "tool",
-                "tool_name": "send_message",
-                "content": {
-                    "success": True,
-                    "media_delivery_completed": True,
-                    "delivered_media_files": [str(delivered)],
-                },
-            },
-            {
-                "role": "tool",
-                "tool_name": "image_generate",
-                "content": {"image": str(kept)},
-            },
-        ]
-    }
-
-    collected, debug = _collect_turn_scoped_structured_attachments(agent_result, 0)
-
-    assert collected == [str(kept)]
-    assert debug["turn_messages_count"] == 2
-    assert debug["turn_tool_messages_count"] == 2
-    assert debug["collected_count"] == 1
-
 
 
 def test_turn_scoped_structured_attachments_ignore_user_and_assistant_textual_paths(tmp_path):
