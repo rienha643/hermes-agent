@@ -7389,23 +7389,6 @@ class GatewayRunner:
         # are system-generated and must skip user authorization.
         is_internal = bool(getattr(event, "internal", False))
 
-        # Guardrail: drop restart-surface empty inbound events that have no trigger
-        # message id. These usually come from platform lifecycle noise (Slack/
-        # adapter/system metadata) and should not surface as user-visible replies.
-        # Keep user-authenticated empty messages that arrive with a real
-        # message id untouched (these should still be treated as explicit user input).
-        _message_id = str(getattr(event, "message_id", "") or "")
-        if not is_internal and not (event.text or "") and not _message_id:
-            source = event.source
-            logger.info(
-                "dropped_empty_inbound_event platform=%s chat=%s user=%s inbound_message_id=%s",
-                source.platform.value if source and source.platform else "unknown",
-                source.chat_id if source and source.chat_id else "unknown",
-                source.user_name or source.user_id or "unknown",
-                _message_id,
-            )
-            return None
-
         # Fire pre_gateway_dispatch plugin hook for user-originated messages.
         # Plugins receive the MessageEvent and may return a dict influencing flow:
         #   {"action": "skip",    "reason": ...}    -> drop (no reply, plugin handled)
