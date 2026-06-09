@@ -82,10 +82,21 @@ def _resolve_slack_thread_safety(
     platform_name: str,
     chat_id: str | None,
     thread_id: str | None,
+    target_ref: str | None,
     used_home_channel: bool,
     message_text: str,
 ):
-    """Auto-preserve Slack thread context and block unsafe top-level worker probes."""
+    """Auto-preserve Slack thread context and block unsafe top-level worker probes.
+
+    Rules:
+    * If a thread ID was explicitly provided, keep it.
+    * If no thread ID is provided, inherit the current Slack thread when
+      available and contextually valid.
+    * Contextual fallback applies for:
+      - Bare platform target (`slack`) where the tool has no explicit target
+        channel.
+      - Explicit channel target when the current session is in the same chat.
+    """
     if platform_name != "slack":
         return {
             "thread_id": thread_id,
@@ -105,13 +116,25 @@ def _resolve_slack_thread_safety(
     auto_threaded = False
     resolved_thread_id = thread_id
 
-    if (
+    has_explicit_target = bool(target_ref)
+
+    # For bare `slack` targets (target_ref is None), route replies into the
+    # current Slack thread when available to avoid silently dropping media to the
+    # home channel thread root.
+    same_chat = bool(chat_id and session_chat_id and session_chat_id == str(chat_id))
+    should_inherit_thread = (
         not resolved_thread_id
         and session_platform == "slack"
         and session_thread_id
-        and chat_id
-        and session_chat_id == str(chat_id)
-    ):
+        and (
+            # No explicit target at all -> `slack` (home target): inherit by default.
+            not has_explicit_target
+            or same_chat
+            # Explicit channel target in current chat should also inherit.
+        )
+    )
+
+    if should_inherit_thread:
         resolved_thread_id = session_thread_id
         auto_threaded = True
 
@@ -124,6 +147,7 @@ def _resolve_slack_thread_safety(
         "auto_threaded": auto_threaded,
         "allow_top_level": allow_top_level,
         "session_thread_id": session_thread_id,
+        "has_explicit_target": has_explicit_target,
     }
 
 
@@ -373,6 +397,7 @@ def _handle_send(args, media_files=None):
         platform_name=platform_name,
         chat_id=str(chat_id) if chat_id is not None else None,
         thread_id=thread_id,
+        target_ref=target_ref,
         used_home_channel=used_home_channel,
         message_text=raw_message,
     )

@@ -301,6 +301,118 @@ class TestSendMessageTool:
             force_document=False,
         )
 
+    def test_slack_bare_target_uses_inbound_thread_context_for_media(self, tmp_path):
+        slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
+        home_chat = "C0B5S2FELDA"
+        session_thread = "1780983110.055149"
+        config = SimpleNamespace(
+            platforms={Platform.SLACK: slack_cfg},
+            get_home_channel=lambda _platform: SimpleNamespace(chat_id=home_chat),
+        )
+        image_path = tmp_path / "threaded.png"
+        image_path.write_bytes(b"png payload")
+
+        with patch("gateway.config.load_gateway_config", return_value=config), \
+             patch("tools.interrupt.is_interrupted", return_value=False), \
+             patch("model_tools._run_async", side_effect=_run_async_immediately), \
+             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": home_chat, "message_id": "msg-ts"})) as slack_send_mock, \
+             patch("gateway.mirror.mirror_to_session", return_value=True), \
+             patch("gateway.session_context.get_session_env") as get_session_env:
+            get_session_env.side_effect = lambda name, default="": {
+                "HERMES_SESSION_PLATFORM": "slack",
+                "HERMES_SESSION_CHAT_ID": "C0B5W21GF8A",
+                "HERMES_SESSION_THREAD_ID": session_thread,
+            }.get(name, default)
+            result = json.loads(
+                send_message_tool(
+                    {
+                        "action": "send",
+                        "target": "slack",
+                        "message": f"thread fallback\nMEDIA:{image_path}",
+                    }
+                )
+            )
+
+        assert result["success"] is True
+        assert result["auto_threaded"] is True
+        assert result["thread_ts"] == session_thread
+        await_call = slack_send_mock.await_args
+        assert await_call is not None
+        assert await_call.kwargs["thread_id"] == session_thread
+
+    def test_slack_explicit_channel_with_thread_context_uses_session_thread(self):
+        slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
+        target_chat = "C0B5W21GF8A"
+        session_thread = "1780983110.055149"
+        config = SimpleNamespace(
+            platforms={Platform.SLACK: slack_cfg},
+            get_home_channel=lambda _platform: SimpleNamespace(chat_id="C0B5S2FELDA"),
+        )
+
+        with patch("gateway.config.load_gateway_config", return_value=config), \
+             patch("tools.interrupt.is_interrupted", return_value=False), \
+             patch("model_tools._run_async", side_effect=_run_async_immediately), \
+             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": target_chat, "message_id": "msg-ts"})) as slack_send_mock, \
+             patch("gateway.mirror.mirror_to_session", return_value=True), \
+             patch("gateway.session_context.get_session_env") as get_session_env:
+            get_session_env.side_effect = lambda name, default="": {
+                "HERMES_SESSION_PLATFORM": "slack",
+                "HERMES_SESSION_CHAT_ID": target_chat,
+                "HERMES_SESSION_THREAD_ID": session_thread,
+            }.get(name, default)
+            result = json.loads(
+                send_message_tool(
+                    {
+                        "action": "send",
+                        "target": f"slack:{target_chat}",
+                        "message": "channel fallback",
+                    }
+                )
+            )
+
+        assert result["success"] is True
+        assert result["auto_threaded"] is True
+        assert result["thread_ts"] == session_thread
+        await_call = slack_send_mock.await_args
+        assert await_call is not None
+        assert await_call.kwargs["thread_id"] == session_thread
+
+    def test_slack_explicit_thread_target_preserved(self):
+        slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
+        target_chat = "C0B5W21GF8A"
+        config = SimpleNamespace(
+            platforms={Platform.SLACK: slack_cfg},
+            get_home_channel=lambda _platform: SimpleNamespace(chat_id="C0B5S2FELDA"),
+        )
+
+        with patch("gateway.config.load_gateway_config", return_value=config), \
+             patch("tools.interrupt.is_interrupted", return_value=False), \
+             patch("model_tools._run_async", side_effect=_run_async_immediately), \
+             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": target_chat, "message_id": "msg-ts"})) as slack_send_mock, \
+             patch("gateway.mirror.mirror_to_session", return_value=True), \
+             patch("gateway.session_context.get_session_env") as get_session_env:
+            get_session_env.side_effect = lambda name, default="": {
+                "HERMES_SESSION_PLATFORM": "slack",
+                "HERMES_SESSION_CHAT_ID": target_chat,
+                "HERMES_SESSION_THREAD_ID": "1780983110.055149",
+            }.get(name, default)
+            result = json.loads(
+                send_message_tool(
+                    {
+                        "action": "send",
+                        "target": "slack:C0B5W21GF8A:1780983110.055149",
+                        "message": "explicit thread stays",
+                    }
+                )
+            )
+
+        assert result["success"] is True
+        assert result["auto_threaded"] is False
+        assert result["thread_ts"] == "1780983110.055149"
+        await_call = slack_send_mock.await_args
+        assert await_call is not None
+        assert await_call.kwargs["thread_id"] == "1780983110.055149"
+
     def test_slack_media_target_routes_to_adapter_with_thread_id(self, tmp_path):
         slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
         config = SimpleNamespace(
