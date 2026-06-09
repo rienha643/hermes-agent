@@ -962,7 +962,6 @@ class SlackAdapter(BasePlatformAdapter):
         self,
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        thread_ts: Optional[str] = None,
     ) -> Optional[str]:
         """Resolve the correct thread_ts for a Slack API call.
 
@@ -974,10 +973,6 @@ class SlackAdapter(BasePlatformAdapter):
         thread replies.  Messages that originate inside an existing thread are
         always replied to in-thread to preserve conversation context.
         """
-        # Explicit thread_ts from caller should always be honored.
-        if thread_ts:
-            return thread_ts
-
         # When reply_in_thread is disabled (default: True for backward compat),
         # only thread messages that are already part of an existing thread.
         # For top-level channel messages, the inbound handler sets
@@ -1008,7 +1003,6 @@ class SlackAdapter(BasePlatformAdapter):
         caption: Optional[str] = None,
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        thread_ts: Optional[str] = None,
     ) -> SendResult:
         """Upload a local file to Slack."""
         if not self._app:
@@ -1017,7 +1011,7 @@ class SlackAdapter(BasePlatformAdapter):
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        thread_ts = self._resolve_thread_ts(reply_to, metadata, thread_ts=thread_ts)
+        thread_ts = self._resolve_thread_ts(reply_to, metadata)
         last_exc = None
         for attempt in range(3):
             try:
@@ -1050,7 +1044,6 @@ class SlackAdapter(BasePlatformAdapter):
         images: List[Tuple[str, str]],
         metadata: Optional[Dict[str, Any]] = None,
         human_delay: float = 0.0,
-        **kwargs,
     ) -> None:
         """Send a batch of images as a single Slack message with multiple file uploads.
 
@@ -1066,8 +1059,6 @@ class SlackAdapter(BasePlatformAdapter):
         if not images:
             return
 
-        thread_ts = kwargs.pop("thread_ts", None)
-
         try:
             import httpx as _httpx
             from urllib.parse import unquote as _unquote
@@ -1076,11 +1067,7 @@ class SlackAdapter(BasePlatformAdapter):
             await super().send_multiple_images(chat_id, images, metadata, human_delay)
             return
 
-        if thread_ts is not None:
-            metadata = dict(metadata or {})
-            metadata.setdefault("thread_ts", thread_ts)
-
-        thread_ts = self._resolve_thread_ts(None, metadata, thread_ts=thread_ts)
+        thread_ts = self._resolve_thread_ts(None, metadata)
 
         CHUNK = 10
         chunks = [images[i:i + CHUNK] for i in range(0, len(images), CHUNK)]
@@ -1403,24 +1390,10 @@ class SlackAdapter(BasePlatformAdapter):
         caption: Optional[str] = None,
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        **kwargs,
     ) -> SendResult:
         """Send a local image file to Slack by uploading it."""
-        thread_ts = kwargs.pop("thread_ts", None)
-        if thread_ts is not None:
-            metadata = dict(metadata or {})
-            metadata.setdefault("thread_ts", thread_ts)
-
         try:
-            thread_ts = self._resolve_thread_ts(reply_to, metadata, thread_ts=thread_ts)
-            return await self._upload_file(
-                chat_id,
-                image_path,
-                caption,
-                reply_to,
-                metadata,
-                thread_ts=thread_ts,
-            )
+            return await self._upload_file(chat_id, image_path, caption, reply_to, metadata)
         except FileNotFoundError:
             return SendResult(success=False, error=f"Image file not found: {image_path}")
         except Exception as e:  # pragma: no cover - defensive logging
@@ -1443,21 +1416,16 @@ class SlackAdapter(BasePlatformAdapter):
         caption: Optional[str] = None,
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        **kwargs,
     ) -> SendResult:
         """Send an image to Slack by uploading the URL as a file."""
         if not self._app:
             return SendResult(success=False, error="Not connected")
 
         from tools.url_safety import is_safe_url
-        thread_ts = kwargs.pop("thread_ts", None)
-        if thread_ts is not None:
-            metadata = dict(metadata or {})
-            metadata.setdefault("thread_ts", thread_ts)
-
         if not is_safe_url(image_url):
             logger.warning("[Slack] Blocked unsafe image URL (SSRF protection)")
             return await super().send_image(chat_id, image_url, caption, reply_to, metadata=metadata)
+
         try:
             import httpx
 
@@ -1477,7 +1445,7 @@ class SlackAdapter(BasePlatformAdapter):
                 response = await client.get(image_url)
                 response.raise_for_status()
 
-            thread_ts = self._resolve_thread_ts(reply_to, metadata, thread_ts=thread_ts)
+            thread_ts = self._resolve_thread_ts(reply_to, metadata)
             result = await self._get_client(chat_id).files_upload_v2(
                 channel=chat_id,
                 content=response.content,
@@ -1535,7 +1503,6 @@ class SlackAdapter(BasePlatformAdapter):
         caption: Optional[str] = None,
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        **kwargs,
     ) -> SendResult:
         """Send a video file to Slack."""
         if not self._app:
@@ -1544,13 +1511,8 @@ class SlackAdapter(BasePlatformAdapter):
         if not os.path.exists(video_path):
             return SendResult(success=False, error=f"Video file not found: {video_path}")
 
-        thread_ts = kwargs.pop("thread_ts", None)
-        if thread_ts is not None:
-            metadata = dict(metadata or {})
-            metadata.setdefault("thread_ts", thread_ts)
-
         try:
-            thread_ts = self._resolve_thread_ts(reply_to, metadata, thread_ts=thread_ts)
+            thread_ts = self._resolve_thread_ts(reply_to, metadata)
             last_exc = None
             for attempt in range(3):
                 try:
@@ -1598,7 +1560,6 @@ class SlackAdapter(BasePlatformAdapter):
         file_name: Optional[str] = None,
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        **kwargs,
     ) -> SendResult:
         """Send a document/file attachment to Slack."""
         if not self._app:
@@ -1607,13 +1568,8 @@ class SlackAdapter(BasePlatformAdapter):
         if not os.path.exists(file_path):
             return SendResult(success=False, error=f"File not found: {file_path}")
 
-        thread_ts = kwargs.pop("thread_ts", None)
-        if thread_ts is not None:
-            metadata = dict(metadata or {})
-            metadata.setdefault("thread_ts", thread_ts)
-
         display_name = file_name or os.path.basename(file_path)
-        thread_ts = self._resolve_thread_ts(reply_to, metadata, thread_ts=thread_ts)
+        thread_ts = self._resolve_thread_ts(reply_to, metadata)
 
         try:
             last_exc = None
