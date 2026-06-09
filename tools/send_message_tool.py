@@ -1612,7 +1612,7 @@ async def _send_matrix_via_adapter(pconfig, chat_id, message, media_files=None, 
 
 
 async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, thread_id=None, force_document=False):
-    """Send via the Slack gateway adapter so media uploads use files_upload_v2."""
+    """Send via Slack using the adapter's image/document upload helpers."""
     try:
         from types import SimpleNamespace as _SimpleNamespace
         from gateway.platforms.slack import SlackAdapter
@@ -1624,18 +1624,18 @@ async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, t
 
     try:
         adapter = SlackAdapter(pconfig)
+        # Keep the adapter lightweight (no process-local state assumptions).
         adapter._app = _SimpleNamespace(client=AsyncWebClient(token=pconfig.token))
         metadata = {"thread_id": thread_id} if thread_id else None
+        message_id = None
 
         if message.strip():
             text_result = await adapter.send(chat_id, message, metadata=metadata)
             if not text_result.success:
                 return {"error": f"Slack text send failed: {text_result.error}"}
             message_id = text_result.message_id
-        else:
-            message_id = None
 
-        image_paths: list[str] = []
+        image_paths: list[tuple[str, bool]] = []
         other_media: list[tuple[str, bool]] = []
         uploaded_files: list[dict[str, str]] = []
         for media_path, is_voice in media_files:
@@ -1643,34 +1643,29 @@ async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, t
                 return {"error": f"Media file not found: {media_path}"}
             ext = os.path.splitext(media_path)[1].lower()
             if ext in _IMAGE_EXTS and not force_document:
-                image_paths.append(media_path)
+                image_paths.append((media_path, is_voice))
             else:
                 other_media.append((media_path, is_voice))
 
         if image_paths:
-            file_uploads = [
-                {"file": path, "filename": os.path.basename(path)}
-                for path in image_paths
-            ]
-            image_result = await adapter._get_client(chat_id).files_upload_v2(
-                channel=chat_id,
-                file_uploads=file_uploads,
-                initial_comment="",
-                thread_ts=metadata.get("thread_id") if metadata else None,
-            )
-            ok = True
-            if hasattr(image_result, "get"):
-                ok = bool(image_result.get("ok", True))
-            if not ok:
-                error_text = image_result.get("error", "unknown") if hasattr(image_result, "get") else str(image_result)
-                return {"error": f"Slack image upload failed: {error_text}", "message_id": message_id}
+            image_urls = [(f"file://{os.path.abspath(path)}", "") for path, _ in image_paths]
+            try:
+                await adapter.send_multiple_images(
+                    chat_id=chat_id,
+                    images=image_urls,
+                    metadata=metadata,
+                )
+            except Exception as image_err:
+                return {
+                    "error": f"Slack image upload failed: {image_err}",
+                    "message_id": message_id,
+                }
             uploaded_files.extend(
                 {
-                    "path": path,
                     "filename": os.path.basename(path),
-                    "mimetype": "image/png" if os.path.splitext(path)[1].lower() == ".png" else "image/jpeg" if os.path.splitext(path)[1].lower() in {".jpg", ".jpeg"} else "application/octet-stream",
+                    "kind": "image",
                 }
-                for path in image_paths
+                for path, _ in image_paths
             )
 
         for media_path, is_voice in other_media:
@@ -1685,12 +1680,14 @@ async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, t
                 media_result = await adapter.send_document(chat_id, media_path, metadata=metadata)
 
             if not media_result.success:
-                return {"error": f"Slack media upload failed: {media_result.error}", "message_id": message_id or media_result.message_id}
+                return {
+                    "error": f"Slack media upload failed: {media_result.error}",
+                    "message_id": message_id or media_result.message_id,
+                }
             uploaded_files.append(
                 {
-                    "path": media_path,
                     "filename": os.path.basename(media_path),
-                    "mimetype": "audio/ogg" if ext in {".ogg", ".opus"} else "audio/mpeg" if ext in {".mp3", ".m4a"} else "video/mp4" if ext == ".mp4" else "application/octet-stream",
+                    "kind": "video" if ext in _VIDEO_EXTS else "voice" if (ext in _VOICE_EXTS and is_voice) or ext in _AUDIO_EXTS else "document",
                 }
             )
             message_id = media_result.message_id or message_id
@@ -1707,11 +1704,11 @@ async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, t
             result["thread_ts"] = message_id
         if uploaded_files:
             result["has_files"] = True
+            # Avoid exposing absolute filesystem paths to callers.
             result["files"] = uploaded_files
         return result
     except Exception as e:
         return {"error": f"Slack send failed: {e}"}
-
 
 async def _send_homeassistant(token, extra, chat_id, message):
     """Send via Home Assistant notify service."""
