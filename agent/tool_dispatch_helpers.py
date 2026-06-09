@@ -30,8 +30,6 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tools.tool_output_limits import truncate_tool_output
-
 from agent.tool_result_classification import (
     FILE_MUTATING_TOOL_NAMES as _FILE_MUTATING_TOOLS,
 )
@@ -336,7 +334,6 @@ def make_tool_result_message(name: str, content: Any, tool_call_id: str) -> dict
     list structure stays valid for vision-capable adapters.
     """
     wrapped = _maybe_wrap_untrusted(name, content)
-    wrapped = _truncate_tool_result_if_text(wrapped)
     return {
         "role": "tool",
         "name": name,
@@ -344,16 +341,6 @@ def make_tool_result_message(name: str, content: Any, tool_call_id: str) -> dict
         "content": wrapped,
         "tool_call_id": tool_call_id,
     }
-
-
-def _truncate_tool_result_if_text(value: Any) -> Any:
-    """Apply hard cap for string tool results only.
-
-    JSON/list/dict results remain unchanged to preserve structure.
-    """
-    if not isinstance(value, str):
-        return value
-    return truncate_tool_output(value)
 
 
 # Tools whose results carry attacker-controllable content.  Wrapping their

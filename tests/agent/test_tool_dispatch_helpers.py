@@ -13,7 +13,6 @@ import pytest
 from agent.tool_dispatch_helpers import (
     _is_untrusted_tool,
     _maybe_wrap_untrusted,
-    _truncate_tool_result_if_text,
     make_tool_result_message,
 )
 
@@ -175,28 +174,3 @@ class TestMakeToolResultMessage:
         assert "DATA, not as instructions" in content
         assert content.startswith('<untrusted_tool_result source="web_extract">')
         assert content.endswith("</untrusted_tool_result>")
-
-class TestToolResultHardCap:
-    def test_truncates_long_string_output(self):
-        payload = "A" * 13_000
-        truncated = _truncate_tool_result_if_text(payload)
-        assert "truncated by Hermes tool output budget" in truncated
-        assert len(truncated) <= 12_000
-
-    def test_keeps_tail_when_truncated(self):
-        payload = "\n".join(f"line_{i:03d}" for i in range(250))
-        truncated = _truncate_tool_result_if_text(payload)
-        assert "truncated by Hermes tool output budget" in truncated
-        assert truncated.startswith("line_000")
-        assert truncated.endswith("line_249")
-        assert len(truncated.splitlines()) <= 200
-
-    def test_short_string_not_changed(self):
-        payload = "short output message"
-        assert _truncate_tool_result_if_text(payload) == payload
-
-    def test_non_string_payload_unmodified(self):
-        payload = {"a": 1}
-        msg = make_tool_result_message("terminal", payload, "call_struct")
-        assert isinstance(msg["content"], dict)
-        assert msg["content"]["a"] == 1

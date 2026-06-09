@@ -672,14 +672,6 @@ def run_conversation(
     agent._unicode_sanitization_passes = 0
     agent._tool_guardrails.reset_for_turn()
     agent._tool_guardrail_halt_decision = None
-    # Reset per-turn tool-budget counters.  Must align with run_conversation scope so large/looping tool usage can recover on the next turn.
-    agent._tool_call_budget_count = 0
-    agent._tool_call_budget_name_counts = {}
-    agent._tool_budget_limit_hit = False
-    agent._tool_budget_hit_reason = None
-    agent._tool_budget_hit_api_detail = None
-    agent._terminal_output_chars = 0
-    agent._terminal_output_lines = 0
     # True until the server rejects an image_url content part with an error
     # like "Only 'text' content type is supported."  Set to False on first
     # rejection and kept False for the rest of the session so we never re-send
