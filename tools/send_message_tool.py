@@ -138,12 +138,19 @@ def _resolve_slack_thread_safety(
                 # Same-channel explicit target can still thread-reply for media uploads.
                 resolved_thread_id = session_thread_id
                 auto_threaded = True
+            elif has_media_attachments:
+                # Media uploads without explicit thread should never fall back to
+                # a top-level channel, even when an explicit channel was passed.
+                block_reason = "missing_inbound_slack_context_for_media"
         elif has_inbound_channel:
             # No explicit target: prefer inbound channel/thread context first.
             resolved_chat_id = session_chat_id
             if has_inbound_thread:
                 resolved_thread_id = session_thread_id
                 auto_threaded = True
+            elif has_media_attachments:
+                # For media, require explicit thread context; avoid unscoped uploads.
+                block_reason = "missing_inbound_slack_context_for_media"
         elif has_media_attachments:
             # No explicit target and no inbound context: avoid silent home/top-level media delivery.
             block_reason = "missing_inbound_slack_context_for_media"
