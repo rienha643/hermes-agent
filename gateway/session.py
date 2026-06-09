@@ -18,8 +18,185 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
+from tools.tool_output_limits import (
+    get_tool_result_max_bytes,
+    get_tool_result_max_lines,
+    truncate_tool_output,
+)
 
 logger = logging.getLogger(__name__)
+
+
+
+# Tool/worker transcript hard-cap summary caps are intentionally coupled to
+# existing tool-output hard limits so storage growth policy matches user-visible
+# truncation behavior.
+_TOOL_RESULT_SUMMARY_MAX_CHARS = get_tool_result_max_bytes()
+_TOOL_RESULT_SUMMARY_MAX_LINES = get_tool_result_max_lines()
+_WORKER_RESULT_PREFIX = "[WORKER RESULT:"
+_WORKER_OUTPUT_TAIL_HINTS = (
+    "output_tail",
+    "output tail",
+    "output-tail",
+    "마지막 출력",
+)
+_WORKER_ARTIFACT_HINTS = (
+    "artifact",
+    "산출물",
+    "저장 위치",
+    "저장경로",
+    "path:",
+)
+
+
+def _stringify_transcript_content(content: Any) -> str:
+    """Serialize transcript content for deterministic metric/truncation handling."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, (bytes, bytearray)):
+        return content.decode("utf-8", errors="replace")
+    try:
+        return json.dumps(content, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(content)
+
+
+def _line_has_keywords(line: str, keywords: tuple[str, ...]) -> bool:
+    lowered = line.lower()
+    return any(keyword in lowered for keyword in keywords)
+
+
+def _is_worker_result_content(content: Any) -> bool:
+    if not isinstance(content, str):
+        return False
+    for raw_line in content.splitlines()[:2]:
+        if raw_line.strip():
+            return raw_line.strip().startswith(_WORKER_RESULT_PREFIX)
+    return False
+
+
+def _summarize_tool_payload(payload: Any) -> str:
+    """Return a compact summary for non-string tool payloads."""
+    if isinstance(payload, list):
+        samples = []
+        for item in payload[:4]:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                samples.append(item.get("text")[:140])
+            else:
+                samples.append(type(item).__name__)
+        payload_text = json.dumps(
+            {
+                "tool_payload": "list",
+                "count": len(payload),
+                "samples": samples,
+            },
+            ensure_ascii=False,
+        )
+    elif isinstance(payload, dict):
+        keys = list(payload.keys())
+        sample_types = {str(k): type(v).__name__ for k, v in list(payload.items())[:10]}
+        payload_text = json.dumps(
+            {
+                "tool_payload": "dict",
+                "key_count": len(keys),
+                "keys": keys[:20],
+                "value_type_summary": sample_types,
+            },
+            ensure_ascii=False,
+        )
+        body = payload.get("content") if isinstance(payload, dict) else None
+        if isinstance(body, str) and body:
+            payload_text += "\n" + truncate_tool_output(body, max_chars=1200, max_lines=20)
+    else:
+        payload_text = _stringify_transcript_content(payload)
+
+    return truncate_tool_output(
+        payload_text,
+        max_chars=_TOOL_RESULT_SUMMARY_MAX_CHARS,
+        max_lines=_TOOL_RESULT_SUMMARY_MAX_LINES,
+    )
+
+
+def _summarize_worker_result(content: str) -> str:
+    """Create a short summary for worker result messages before transcript write."""
+    lines = content.splitlines()
+    if not lines:
+        return "[WORKER RESULT]"
+
+    header = lines[0].strip()
+    intro = ""
+    for candidate in lines[1:4]:
+        if candidate.strip():
+            intro = candidate.strip()
+            break
+
+    output_tail = [line.strip() for line in lines if _line_has_keywords(line, _WORKER_OUTPUT_TAIL_HINTS)][:8]
+    artifacts = [line.strip() for line in lines if _line_has_keywords(line, _WORKER_ARTIFACT_HINTS)][:8]
+
+    summary_parts = [header]
+    if intro:
+        summary_parts.append(intro)
+    if output_tail:
+        summary_parts.append("output_tail")
+        summary_parts.extend(f"- {line}" for line in output_tail)
+    if artifacts:
+        summary_parts.append("artifacts")
+        summary_parts.extend(f"- {line}" for line in artifacts)
+
+    summary = "\n".join(summary_parts)
+    if summary == content:
+        return content
+    return truncate_tool_output(
+        summary,
+        max_chars=_TOOL_RESULT_SUMMARY_MAX_CHARS,
+        max_lines=_TOOL_RESULT_SUMMARY_MAX_LINES,
+    )
+
+
+def _normalize_transcript_message(message: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(message, dict):
+        return {}
+
+    normalized = dict(message)
+    role = str(normalized.get("role", "")).lower()
+    content = normalized.get("content")
+
+    if role == "tool":
+        if isinstance(content, str):
+            normalized["content"] = truncate_tool_output(
+                content,
+                max_chars=_TOOL_RESULT_SUMMARY_MAX_CHARS,
+                max_lines=_TOOL_RESULT_SUMMARY_MAX_LINES,
+            )
+        elif content is not None:
+            normalized["content"] = _summarize_tool_payload(content)
+
+    elif role == "assistant" and _is_worker_result_content(content):
+        content_text = _stringify_transcript_content(content)
+        should_summarize = (
+            len(content_text) > _TOOL_RESULT_SUMMARY_MAX_CHARS
+            or len(content_text.splitlines()) > _TOOL_RESULT_SUMMARY_MAX_LINES
+            or _line_has_keywords(content_text, _WORKER_OUTPUT_TAIL_HINTS)
+            or _line_has_keywords(content_text, _WORKER_ARTIFACT_HINTS)
+        )
+        if should_summarize:
+            normalized["content"] = _summarize_worker_result(content_text)
+
+    return normalized
+
+
+def _transcript_storage_role(message: Dict[str, Any]) -> str:
+    role = str(message.get("role", "unknown")).lower()
+    if role == "assistant" and _is_worker_result_content(message.get("content")):
+        return "worker"
+    return role
+
+
+def _transcript_storage_size(message: Dict[str, Any]) -> tuple[int, int]:
+    text = _stringify_transcript_content(message.get("content"))
+    return len(text), len(text.splitlines())
 
 
 def _now() -> datetime:
@@ -1311,31 +1488,33 @@ class SessionStore:
                      _flush_messages_to_session_db(), preventing the
                      duplicate-write bug (#860).
         """
+        normalized_message = _normalize_transcript_message(message)
+        role_for_metrics = _transcript_storage_role(normalized_message)
+        chars, lines = _transcript_storage_size(normalized_message)
+        logger.info("transcript_store: role=%s chars=%s lines=%s", role_for_metrics, chars, lines)
+
         if self._db and not skip_db:
             try:
                 self._db.append_message(
                     session_id=session_id,
-                    role=message.get("role", "unknown"),
-                    content=message.get("content"),
-                    tool_name=message.get("tool_name"),
-                    tool_calls=message.get("tool_calls"),
-                    tool_call_id=message.get("tool_call_id"),
-                    reasoning=message.get("reasoning") if message.get("role") == "assistant" else None,
-                    reasoning_content=message.get("reasoning_content") if message.get("role") == "assistant" else None,
-                    reasoning_details=message.get("reasoning_details") if message.get("role") == "assistant" else None,
-                    codex_reasoning_items=message.get("codex_reasoning_items") if message.get("role") == "assistant" else None,
-                    codex_message_items=message.get("codex_message_items") if message.get("role") == "assistant" else None,
-                    # Platform-side message id (yuanbao msg_id, telegram update_id, …).
-                    # Accept either explicit ``platform_message_id`` or the legacy
-                    # ``message_id`` key the JSONL transcript used.
+                    role=normalized_message.get("role", "unknown"),
+                    content=normalized_message.get("content"),
+                    tool_name=normalized_message.get("tool_name"),
+                    tool_calls=normalized_message.get("tool_calls"),
+                    tool_call_id=normalized_message.get("tool_call_id"),
+                    reasoning=normalized_message.get("reasoning") if normalized_message.get("role") == "assistant" else None,
+                    reasoning_content=normalized_message.get("reasoning_content") if normalized_message.get("role") == "assistant" else None,
+                    reasoning_details=normalized_message.get("reasoning_details") if normalized_message.get("role") == "assistant" else None,
+                    codex_reasoning_items=normalized_message.get("codex_reasoning_items") if normalized_message.get("role") == "assistant" else None,
+                    codex_message_items=normalized_message.get("codex_message_items") if normalized_message.get("role") == "assistant" else None,
                     platform_message_id=(
-                        message.get("platform_message_id") or message.get("message_id")
+                        normalized_message.get("platform_message_id") or normalized_message.get("message_id")
                     ),
-                    observed=bool(message.get("observed")),
+                    observed=bool(normalized_message.get("observed")),
                 )
             except Exception as e:
                 logger.debug("Session DB operation failed: %s", e)
-    
+
     def rewrite_transcript(self, session_id: str, messages: List[Dict[str, Any]]) -> None:
         """Replace the entire transcript for a session with new messages.
 

@@ -408,6 +408,23 @@ def init_agent(
     agent._tool_guardrails = ToolCallGuardrailController()
     agent._tool_guardrail_halt_decision: ToolGuardrailDecision | None = None
 
+    # Runtime tool-budget enforcement defaults (execution-phase safety rails).
+    # These are reset per conversation turn in conversation_loop.py.
+    agent._tool_call_budget_limit = 20
+    agent._tool_call_budget_default_limits = {
+        "read_file": 3,
+        "search_files": 5,
+        "session_search": 3,
+    }
+    agent._tool_call_budget_count = 0
+    agent._tool_call_budget_name_counts: dict[str, int] = {}
+    agent._tool_budget_limit_hit = False
+    agent._tool_budget_hit_reason = None
+    agent._tool_budget_hit_api_detail = None
+    agent._tool_budget_lock = threading.Lock()
+    agent._terminal_output_chars = 0
+    agent._terminal_output_lines = 0
+
     # Interrupt mechanism for breaking out of tool loops
     agent._interrupt_requested = False
     agent._interrupt_message = None  # Optional message that triggered interrupt
