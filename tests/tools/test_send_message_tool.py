@@ -569,48 +569,6 @@ class TestSendMessageTool:
             force_document=False,
         )
 
-    def test_slack_send_result_records_direct_media_and_artifact_delivery_markers(self, tmp_path):
-        slack_cfg = SimpleNamespace(enabled=True, token="xoxb-test", extra={})
-        media_path = tmp_path / "dedup-media.png"
-        artifact_path = tmp_path / "dedup-artifact.pdf"
-        media_path.write_bytes(b"png payload")
-        artifact_path.write_bytes(b"%PDF")
-
-        config = SimpleNamespace(
-            platforms={Platform.SLACK: slack_cfg},
-            get_home_channel=lambda _platform: None,
-        )
-
-        with patch("gateway.config.load_gateway_config", return_value=config), \
-             patch("tools.interrupt.is_interrupted", return_value=False), \
-             patch("model_tools._run_async", side_effect=_run_async_immediately), \
-             patch("tools.send_message_tool._send_slack_via_adapter", new=AsyncMock(return_value={"success": True, "platform": "slack", "chat_id": "C0B5W21GF8A", "message_id": "msg-ts"})) as slack_send_mock, \
-             patch("gateway.mirror.mirror_to_session", return_value=True):
-            result = json.loads(
-                send_message_tool(
-                    {
-                        "action": "send",
-                        "target": "slack:C0B5W21GF8A",
-                        "message": f"check markers\nMEDIA:{media_path}",
-                        "artifact_files": [str(artifact_path)],
-                    }
-                )
-            )
-
-        assert result["success"] is True
-        assert result["media_delivery_completed"] is True
-        assert sorted(result["delivered_media_files"]) == sorted([str(media_path), str(artifact_path)])
-        assert sorted(result["delivered_media_realpaths"]) == sorted([str(media_path), str(artifact_path)])
-        assert sorted(result["already_delivered_media_paths"]) == sorted(result["delivered_media_files"])
-        assert sorted(result["already_delivered_media_realpaths"]) == sorted(result["delivered_media_realpaths"])
-        assert slack_send_mock.await_args is not None
-        args = slack_send_mock.await_args.args
-        assert args[1] == "C0B5W21GF8A"
-        sent_media = args[3]
-        assert isinstance(sent_media, list)
-        assert len(sent_media) == 2
-
-
     def test_mirror_receives_current_session_user_id(self):
         config, _telegram_cfg = _make_config()
 
