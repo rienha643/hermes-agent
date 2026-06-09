@@ -181,6 +181,15 @@ def _images_cache_dir() -> Path:
 _SSD_IMAGE_ROOT = Path("/Volumes/SSD_Hermes/HermesWork/Image")
 
 
+def _resolve_image_work_root() -> Path:
+    """Resolve the image artifact root with environment override first."""
+    env_override = os.environ.get("HERMES_WORK_ROOT", "").strip()
+    if env_override:
+        override_root = Path(env_override).expanduser()
+        return override_root if override_root.name == "Image" else override_root / "Image"
+    return Path("/Volumes/SSD_Hermes/HermesWork/Image")
+
+
 def _verify_image_storage_root(published_dir: Path) -> Dict[str, Any]:
     """Return image-root storage diagnostics and enforce SSD anchoring in production."""
     image_root = Path(published_dir).parent
@@ -223,7 +232,7 @@ def _publish_image_artifact(
     project_key = (project_name or prefix or "image").strip() or "image"
     artifact_key = (artifact_name or prefix or source.stem or "image").strip() or "image"
     artifact_key = Path(artifact_key).name
-    _, published_dir = resolve_project_artifact_dir("Image", project_key)
+    _, published_dir = resolve_project_artifact_dir("Image", project_key, work_root=_resolve_image_work_root())
     published_dir.mkdir(parents=True, exist_ok=True)
     published_path = next_versioned_child_path(published_dir, f"{artifact_key}{source.suffix}")
     shutil.copyfile(source, published_path)
@@ -257,7 +266,7 @@ def publish_filesystem_image_bundle(
     artifact_key = (artifact_name or prefix or source.stem or "image").strip() or "image"
     artifact_key = Path(artifact_key).name
 
-    project_record, published_dir = resolve_project_artifact_dir("Image", project_key)
+    project_record, published_dir = resolve_project_artifact_dir("Image", project_key, work_root=_resolve_image_work_root())
     published_dir.mkdir(parents=True, exist_ok=True)
     storage_verification = _verify_image_storage_root(published_dir)
     primary_image_path = next_versioned_child_path(published_dir, f"{artifact_key}{source.suffix}")

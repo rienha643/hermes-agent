@@ -71,7 +71,7 @@ def test_publish_filesystem_image_bundle_creates_versioned_bundle_and_manifest(m
         },
     )
 
-    _, expected_dir = resolve_project_artifact_dir("Image", "angelica_smoke_test")
+    _, expected_dir = resolve_project_artifact_dir("Image", "angelica_smoke_test", work_root=tmp_path / "HermesWork" / "Image")
     assert bundle["published_dir"] == expected_dir
     assert bundle["primary_image_path"] == expected_dir / "angelica_smoke_v1.png"
     assert bundle["primary_image_path"].exists()
@@ -578,3 +578,78 @@ def test_update_run_delivery_status_and_finalize_qualification_report(monkeypatc
     assert report["summary"]["slack_fail_count"] == 1
     assert report["summary"]["slack_pending_count"] == 0
     assert report["summary"]["slack_skipped_count"] == 1
+
+
+def test_resolve_image_root_defaults_to_ssd_hermeswork_root(monkeypatch):
+    from agent import image_gen_provider as provider_mod
+
+    monkeypatch.delenv("HERMES_WORK_ROOT", raising=False)
+
+    assert provider_mod._resolve_image_work_root() == Path("/Volumes/SSD_Hermes/HermesWork/Image")
+
+
+def test_publish_root_can_be_forced_to_ssd_when_env_is_not_set(monkeypatch, tmp_path):
+    from agent import image_gen_provider as provider_mod
+
+    source = tmp_path / "output" / "smoke_fixed_root_00001_.png"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(PNG_1PX)
+
+    monkeypatch.delenv("HERMES_WORK_ROOT", raising=False)
+    fake_root = tmp_path / "HermesWork"
+
+    called = {}
+
+    def fake_work_root():
+        return fake_root / "Image"
+
+    monkeypatch.setattr(provider_mod, "_resolve_image_work_root", fake_work_root)
+    monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: (called.setdefault("hook", kwargs), True)[1])
+
+    bundle = provider_mod.publish_filesystem_image_bundle(
+        source,
+        prefix="root_fixed",
+        project_name="root_fixed_project",
+        artifact_name="root_fixed",
+        category="smoke_test",
+        workflow_json={},
+        prompt_payload={
+            "prompt": "root check",
+            "negative_prompt": "",
+            "width": 512,
+            "height": 512,
+            "batch_size": 1,
+            "seed": 42,
+            "sampler": "euler",
+            "steps": 12,
+            "cfg": 7,
+            "denoise": 1,
+            "raw_prompt_payload": {},
+        },
+        metadata={
+            "provider": "comfy-local",
+            "prompt_id": "pid-root",
+            "api_base_url": "http://172.22.224.1:8188",
+            "checkpoint": "AOM3A1_orangemixs.safetensors",
+            "vae": "animevae.pt",
+            "loras": [],
+            "controlnet_used": False,
+            "seed": 42,
+            "sampler": "euler",
+            "steps": 12,
+            "cfg": 7,
+            "denoise": 1,
+            "created_at": "2026-06-10T00:00:00Z",
+            "category": "smoke_test",
+            "output_source_path": str(source),
+        },
+    )
+
+    assert str(bundle["published_dir"]).startswith(str(fake_root / "Image"))
+    assert bundle["published_dir"].name.endswith("_root_fixed_project")
+    assert bundle["published_dir"].parent == fake_root / "Image"
+    assert bundle["workflow_path"].parent.name == "_sidecars"
+    assert bundle["sidecar_dir"] == bundle["published_dir"] / "_sidecars"
+    assert "/Users/hermes/HermesWork/Image" not in str(bundle["primary_image_path"])
+    assert "_sidecars" in [p.name for p in bundle["published_dir"].iterdir()]
+
