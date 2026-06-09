@@ -288,6 +288,84 @@ def test_publish_filesystem_image_bundle_uses_next_version_when_name_repeats(mon
     assert second["workflow_path"].name == "angelica_smoke_v2.workflow.json"
 
 
+def test_publish_filesystem_image_bundle_skips_duplicate_publish_for_same_prompt_and_source(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+
+    from agent import image_gen_provider as provider_mod
+
+    source = tmp_path / "output" / "angelica_smoke_00001_.png"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(PNG_1PX)
+
+    hook_calls = []
+    monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: hook_calls.append(kwargs) or True)
+
+    prompt_payload = {
+        "prompt": "a",
+        "negative_prompt": "b",
+        "width": 512,
+        "height": 512,
+        "batch_size": 1,
+        "seed": 1,
+        "sampler": "euler",
+        "steps": 1,
+        "cfg": 1,
+        "denoise": 1,
+        "raw_prompt_payload": {},
+    }
+    base_metadata = {
+        "provider": "comfy-local",
+        "prompt_id": "pid-dup",
+        "api_base_url": "http://172.22.224.1:8188",
+        "checkpoint": "AOM3A1_orangemixs.safetensors",
+        "vae": "animevae.pt",
+        "loras": [],
+        "controlnet_used": False,
+        "seed": 1,
+        "sampler": "euler",
+        "steps": 1,
+        "cfg": 1,
+        "denoise": 1,
+        "created_at": "2026-06-05T00:00:00Z",
+    }
+
+    first = provider_mod.publish_filesystem_image_bundle(
+        source,
+        prefix="angelica_smoke",
+        project_name="duplicate_smoke_project",
+        artifact_name="artifact_one",
+        category="smoke_test",
+        workflow_json={},
+        prompt_payload=prompt_payload,
+        metadata=dict(base_metadata),
+    )
+
+    second = provider_mod.publish_filesystem_image_bundle(
+        source,
+        prefix="angelica_smoke",
+        project_name="duplicate_smoke_project_variant",
+        artifact_name="artifact_two",
+        category="smoke_test",
+        workflow_json={},
+        prompt_payload=prompt_payload,
+        metadata=dict(base_metadata),
+    )
+
+    assert second["published_dir"] == first["published_dir"]
+    assert second["primary_image_path"] == first["primary_image_path"]
+    assert second["manifest_path"] == first["manifest_path"]
+
+    published_files = sorted(p.name for p in first["published_dir"].iterdir() if p.is_file())
+    assert len([name for name in published_files if name.endswith(".png")]) == 1
+    assert "_sidecars" in [p.name for p in first["published_dir"].iterdir()]
+
+    sidecars = first["published_dir"] / "_sidecars"
+    assert sidecars.is_dir()
+    assert any(path.suffix == ".json" for path in sidecars.iterdir())
+    assert len(hook_calls) == 1
+
+
 def test_publish_filesystem_image_bundle_groups_multiple_artifacts_under_same_project(monkeypatch, tmp_path):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
     monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))

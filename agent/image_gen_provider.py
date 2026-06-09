@@ -245,6 +245,144 @@ def _publish_image_artifact(
     return published_path
 
 
+def _normalize_output_signature_path(path_value: object) -> str | None:
+    """Return a normalized absolute path used for duplicate detection."""
+    if not path_value:
+        return None
+    try:
+        return str(Path(path_value).expanduser().resolve())
+    except Exception:
+        try:
+            return str(Path(path_value).expanduser())
+        except Exception:
+            return None
+
+
+def _read_json_if_exists(path: Path) -> dict | None:
+    """Read JSON defensively."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _iter_image_bundle_manifests(image_root: Path):
+    """Yield tuples of publish manifest + metadata payloads under HermesWork/Image."""
+    if not image_root.exists():
+        return
+
+    for candidate in sorted(image_root.iterdir()):
+        if not candidate.is_dir():
+            continue
+        manifest_path = candidate / "_sidecars" / "manifest.json"
+        manifest_payload = _read_json_if_exists(manifest_path)
+        if not isinstance(manifest_payload, dict):
+            continue
+
+        sidecars = manifest_payload.get("sidecars")
+        if not isinstance(sidecars, dict):
+            continue
+
+        metadata_name = sidecars.get("metadata")
+        if not isinstance(metadata_name, str) or not metadata_name:
+            continue
+
+        metadata_payload = _read_json_if_exists(manifest_path.parent / metadata_name)
+        if not isinstance(metadata_payload, dict):
+            continue
+
+        yield candidate, manifest_payload, metadata_payload
+
+
+def _find_duplicate_bundle(
+    *,
+    image_root: Path,
+    prompt_id: str,
+    source: Path,
+    output_filename: str,
+) -> tuple[Path, dict, dict] | None:
+    """Find an existing bundle that matches the duplicate-protection key."""
+    target_prompt_id = str(prompt_id).strip()
+    if not target_prompt_id:
+        return None
+
+    target_source = _normalize_output_signature_path(source)
+    target_output = str(Path(output_filename).name)
+
+    for published_dir, manifest_payload, metadata_payload in _iter_image_bundle_manifests(image_root):
+        manifest_prompt_id = str(metadata_payload.get("prompt_id", "")).strip()
+        if manifest_prompt_id != target_prompt_id:
+            continue
+
+        manifest_source = _normalize_output_signature_path(metadata_payload.get("output_source_path"))
+        if target_source and manifest_source and manifest_source != target_source:
+            continue
+
+        manifest_output = str(manifest_payload.get("primary_image") or "").strip()
+        metadata_output = str(metadata_payload.get("output_filename") or "").strip()
+
+        if metadata_output and metadata_output != target_output:
+            continue
+        if metadata_output == "":
+            source_stem = Path(target_output).stem
+            if manifest_output and source_stem and source_stem not in Path(manifest_output).stem:
+                # Keep output filename in scope when metadata is from an older shape.
+                continue
+
+        primary_image_path = published_dir / manifest_output
+        if manifest_output and not primary_image_path.is_file():
+            continue
+
+        return published_dir, manifest_payload, metadata_payload
+
+    return None
+
+
+def _load_existing_bundle(
+    published_dir: Path,
+    manifest_payload: dict,
+    metadata_payload: dict,
+) -> dict[str, Any]:
+    """Reconstruct the helper return value from an existing publish bundle."""
+    sidecars = manifest_payload.get("sidecars")
+    if not isinstance(sidecars, dict):
+        sidecars = {}
+
+    sidecar_dir = published_dir / "_sidecars"
+    workflow_name = str(sidecars.get("workflow") or "")
+    prompt_name = str(sidecars.get("prompt") or "")
+    metadata_name = str(sidecars.get("metadata") or "")
+    manifest_name = str(sidecars.get("manifest") or "manifest.json")
+
+    workflow_path = sidecar_dir / workflow_name
+    prompt_path = sidecar_dir / prompt_name
+    metadata_path = sidecar_dir / metadata_name
+    manifest_path = sidecar_dir / manifest_name
+
+    primary_image = str(manifest_payload.get("primary_image") or "")
+
+    return {
+        "project_id": str(manifest_payload.get("project_id") or published_dir.name),
+        "published_dir": published_dir,
+        "primary_image_path": published_dir / primary_image,
+        "workflow_path": workflow_path,
+        "prompt_path": prompt_path,
+        "metadata_path": metadata_path,
+        "manifest_path": manifest_path,
+        "primary_image": primary_image,
+        "sidecars": {
+            "workflow": workflow_name,
+            "prompt": prompt_name,
+            "metadata": metadata_name,
+            "manifest": manifest_name,
+            "dir": str(sidecar_dir),
+        },
+        "storage_verification": _verify_image_storage_root(published_dir),
+        "sidecar_dir": sidecar_dir,
+        "nas_hook_requested": bool(metadata_payload.get("nas_hook_requested", False)),
+    }
+
+
 def publish_filesystem_image_bundle(
     source: Path,
     *,
@@ -266,7 +404,18 @@ def publish_filesystem_image_bundle(
     artifact_key = (artifact_name or prefix or source.stem or "image").strip() or "image"
     artifact_key = Path(artifact_key).name
 
-    project_record, published_dir = resolve_project_artifact_dir("Image", project_key, work_root=_resolve_image_work_root())
+    image_root = _resolve_image_work_root()
+    duplicate_bundle = _find_duplicate_bundle(
+        image_root=image_root,
+        prompt_id=str(metadata.get("prompt_id", "") or ""),
+        source=source,
+        output_filename=source.name,
+    )
+    if duplicate_bundle is not None:
+        duplicate_dir, duplicate_manifest, duplicate_metadata = duplicate_bundle
+        return _load_existing_bundle(duplicate_dir, duplicate_manifest, duplicate_metadata)
+
+    project_record, published_dir = resolve_project_artifact_dir("Image", project_key, work_root=image_root)
     published_dir.mkdir(parents=True, exist_ok=True)
     storage_verification = _verify_image_storage_root(published_dir)
     primary_image_path = next_versioned_child_path(published_dir, f"{artifact_key}{source.suffix}")
@@ -284,6 +433,7 @@ def publish_filesystem_image_bundle(
     metadata_payload.update(
         {
             "category": category,
+            "output_filename": source.name,
             "output_source_path": str(source),
             "published_primary_path": str(primary_image_path),
             "published_dir": str(published_dir),
