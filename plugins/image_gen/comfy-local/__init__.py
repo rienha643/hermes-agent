@@ -34,12 +34,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://172.22.224.1:8188"
 DEFAULT_OUTPUT_DIR = "/mnt/c/AI/ComfyUI/output"
-DEFAULT_OUTPUT_DIR_FALLBACKS: Tuple[str, ...] = (
-    "/mnt/d/AI/ComfyUI/output",
-    "/mnt/e/AI/ComfyUI/output",
-    "/Volumes/SSD_Hermes/ComfyUI/output",
-    "/Volumes/SSD_Hermes/ComfyUI/ComfyUI/output",
-)
 DEFAULT_CHECKPOINT = "AOM3A1_orangemixs.safetensors"
 DEFAULT_VAE = "animevae.pt"
 DEFAULT_STEPS = 12
@@ -104,8 +98,6 @@ def _resolve_base_url() -> str:
 
 
 def _resolve_output_dir() -> Path:
-    # Keep backward-compatible behavior: explicit override first, then first
-    # configured/default candidate.
     env_override = os.environ.get("COMFY_LOCAL_OUTPUT_DIR")
     if env_override and env_override.strip():
         return Path(env_override.strip())
@@ -114,67 +106,6 @@ def _resolve_output_dir() -> Path:
     if output_dir and output_dir.strip():
         return Path(output_dir.strip())
     return Path(DEFAULT_OUTPUT_DIR)
-
-
-def _candidate_output_dirs() -> List[Path]:
-    """Return ordered candidate directories for ComfyUI output lookup.
-
-    Real deployments can emit outputs under WSL mount points, SMB mount points,
-    or legacy absolute paths. Try configured/override values first, then a list of
-    known fallback paths.
-    """
-    candidates: List[Path] = []
-    seen: set[str] = set()
-
-    env_override = os.environ.get("COMFY_LOCAL_OUTPUT_DIR")
-    if env_override and env_override.strip():
-        candidates.append(Path(env_override.strip()))
-
-    cfg = _provider_cfg()
-    output_dir = cfg.get("output_dir") if isinstance(cfg.get("output_dir"), str) else None
-    if output_dir and output_dir.strip():
-        candidates.append(Path(output_dir.strip()))
-
-    candidates.append(Path(DEFAULT_OUTPUT_DIR))
-    candidates.extend(Path(item) for item in DEFAULT_OUTPUT_DIR_FALLBACKS)
-
-    normalized: List[Path] = []
-    for candidate in candidates:
-        try:
-            p = candidate.expanduser()
-        except Exception:
-            p = candidate
-        key = str(p.resolve()) if p.exists() else str(p)
-        if key not in seen:
-            normalized.append(p)
-            seen.add(key)
-    return normalized
-
-
-def _find_comfy_output_file(output_image: Dict[str, Any]) -> Optional[Path]:
-    filename = str(output_image.get("filename") or "").strip()
-    if not filename:
-        return None
-
-    subfolder = str(output_image.get("subfolder") or "").strip()
-    filename = Path(filename).name
-    searched: List[Path] = []
-    for output_dir in _candidate_output_dirs():
-        candidate = output_dir
-        if subfolder:
-            candidate = candidate / subfolder
-        candidate = candidate / filename
-        searched.append(candidate)
-        if candidate.is_file():
-            return candidate
-
-    logger.warning(
-        "ComfyUI output file not found. filename=%s subfolder=%s candidates=%s",
-        filename,
-        subfolder or "(none)",
-        [str(p) for p in searched],
-    )
-    return None
 
 
 def _resolve_model() -> str:
@@ -321,6 +252,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             )
 
         base_url = _resolve_base_url()
+        output_dir = _resolve_output_dir()
         checkpoint = str(kwargs.get("model") or _resolve_model()).strip() or DEFAULT_CHECKPOINT
         vae = str(kwargs.get("vae") or _resolve_vae()).strip() or DEFAULT_VAE
         project_name = kwargs.get("project_name")
@@ -487,19 +419,14 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 aspect_ratio=aspect,
             )
 
-        source_path = _find_comfy_output_file(output_image)
-        if source_path is None:
-            candidate_dirs = ", ".join(str(candidate) for candidate in _candidate_output_dirs())
-            logger.warning(
-                "publish_source_missing=%s prompt_id=%s prompt=%s model=%s candidates=[%s]",
-                output_image,
-                prompt_id,
-                prompt,
-                checkpoint,
-                candidate_dirs,
-            )
+        source_path = output_dir
+        subfolder = str(output_image.get("subfolder") or "").strip()
+        if subfolder:
+            source_path = source_path / subfolder
+        source_path = source_path / str(output_image.get("filename") or "")
+        if not source_path.is_file():
             return error_response(
-                error="ComfyUI output file not found after history success",
+                error=f"ComfyUI output file not found after history success: {source_path}",
                 error_type="io_error",
                 provider=self.name,
                 model=checkpoint,
@@ -570,12 +497,6 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 metadata=metadata,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "Could not publish ComfyUI image bundle to HermesWork: prompt_id=%s path=%s err=%s",
-                prompt_id,
-                source_path,
-                exc,
-            )
             return error_response(
                 error=f"Could not publish ComfyUI image bundle to HermesWork: {exc}",
                 error_type="io_error",
@@ -644,16 +565,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "run_manifest_path": str(run_manifest_path) if run_manifest_path else None,
                 "qualification_report_path": str(qualification_report_path) if qualification_report_path else None,
                 "primary_image": bundle["primary_image"],
-                "media_files": [str(bundle["primary_image_path"])],
                 "sidecars": bundle["sidecars"],
-                "artifact_path": str(bundle["primary_image_path"]),
-                "artifact_files": [
-                    str(bundle["primary_image_path"]),
-                    str(bundle["workflow_path"]),
-                    str(bundle["prompt_path"]),
-                    str(bundle["metadata_path"]),
-                    str(bundle["manifest_path"]),
-                ],
                 "prompt_id": prompt_id,
                 "category": category,
                 "api_base_url": base_url,

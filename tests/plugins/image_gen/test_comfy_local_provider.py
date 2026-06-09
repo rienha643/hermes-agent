@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import importlib
-import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -114,7 +113,6 @@ class TestComfyLocalImageGenProviderGenerate:
         assert result["nas_status"] == "동기화 요청됨"
         assert result["slack_status"] == "primary image 준비됨"
         assert result["image"].startswith(str(tmp_path / "HermesWork" / "Image"))
-        assert result["artifact_path"] == result["image"]
         assert Path(result["image"]).exists()
         assert Path(result["workflow_path"]).exists()
         assert Path(result["prompt_path"]).exists()
@@ -122,175 +120,6 @@ class TestComfyLocalImageGenProviderGenerate:
         assert Path(result["manifest_path"]).exists()
         assert result["primary_image"] == Path(result["image"]).name
         assert result["sidecars"]["workflow"] == Path(result["workflow_path"]).name
-        assert result["media_files"] == [str(result["image"])]
-        assert result["artifact_files"][0] == str(result["image"])
-        assert result["artifact_files"][1] == str(result["workflow_path"])
-        assert str(result["prompt_path"]) in result["artifact_files"]
-        assert str(result["metadata_path"]) in result["artifact_files"]
-        assert str(result["manifest_path"]) in result["artifact_files"]
-
-    def test_generate_finds_output_via_fallback_output_dir(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
-        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
-        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
-        # Simulate stale config: configured dir has no image, real output is elsewhere.
-        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "configured-output"))
-
-        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
-        configured_output = Path(tmp_path / "configured-output")
-        fallback_output = Path(tmp_path / "real-output")
-        configured_output.mkdir(parents=True, exist_ok=True)
-        fallback_output.mkdir(parents=True, exist_ok=True)
-        output_file = fallback_output / "smoke_test_retry_00001_.png"
-        output_file.write_bytes(PNG_1PX)
-
-        calls = []
-        published_dir = tmp_path / "HermesWork" / "Image" / "angelica_smoke_test"
-        published_dir.mkdir(parents=True, exist_ok=True)
-        primary = published_dir / "angelica_smoke_v1.png"
-
-        class Response:
-            def __init__(self, payload):
-                self._payload = payload
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return self._payload
-
-        def fake_get(url, timeout=None):
-            if url.endswith("/system_stats"):
-                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
-            if url.endswith("/models/checkpoints"):
-                return Response(["AOM3A1_orangemixs.safetensors", "Nullstyle_v20.safetensors"])
-            if url.endswith("/models/vae"):
-                return Response(["animevae.pt"])
-            if "/history/" in url:
-                return Response(
-                    {
-                        "pid-123": {
-                            "status": {"completed": True, "status_str": "success"},
-                            "outputs": {"8": {"images": [{"filename": "smoke_test_retry_00001_.png", "subfolder": "", "type": "output"}]}}},
-                    }
-                )
-            raise AssertionError(f"unexpected GET {url}")
-
-        def fake_post(url, json=None, timeout=None):
-            return Response({"prompt_id": "pid-123", "number": 0, "node_errors": {}})
-
-        def fake_publish(source_path, **kwargs):
-            calls.append(source_path)
-            workflow = published_dir / "angelica_smoke_v1.workflow.json"
-            prompt = published_dir / "angelica_smoke_v1.prompt.json"
-            metadata = published_dir / "angelica_smoke_v1.metadata.json"
-            manifest = published_dir / "manifest.json"
-            for p in [workflow, prompt, metadata, manifest, primary]:
-                if p.name == primary.name:
-                    primary.write_bytes(PNG_1PX)
-                else:
-                    p.write_text("{}", encoding="utf-8")
-            return {
-                "project_id": "angelica_smoke_test",
-                "published_dir": published_dir,
-                "primary_image_path": primary,
-                "workflow_path": workflow,
-                "prompt_path": prompt,
-                "metadata_path": metadata,
-                "manifest_path": manifest,
-                "primary_image": primary.name,
-                "sidecars": {"workflow": workflow.name, "prompt": prompt.name, "metadata": metadata.name},
-                "nas_hook_requested": True,
-            }
-
-        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
-        monkeypatch.setattr(comfy_mod.requests, "post", fake_post)
-        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(
-            comfy_mod,
-            "_candidate_output_dirs",
-            lambda: [configured_output, fallback_output],
-        )
-        monkeypatch.setattr(comfy_mod, "publish_filesystem_image_bundle", fake_publish)
-        import agent.image_gen_provider as provider_mod
-        monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
-
-        result = ComfyLocalImageGenProvider().generate(
-            "simple cute anime girl, clean face, sharp eyes, game illustration style",
-            aspect_ratio="square",
-            project_name="angelica_smoke_test",
-            artifact_name="angelica_smoke",
-        )
-
-        assert result["success"] is True
-        assert calls == [output_file]
-
-    def test_generate_warns_and_errors_when_publish_bundle_fails(self, monkeypatch, tmp_path, caplog):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
-        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
-        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
-        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "comfy-output"))
-
-        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
-        output_dir = Path(tmp_path / "comfy-output")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_file = output_dir / "angelica_smoke_00001_.png"
-        output_file.write_bytes(PNG_1PX)
-
-        class Response:
-            def __init__(self, payload):
-                self._payload = payload
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return self._payload
-
-        def fake_get(url, timeout=None):
-            if url.endswith("/system_stats"):
-                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
-            if url.endswith("/models/checkpoints"):
-                return Response(["AOM3A1_orangemixs.safetensors"])
-            if url.endswith("/models/vae"):
-                return Response(["animevae.pt"])
-            if "/history/" in url:
-                return Response(
-                    {
-                        "pid-123": {
-                            "status": {"completed": True, "status_str": "success"},
-                            "outputs": {
-                                "8": {"images": [{"filename": "angelica_smoke_00001_.png", "subfolder": "", "type": "output"}]}
-                            },
-                        }
-                    }
-                )
-            raise AssertionError(f"unexpected GET {url}")
-
-        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
-        monkeypatch.setattr(
-            comfy_mod.requests,
-            "post",
-            lambda *a, **k: Response({"prompt_id": "pid-123", "number": 0, "node_errors": {}}),
-        )
-        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(
-            comfy_mod,
-            "publish_filesystem_image_bundle",
-            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("NAS unavailable")),
-        )
-
-        with caplog.at_level(logging.WARNING):
-            result = ComfyLocalImageGenProvider().generate(
-                "simple cute anime girl",
-                aspect_ratio="square",
-                project_name="angelica_smoke_test",
-                artifact_name="angelica_smoke",
-            )
-
-        assert result["success"] is False
-        assert result["error_type"] == "io_error"
-        assert any("Could not publish ComfyUI image bundle to HermesWork" in rec.getMessage() for rec in caplog.records)
 
     def test_generate_fails_when_history_success_but_output_file_missing(self, monkeypatch, tmp_path):
         monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
