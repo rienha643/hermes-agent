@@ -11,6 +11,7 @@ We mock the slack modules at import time to avoid collection errors.
 import asyncio
 import os
 import sys
+import types
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
@@ -584,6 +585,23 @@ class TestSendDocument:
         )
 
         assert "1234567890.123456" in adapter._bot_message_ts
+
+    @pytest.mark.asyncio
+    async def test_send_document_resolves_explicit_thread_ts(self, adapter, tmp_path):
+        test_file = tmp_path / "notes.txt"
+        test_file.write_bytes(b"some notes")
+
+        adapter._app.client.files_upload_v2 = AsyncMock(return_value={"ok": True})
+
+        await adapter.send_document(
+            chat_id="C123",
+            file_path=str(test_file),
+            metadata={"thread_id": "metadata_thread"},
+            thread_ts="explicit_thread_ts",
+        )
+
+        call_kwargs = adapter._app.client.files_upload_v2.call_args[1]
+        assert call_kwargs["thread_ts"] == "explicit_thread_ts"
 
     @pytest.mark.asyncio
     async def test_send_document_retries_transient_upload_error(self, adapter, tmp_path):
@@ -2596,6 +2614,56 @@ class TestFallbackPreservesThreadContext:
 
         call_kwargs = adapter._app.client.chat_postMessage.call_args.kwargs
         assert "important screenshot" in call_kwargs["text"]
+
+
+class TestUploadThreadTarget:
+    """Thread targeting for file upload paths."""
+
+    @pytest.mark.asyncio
+    async def test_send_image_file_upload_receives_thread_ts(self, adapter, tmp_path):
+        test_file = tmp_path / "photo.jpg"
+        test_file.write_bytes(b"\xff\xd8\xff\xe0")
+
+        adapter._app.client.files_upload_v2 = AsyncMock(return_value={"ok": True})
+
+        await adapter.send_image_file(
+            chat_id="C123",
+            image_path=str(test_file),
+            caption="hello",
+            thread_ts="thread_file_ts",
+        )
+
+        call_kwargs = adapter._app.client.files_upload_v2.call_args[1]
+        assert call_kwargs["thread_ts"] == "thread_file_ts"
+
+    @pytest.mark.asyncio
+    async def test_send_multiple_images_preserves_thread_ts(self, adapter, tmp_path):
+        img_a = tmp_path / "a.png"
+        img_b = tmp_path / "b.png"
+        img_a.write_bytes(b"png-a")
+        img_b.write_bytes(b"png-b")
+
+        images = [
+            (f"file://{img_a}", "first"),
+            (f"file://{img_b}", "second"),
+        ]
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        fake_httpx = types.SimpleNamespace(AsyncClient=MagicMock(return_value=mock_client))
+
+        adapter._app.client.files_upload_v2 = AsyncMock(return_value={"ok": True})
+
+        with patch.dict("sys.modules", {"httpx": fake_httpx}):
+            await adapter.send_multiple_images(
+                chat_id="C123",
+                images=images,
+                thread_ts="thread_multi_ts",
+            )
+
+        call_kwargs = adapter._app.client.files_upload_v2.call_args[1]
+        assert call_kwargs["thread_ts"] == "thread_multi_ts"
 
 
 # ---------------------------------------------------------------------------
