@@ -2009,12 +2009,6 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
                     elif isinstance(item, (list, tuple)) and item:
                         _maybe_add_path(item[0])
 
-            raw_artifact_files = node.get("artifact_files")
-            if isinstance(raw_artifact_files, (list, tuple)):
-                for item in raw_artifact_files:
-                    if isinstance(item, str):
-                        _maybe_add_path(item)
-
             for key in (
                 "image",
                 "local_path",

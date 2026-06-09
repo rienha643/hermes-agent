@@ -223,26 +223,6 @@ def test_collect_structured_attachment_paths_finds_delegate_and_image_results(tm
     assert _collect_structured_attachment_paths(agent_result) == [str(image_path), str(doc_path)]
 
 
-def test_collect_structured_attachment_paths_supports_artifact_files_array(tmp_path):
-    artifact_a = tmp_path / "artifact-a.png"
-    artifact_b = tmp_path / "artifact-b.txt"
-    artifact_a.write_bytes(b"png")
-    artifact_b.write_bytes(b"txt")
-
-    agent_result = {
-        "messages": [
-            {
-                "role": "tool",
-                "content": {
-                    "artifact_files": [str(artifact_a), str(artifact_b)],
-                },
-            },
-        ]
-    }
-
-    assert _collect_structured_attachment_paths(agent_result) == [str(artifact_a), str(artifact_b)]
-
-
 def test_slice_turn_messages_uses_history_offset_boundary():
     messages = [
         {"role": "user", "content": "old user"},
