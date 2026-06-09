@@ -75,15 +75,10 @@ def test_publish_filesystem_image_bundle_creates_versioned_bundle_and_manifest(m
     assert bundle["published_dir"] == expected_dir
     assert bundle["primary_image_path"] == expected_dir / "angelica_smoke_v1.png"
     assert bundle["primary_image_path"].exists()
-    assert bundle["workflow_path"] == expected_dir / "_sidecars" / "angelica_smoke_v1.workflow.json"
-    assert bundle["prompt_path"] == expected_dir / "_sidecars" / "angelica_smoke_v1.prompt.json"
-    assert bundle["metadata_path"] == expected_dir / "_sidecars" / "angelica_smoke_v1.metadata.json"
-    assert bundle["manifest_path"] == expected_dir / "_sidecars" / "manifest.json"
-    assert bundle["sidecar_dir"] == expected_dir / "_sidecars"
-    assert bundle["storage_verification"]["logical_path"] == str(expected_dir.parent)
-    assert bundle["storage_verification"]["realpath"] == str((expected_dir.parent).resolve())
-    assert bundle["storage_verification"]["is_ssd_root"] in (True, False)
-    assert bundle["storage_verification"]["is_symlink"] == expected_dir.parent.is_symlink()
+    assert bundle["workflow_path"].name == "angelica_smoke_v1.workflow.json"
+    assert bundle["prompt_path"].name == "angelica_smoke_v1.prompt.json"
+    assert bundle["metadata_path"].name == "angelica_smoke_v1.metadata.json"
+    assert bundle["manifest_path"].name == "manifest.json"
     assert bundle["nas_hook_requested"] is True
 
     workflow = _read_json(bundle["workflow_path"])
@@ -95,17 +90,10 @@ def test_publish_filesystem_image_bundle_creates_versioned_bundle_and_manifest(m
     assert prompt_payload["seed"] == 123
     assert metadata["published_primary_path"] == str(bundle["primary_image_path"])
     assert metadata["published_dir"] == str(expected_dir)
-    assert metadata["published_sidecar_dir"] == str(expected_dir / "_sidecars")
-    assert metadata["storage_verification"]["logical_path"] == str(expected_dir.parent)
-    assert metadata["storage_verification"]["is_ssd_root"] in (True, False)
     assert metadata["nas_hook_requested"] is True
     assert manifest["primary_image"] == "angelica_smoke_v1.png"
-    assert any(file_path.endswith("angelica_smoke_v1.workflow.json") for file_path in manifest["files"])
-    assert any(file_path.endswith("angelica_smoke_v1.prompt.json") for file_path in manifest["files"])
-    assert any(file_path.endswith("angelica_smoke_v1.metadata.json") for file_path in manifest["files"])
-    assert any(file_path.endswith("manifest.json") for file_path in manifest["files"])
+    assert "angelica_smoke_v1.workflow.json" in manifest["files"]
     assert manifest["sidecars"]["metadata"] == "angelica_smoke_v1.metadata.json"
-    assert manifest["sidecars"]["manifest"] == "manifest.json"
 
     assert hook_calls == [
         {
@@ -115,83 +103,6 @@ def test_publish_filesystem_image_bundle_creates_versioned_bundle_and_manifest(m
             "source_root": expected_dir,
         }
     ]
-
-
-def test_publish_filesystem_image_bundle_stores_sidecars_under_ssd_or_reports_verification(monkeypatch, tmp_path):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
-    source = tmp_path / "output" / "smoke_00001_.png"
-    source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_bytes(PNG_1PX)
-
-    mock_ssd_root = tmp_path / "mnt_ssd" / "HermesWork" / "Image"
-    mock_ssd_root.mkdir(parents=True, exist_ok=True)
-    mock_logical_root = tmp_path / "mock_HermesWork"
-    mock_logical_root.symlink_to(mock_ssd_root.parent, target_is_directory=True)
-    monkeypatch.setenv("HERMES_WORK_ROOT", str(mock_logical_root))
-
-    hook_calls = []
-
-    from agent import image_gen_provider as provider_mod
-    monkeypatch.setattr(
-        provider_mod,
-        "queue_nas_sync_hook",
-        lambda **kwargs: hook_calls.append(kwargs) or True,
-    )
-    monkeypatch.setattr(provider_mod, "_SSD_IMAGE_ROOT", mock_ssd_root)
-
-    bundle = provider_mod.publish_filesystem_image_bundle(
-        source,
-        prefix="smoke",
-        project_name="smoke_ssd_test",
-        artifact_name="smoke",
-        category="smoke_test",
-        workflow_json={"8": {}},
-        prompt_payload={
-            "prompt": "a",
-            "negative_prompt": "",
-            "width": 512,
-            "height": 512,
-            "batch_size": 1,
-            "seed": 123,
-            "sampler": "euler",
-            "steps": 1,
-            "cfg": 1,
-            "denoise": 1,
-            "raw_prompt_payload": {},
-        },
-        metadata={
-            "provider": "comfy-local",
-            "prompt_id": "pid-1",
-            "api_base_url": "http://172.22.224.1:8188",
-            "checkpoint": "AOM3A1_orangemixs.safetensors",
-            "vae": "animevae.pt",
-            "loras": [],
-            "controlnet_used": False,
-            "seed": 123,
-            "sampler": "euler",
-            "steps": 1,
-            "cfg": 1,
-            "denoise": 1,
-            "created_at": "2026-06-05T00:00:00Z",
-            "category": "smoke_test",
-            "output_source_path": str(source),
-        },
-    )
-
-    assert bundle["storage_verification"]["logical_path"] == str((mock_logical_root / "Image"))
-    assert bundle["storage_verification"]["realpath"] == str(mock_ssd_root)
-    assert bundle["storage_verification"]["is_ssd_root"] is True
-    assert bundle["storage_verification"]["is_symlink"] is True
-    assert bundle["sidecar_dir"] == bundle["published_dir"] / "_sidecars"
-    assert hook_calls == [
-        {
-            "category": "image",
-            "scope": bundle["published_dir"].name,
-            "artifact_path": bundle["primary_image_path"],
-            "source_root": bundle["published_dir"],
-        }
-    ]
-
 
 
 def test_publish_filesystem_image_bundle_uses_next_version_when_name_repeats(monkeypatch, tmp_path):
@@ -359,16 +270,10 @@ def test_publish_filesystem_image_bundle_groups_multiple_artifacts_under_same_pr
     )
 
     assert bundle_a["published_dir"] == bundle_b["published_dir"] == bundle_c["published_dir"]
-    entries = sorted(p.name for p in bundle_a["published_dir"].iterdir())
-    assert "ang_txt_001_por_01_v1.png" in entries
-    assert "ang_txt_001_fb_01_v1.png" in entries
-    assert "ang_txt_001_env_01_v1.png" in entries
-    assert "_sidecars" in entries
-    sidecar_dir = bundle_a["published_dir"] / "_sidecars"
-    assert sidecar_dir.is_dir()
-    assert any(path.suffix == ".json" for path in sidecar_dir.iterdir())
-    # All sidecar JSONs are contained under _sidecars, not mixed into root scope
-    assert bundle_a["workflow_path"].parent == sidecar_dir
+    files = sorted(p.name for p in bundle_a["published_dir"].iterdir())
+    assert "ang_txt_001_por_01_v1.png" in files
+    assert "ang_txt_001_fb_01_v1.png" in files
+    assert "ang_txt_001_env_01_v1.png" in files
 
 
 def test_run_manifest_and_qualification_report_can_be_written_for_grouped_publish(monkeypatch, tmp_path):

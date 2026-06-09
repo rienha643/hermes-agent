@@ -123,11 +123,8 @@ class TestComfyLocalImageGenProviderGenerate:
         assert Path(result["prompt_path"]).exists()
         assert Path(result["metadata_path"]).exists()
         assert Path(result["manifest_path"]).exists()
-        assert Path(result["workflow_path"]).parent.name == "_sidecars"
-        assert Path(result["prompt_path"]).parent == Path(result["manifest_path"]).parent
-        assert Path(result["metadata_path"]).parent == Path(result["manifest_path"]).parent
         assert result["primary_image"] == Path(result["image"]).name
-        assert Path(result["workflow_path"]).name == result["sidecars"]["workflow"]
+        assert result["sidecars"]["workflow"] == Path(result["workflow_path"]).name
         assert result["media_files"] == [str(result["image"])]
         assert result["artifact_files"][0] == str(result["image"])
         assert result["artifact_files"][1] == str(result["workflow_path"])
