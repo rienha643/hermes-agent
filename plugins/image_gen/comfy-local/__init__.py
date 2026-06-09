@@ -41,7 +41,6 @@ DEFAULT_OUTPUT_DIR_FALLBACKS: Tuple[str, ...] = (
     "/Volumes/SSD_Hermes/ComfyUI/ComfyUI/output",
 )
 DEFAULT_CHECKPOINT = "AOM3A1_orangemixs.safetensors"
-DEFAULT_VAE = "animevae.pt"
 DEFAULT_STEPS = 12
 DEFAULT_CFG = 7.0
 DEFAULT_SAMPLER = "euler"
@@ -188,7 +187,7 @@ def _resolve_model() -> str:
     return DEFAULT_CHECKPOINT
 
 
-def _resolve_vae() -> str:
+def _resolve_vae() -> Optional[str]:
     env_override = os.environ.get("COMFY_LOCAL_IMAGE_VAE")
     if env_override and env_override.strip():
         return env_override.strip()
@@ -196,7 +195,7 @@ def _resolve_vae() -> str:
     vae = cfg.get("vae") if isinstance(cfg.get("vae"), str) else None
     if vae and vae.strip():
         return vae.strip()
-    return DEFAULT_VAE
+    return None
 
 
 def _resolve_dimensions(aspect_ratio: str, width: Any = None, height: Any = None) -> tuple[int, int]:
@@ -322,7 +321,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
 
         base_url = _resolve_base_url()
         checkpoint = str(kwargs.get("model") or _resolve_model()).strip() or DEFAULT_CHECKPOINT
-        vae = str(kwargs.get("vae") or _resolve_vae()).strip() or DEFAULT_VAE
+        vae = str(kwargs.get("vae") or _resolve_vae() or "").strip() or None
         project_name = kwargs.get("project_name")
         artifact_name = kwargs.get("artifact_name")
         category = str(kwargs.get("category") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
@@ -373,28 +372,29 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 aspect_ratio=aspect,
             )
 
-        try:
-            vae_response = requests.get(f"{base_url}/models/vae", timeout=10)
-            vae_response.raise_for_status()
-            vaes = vae_response.json()
-        except Exception as exc:  # noqa: BLE001
-            return error_response(
-                error=f"ComfyUI VAE lookup failed: {exc}",
-                error_type="api_error",
-                provider=self.name,
-                model=checkpoint,
-                prompt=prompt,
-                aspect_ratio=aspect,
-            )
-        if vae not in vaes:
-            return error_response(
-                error=f"Requested VAE not found in ComfyUI: {vae}",
-                error_type="invalid_argument",
-                provider=self.name,
-                model=checkpoint,
-                prompt=prompt,
-                aspect_ratio=aspect,
-            )
+        if vae is not None:
+            try:
+                vae_response = requests.get(f"{base_url}/models/vae", timeout=10)
+                vae_response.raise_for_status()
+                vaes = vae_response.json()
+            except Exception as exc:  # noqa: BLE001
+                return error_response(
+                    error=f"ComfyUI VAE lookup failed: {exc}",
+                    error_type="api_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            if vae not in vaes:
+                return error_response(
+                    error=f"Requested VAE not found in ComfyUI: {vae}",
+                    error_type="invalid_argument",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
 
         workflow: Dict[str, Any] = {
             "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
@@ -416,10 +416,17 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 },
                 "class_type": "KSampler",
             },
-            "6": {"inputs": {"vae_name": vae}, "class_type": "VAELoader"},
-            "7": {"inputs": {"samples": ["5", 0], "vae": ["6", 0]}, "class_type": "VAEDecode"},
+            "7": {
+                "inputs": {
+                    "samples": ["5", 0],
+                    "vae": ["1", 2] if vae is None else ["6", 0],
+                },
+                "class_type": "VAEDecode",
+            },
             "8": {"inputs": {"filename_prefix": filename_prefix, "images": ["7", 0]}, "class_type": "SaveImage"},
         }
+        if vae is not None:
+            workflow["6"] = {"inputs": {"vae_name": vae}, "class_type": "VAELoader"}
         payload = {"prompt": workflow}
 
         try:
