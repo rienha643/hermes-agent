@@ -60,6 +60,55 @@ _ALLOW_TOP_LEVEL_DIRECTIVE = "[[allow_top_level]]"
 _WORKER_STYLE_MESSAGE_RE = re.compile(r"^\s*\[(WORKER|WORKER RESULT):", re.IGNORECASE)
 
 
+def _normalize_media_delivery_path(path: str) -> str | None:
+    """Normalize a media path for dedupe markers and structured-attachment filtering."""
+    if not isinstance(path, str):
+        return None
+    raw = path.strip().strip("`\"'")
+    if not raw:
+        return None
+    if raw.startswith("file://"):
+        try:
+            from urllib.parse import unquote, urlparse
+
+            parsed = urlparse(raw)
+            raw = unquote(parsed.path or "")
+        except Exception:
+            return None
+    expanded = os.path.expanduser(raw)
+    if not expanded:
+        return None
+    return os.path.abspath(expanded)
+
+
+def _build_media_delivery_markers(media_file_pairs: list[tuple[str, bool]]) -> dict[str, list[str]]:
+    """Build ordered absolute/realpath marker lists for uploaded media files."""
+    ordered_abs: list[str] = []
+    ordered_real: list[str] = []
+    seen_abs: set[str] = set()
+    seen_real: set[str] = set()
+
+    for path, _ in media_file_pairs or []:
+        normalized = _normalize_media_delivery_path(path)
+        if not normalized:
+            continue
+        if normalized not in seen_abs:
+            ordered_abs.append(normalized)
+            seen_abs.add(normalized)
+        try:
+            real_path = os.path.realpath(normalized)
+        except Exception:
+            real_path = normalized
+        if real_path not in seen_real:
+            ordered_real.append(real_path)
+            seen_real.add(real_path)
+
+    return {
+        "delivered_media_files": ordered_abs,
+        "delivered_media_realpaths": ordered_real,
+    }
+
+
 def _sanitize_error_text(text) -> str:
     """Redact secrets from error text before surfacing it to users/models."""
     redacted = redact_sensitive_text(text)
@@ -287,6 +336,12 @@ SEND_MESSAGE_SCHEMA = {
                 "items": {"type": "string"},
                 "description": "Optional explicit local media paths to send alongside the message. When provided, these are merged with MEDIA:<path> tags found in the message."
             }
+            ,
+            "artifact_files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional explicit artifact file paths to send alongside the message. These are uploaded directly by send_message and excluded from later structured delivery in the same turn."
+            }
         },
         "required": []
     }
@@ -403,6 +458,8 @@ def _handle_send(args, media_files=None):
     media_files = BasePlatformAdapter.filter_media_delivery_paths(
         list(extracted_media_files) + list(media_files or []) + list(artifact_files or [])
     )
+    media_direct_markers = _build_media_delivery_markers(media_files)
+    artifact_direct_markers = _build_media_delivery_markers(artifact_files or [])
     mirror_text = cleaned_message.strip() or _describe_media_for_mirror(media_files)
     has_media_attachments = bool(media_files)
 
@@ -523,6 +580,29 @@ def _handle_send(args, media_files=None):
             result["thread_ts"] = thread_id or result.get("thread_ts") or ""
             result["blocked_top_level_worker_probe"] = blocked_top_level_worker_probe
             result["auto_threaded"] = bool(slack_thread_safety.get("auto_threaded"))
+
+            delivered_media_files: list[str] = list(media_direct_markers["delivered_media_files"])
+            delivered_media_realpaths: list[str] = list(media_direct_markers["delivered_media_realpaths"])
+            if artifact_direct_markers["delivered_media_files"]:
+                # Keep a single media marker surface for both direct media and artifact
+                # uploads so downstream dedupe can treat all direct tool uploads equally.
+                for path in artifact_direct_markers["delivered_media_files"]:
+                    if path not in delivered_media_files:
+                        delivered_media_files.append(path)
+                for path in artifact_direct_markers["delivered_media_realpaths"]:
+                    if path not in delivered_media_realpaths:
+                        delivered_media_realpaths.append(path)
+
+                # Back-compat alias used by older structured-dedup checks.
+                result["delivered_artifact_files"] = artifact_direct_markers["delivered_media_files"]
+                result["delivered_artifact_realpaths"] = artifact_direct_markers["delivered_media_realpaths"]
+
+            if delivered_media_files:
+                result["delivered_media_files"] = delivered_media_files
+                result["delivered_media_realpaths"] = delivered_media_realpaths
+                result["already_delivered_media_paths"] = delivered_media_files
+                result["already_delivered_media_realpaths"] = delivered_media_realpaths
+                result["media_delivery_completed"] = True
         resolved_used_home_channel = bool(slack_thread_safety.get("used_home_channel"))
         if resolved_used_home_channel and isinstance(result, dict) and result.get("success"):
             result["note"] = f"Sent to {platform_name} home channel (chat_id: {chat_id})"

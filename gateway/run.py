@@ -1957,6 +1957,51 @@ def _normalize_empty_agent_response(
     return response
 
 
+def _normalize_structured_attachment_path(value: Any) -> str | None:
+    """Normalize a structured attachment candidate to an absolute local path."""
+    if not isinstance(value, str):
+        return None
+    from urllib.parse import unquote, urlparse
+
+    raw = value.strip().strip("`\"'")
+    if not raw:
+        return None
+    if raw.startswith("file://"):
+        parsed = urlparse(raw)
+        raw = unquote(parsed.path or "")
+    if not (raw.startswith("/") or raw.startswith("~/")):
+        return None
+    return os.path.abspath(os.path.expanduser(raw))
+
+
+def _file_delivery_signatures(paths: list[str] | tuple[str, ...]) -> dict[str, set[Any]]:
+    """Build absolute/realpath/size signatures for robust duplicate matching."""
+    abs_paths: set[str] = set()
+    real_paths: set[str] = set()
+    name_size_pairs: set[tuple[str, int]] = set()
+
+    for path in paths:
+        normalized = _normalize_structured_attachment_path(path)
+        if not normalized:
+            continue
+        abs_paths.add(normalized)
+        try:
+            real_paths.add(os.path.realpath(normalized))
+        except Exception:
+            real_paths.add(normalized)
+        try:
+            stat = os.stat(normalized)
+            name_size_pairs.add((os.path.basename(normalized), int(stat.st_size)))
+        except Exception:
+            continue
+
+    return {
+        "abs": abs_paths,
+        "real": real_paths,
+        "name_size": name_size_pairs,
+    }
+
+
 def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
     """Extract local attachment candidates from structured agent/tool results.
 
@@ -1965,28 +2010,16 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
     ``image_generate``. Only local filesystem paths are surfaced here; URL-based
     artifacts remain text-only.
     """
-    from urllib.parse import unquote, urlparse
-
     candidates: list[str] = []
     seen_paths: set[str] = set()
     seen_nodes: set[int] = set()
 
     def _maybe_add_path(value: Any) -> None:
-        if not isinstance(value, str):
+        normalized = _normalize_structured_attachment_path(value)
+        if not normalized or normalized in seen_paths:
             return
-        raw = value.strip().strip("`\"'")
-        if not raw:
-            return
-        if raw.startswith("file://"):
-            parsed = urlparse(raw)
-            raw = unquote(parsed.path or "")
-        if not (raw.startswith("/") or raw.startswith("~/")):
-            return
-        expanded = os.path.expanduser(raw)
-        if expanded in seen_paths:
-            return
-        seen_paths.add(expanded)
-        candidates.append(expanded)
+        seen_paths.add(normalized)
+        candidates.append(normalized)
 
     def _walk(node: Any) -> None:
         if isinstance(node, dict):
@@ -2068,6 +2101,72 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
     return candidates
 
 
+def _collect_tool_media_delivery_markers(agent_result: Any) -> set[str]:
+    """Collect explicit 'already delivered' local paths from structured tool outputs."""
+    delivered: set[str] = set()
+    seen_nodes: set[int] = set()
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            node_id = id(node)
+            if node_id in seen_nodes:
+                return
+            seen_nodes.add(node_id)
+
+            if node.get("media_delivery_completed"):
+                for key in (
+                    "delivered_media_files",
+                    "already_delivered_media_paths",
+                    "delivered_artifact_files",
+                ):
+                    value = node.get(key)
+                    if isinstance(value, (list, tuple)):
+                        for item in value:
+                            normalized = _normalize_structured_attachment_path(item)
+                            if normalized:
+                                delivered.add(normalized)
+                for key in (
+                    "delivered_media_realpaths",
+                    "already_delivered_media_realpaths",
+                    "delivered_artifact_realpaths",
+                ):
+                    value = node.get(key)
+                    if isinstance(value, (list, tuple)):
+                        for item in value:
+                            normalized = _normalize_structured_attachment_path(item)
+                            if normalized:
+                                delivered.add(normalized)
+
+            for value in node.values():
+                if isinstance(value, (dict, list, tuple)):
+                    _walk(value)
+                elif isinstance(value, str):
+                    stripped = value.lstrip()
+                    if stripped.startswith("{") or stripped.startswith("["):
+                        try:
+                            _walk(json.loads(value))
+                        except Exception:
+                            pass
+        elif isinstance(node, (list, tuple)):
+            node_id = id(node)
+            if node_id in seen_nodes:
+                return
+            seen_nodes.add(node_id)
+            for item in node:
+                _walk(item)
+        elif isinstance(node, str):
+            stripped = node.lstrip()
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    _walk(json.loads(node))
+                    return
+                except Exception:
+                    pass
+
+    _walk(agent_result)
+    return delivered
+
+
 def _slice_turn_messages(agent_result: dict, history_len: int) -> List[Dict[str, Any]]:
     """Return only the messages created during the current turn."""
     agent_messages = agent_result.get("messages", []) if isinstance(agent_result, dict) else []
@@ -2088,6 +2187,24 @@ def _collect_turn_scoped_structured_attachments(
     turn_messages = _slice_turn_messages(agent_result, history_len)
     turn_tool_messages = [msg for msg in turn_messages if str(msg.get("role") or "").lower() == "tool"]
     collected = _collect_structured_attachment_paths({"messages": turn_tool_messages})
+    delivered_markers = _collect_tool_media_delivery_markers(turn_tool_messages)
+    if delivered_markers:
+        delivered_signatures = _file_delivery_signatures(list(delivered_markers))
+        deduped: list[str] = []
+        for file_path in collected:
+            candidate = _normalize_structured_attachment_path(file_path)
+            if not candidate:
+                continue
+            if candidate in delivered_signatures["abs"] or os.path.realpath(candidate) in delivered_signatures["real"]:
+                continue
+            try:
+                st = os.stat(candidate)
+                if (os.path.basename(candidate), int(st.st_size)) in delivered_signatures["name_size"]:
+                    continue
+            except Exception:
+                pass
+            deduped.append(file_path)
+        collected = deduped
     debug = {
         "turn_messages_count": len(turn_messages),
         "turn_tool_messages_count": len(turn_tool_messages),
