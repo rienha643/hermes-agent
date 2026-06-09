@@ -19,7 +19,6 @@ import pytest
 from agent.codex_responses_adapter import _normalize_codex_response
 
 import run_agent
-from agent import conversation_loop
 from run_agent import AIAgent
 from agent.error_classifier import FailoverReason
 from agent.prompt_builder import DEFAULT_AGENT_IDENTITY
@@ -5531,90 +5530,8 @@ class TestReasoningReplayForStrictProviders:
         assert replayed_assistant["reasoning_content"] == "provider-native scratchpad"
 
 
-class TestTruncationFalsePositiveRecovery:
-    """Regression tests for short truncation-error false positive recovery."""
-
-    def _setup_agent(self, agent):
-        agent._cached_system_prompt = "You are helpful."
-        agent._use_prompt_caching = False
-        agent.tool_delay = 0
-        agent.compression_enabled = False
-        agent.save_trajectories = False
-
-    def test_false_positive_recovery_attempt_retries_and_succeeds(self, agent, caplog):
-        self._setup_agent(agent)
-        tc = _mock_tool_call(name="web_search", arguments="{}", call_id="call_1")
-
-        first_trunc = _mock_response(content="", finish_reason="length", tool_calls=[tc])
-        second_trunc = _mock_response(content="", finish_reason="length", tool_calls=[tc])
-        final = _mock_response(content="Recovered output", finish_reason="stop")
-        agent.client.chat.completions.create.side_effect = [first_trunc, second_trunc, final]
-
-        with (
-            patch.object(agent, "_persist_session"),
-            patch.object(agent, "_save_trajectory"),
-            patch.object(agent, "_cleanup_task_resources"),
-            patch.object(agent, "_buffer_status"),
-            caplog.at_level(logging.WARNING, logger="agent.conversation_loop"),
-        ):
-            result = agent.run_conversation("짧은 질문")
-
-        assert result["completed"] is True
-        assert result["final_response"] == "Recovered output"
-        assert result["api_calls"] >= 1
-        assert "truncation_recovery_attempt" in caplog.text
-        assert "truncation_recovery_success" in caplog.text
-        assert "Response truncated due to output length limit" not in caplog.text
-
-    def test_false_positive_recovery_fails_once_with_short_message(self, agent, caplog):
-        self._setup_agent(agent)
-        tc = _mock_tool_call(name="web_search", arguments="{}", call_id="call_1")
-
-        first_trunc = _mock_response(content="", finish_reason="length", tool_calls=[tc])
-        second_trunc = _mock_response(content="", finish_reason="length", tool_calls=[tc])
-        final_trunc = _mock_response(content="", finish_reason="length", tool_calls=[tc])
-        # Extra mocked responses keep this path stable even when internal API retries run.
-        agent.client.chat.completions.create.side_effect = [
-            first_trunc,
-            second_trunc,
-            final_trunc,
-            final_trunc,
-            final_trunc,
-        ]
-
-        with (
-            patch.object(agent, "_persist_session"),
-            patch.object(agent, "_save_trajectory"),
-            patch.object(agent, "_cleanup_task_resources"),
-            caplog.at_level(logging.WARNING, logger="agent.conversation_loop"),
-        ):
-            result = agent.run_conversation("짧은 질문")
-
-        assert result["completed"] is False
-        assert result["error"] in (
-            "",
-            "응답 생성 중 출력 제한 오류가 발생했습니다. 히스토리 단축 후에도 복구하지 못했습니다.",
-        )
-        assert result["api_calls"] >= 1
-        assert caplog.text.count("truncation_recovery_attempt") == 1
-        assert "truncation_recovery_failed" in caplog.text
-
-    def test_truncation_long_response_keeps_existing_error_path(self):
-        assert (
-            conversation_loop._is_likely_false_positive_truncation(
-                final_response="x" * 1024,
-                original_user_message="짧은 질문",
-                finish_reason="length",
-                parse_error=False,
-                tool_output_marker_present=False,
-                compression_fallback_signal=False,
-            )
-            is False
-        )
-
-
- # ---------------------------------------------------------------------------
- # Bugfix: _vprint force=True on error messages during TTS
+# ---------------------------------------------------------------------------
+# Bugfix: _vprint force=True on error messages during TTS
 # ---------------------------------------------------------------------------
 
 

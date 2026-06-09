@@ -61,96 +61,9 @@ from agent.usage_pricing import estimate_usage_cost, normalize_usage
 from hermes_constants import PARTIAL_STREAM_STUB_ID
 from hermes_logging import set_session_context
 from tools.skill_provenance import set_current_write_origin
-from tools.tool_output_limits import TOOL_RESULT_TRUNCATION_MARKER
 from utils import base_url_host_matches, env_var_enabled
 
 logger = logging.getLogger(__name__)
-
-
-def _contains_tool_output_cap_marker(value: Any) -> bool:
-    if not isinstance(value, str):
-        return False
-    return TOOL_RESULT_TRUNCATION_MARKER.lower() in value.lower()
-
-
-def _detect_truncation_marker_in_messages(messages: List[Dict[str, Any]]) -> bool:
-    marker = TOOL_RESULT_TRUNCATION_MARKER.lower()
-    return any(
-        isinstance(msg, dict)
-        and isinstance(msg.get("content"), str)
-        and marker in (msg.get("content") or "").lower()
-        for msg in messages
-    )
-
-
-def _is_likely_false_positive_truncation(
-    final_response: Optional[str],
-    original_user_message: Any,
-    finish_reason: Optional[str],
-    *,
-    parse_error: bool = False,
-    tool_output_marker_present: bool = False,
-    compression_fallback_signal: bool = False,
-) -> bool:
-    """Heuristic for recovery-worthy truncation false positives."""
-    if tool_output_marker_present:
-        return False
-
-    if finish_reason != "length" and not parse_error:
-        return False
-
-    final_text = (final_response or "").strip()
-    user_text = str(original_user_message or "").strip()
-
-    if compression_fallback_signal:
-        return True
-
-    short_output = len(final_text) <= 220
-    short_user_input = len(user_text) <= 180
-    return short_output and short_user_input
-
-
-def _reduce_history_for_truncation_recovery(
-    messages: List[Dict[str, Any]],
-    current_turn_user_idx: int,
-) -> tuple[List[Dict[str, Any]], bool]:
-    """Drop tool results and keep only a compact recent prefix/suffix.
-
-    Returns:
-        reduced_messages, history_reduced
-    """
-    if current_turn_user_idx < 0:
-        return list(messages), False
-
-    base = [msg for msg in messages[:current_turn_user_idx + 1] if isinstance(msg, dict)]
-    without_tools = [msg for msg in base if msg.get("role") != "tool"]
-
-    # Keep a small, recent window to reduce carry-over and remove long
-    # chains of tool results that inflate context for a likely false
-    # positive recovery path.
-    reduced = without_tools[-10:]
-    history_reduced = len(reduced) != len(base)
-
-    # Preserve at most one prior assistant message as context.
-    if reduced and len(reduced) > 1 and reduced[-1].get("role") != "user":
-        reduced = reduced[-2:]
-
-    if reduced and reduced[-1].get("role") != "user":
-        # Force turn boundary to end at the user prompt so the retry can
-        # continue cleanly with a user-assistant alternation.
-        for idx in range(len(reduced) - 2, -1, -1):
-            if reduced[idx].get("role") == "user":
-                reduced = reduced[idx:]
-                break
-
-    return reduced, history_reduced
-
-
-def _find_last_user_idx(messages: List[Dict[str, Any]]) -> int:
-    for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], dict) and messages[i].get("role") == "user":
-            return i
-    return -1
 
 
 def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str]:
@@ -1015,11 +928,6 @@ def run_conversation(
     truncated_response_parts: List[str] = []
     compression_attempts = 0
     _turn_exit_reason = "unknown"  # Diagnostic: why the loop ended
-    truncation_recovery_attempted = False
-    truncation_recovery_history_reduced = False
-    truncation_recovery_tool_marker = False
-    truncation_recovery_last_final_chars = 0
-    truncation_recovery_last_likely_false_positive = False
 
     # Per-turn file-mutation verifier state.  Keyed by resolved path;
     # each failed ``write_file`` / ``patch`` call records the error
@@ -2036,48 +1944,6 @@ def run_conversation(
                                 # just re-run the same API call from the current
                                 # message state, giving the model another chance.
                                 continue
-
-                            tool_marker_present = _detect_truncation_marker_in_messages(messages)
-                            compression_marker = _contains_tool_output_cap_marker(_trunc_content)
-                            likely_false_positive = _is_likely_false_positive_truncation(
-                                final_response=final_response,
-                                original_user_message=original_user_message,
-                                finish_reason=finish_reason,
-                                tool_output_marker_present=tool_marker_present or compression_marker,
-                                compression_fallback_signal=tool_marker_present,
-                            )
-                            if likely_false_positive and not truncation_recovery_attempted:
-                                _current_user_idx = _find_last_user_idx(messages)
-                                reduced_messages, history_reduced = _reduce_history_for_truncation_recovery(
-                                    messages,
-                                    _current_user_idx,
-                                )
-
-                                messages[:] = reduced_messages
-                                truncated_tool_call_retries = 0
-                                length_continue_retries = 0
-                                truncated_response_parts = []
-                                truncation_recovery_history_reduced = history_reduced
-                                truncation_recovery_tool_marker = bool(
-                                    tool_marker_present or compression_marker
-                                )
-                                truncation_recovery_last_final_chars = len(
-                                    final_response or ""
-                                )
-                                truncation_recovery_last_likely_false_positive = True
-                                agent._buffer_status(
-                                    "🧯 Retrying truncation recovery with compact turn context."
-                                )
-                                logger.warning(
-                                    "truncation_recovery_attempt likely_false_positive=%s final_response_chars=%d tool_marker_present=%s history_reduced=%s",
-                                    likely_false_positive,
-                                    len(final_response or ""),
-                                    bool(tool_marker_present or compression_marker),
-                                    history_reduced,
-                                )
-                                truncation_recovery_attempted = True
-                                continue
-
                             agent._flush_status_buffer()
                             agent._vprint(
                                 f"{agent.log_prefix}⚠️  Truncated tool call response detected again — refusing to execute incomplete tool arguments.",
@@ -2085,25 +1951,13 @@ def run_conversation(
                             )
                             agent._cleanup_task_resources(effective_task_id)
                             agent._persist_session(messages, conversation_history)
-                            error_message = (
-                                "응답 생성 중 출력 제한 오류가 발생했습니다. "
-                                "히스토리 단축 후에도 복구하지 못했습니다."
-                                if truncation_recovery_attempted
-                                else "Response truncated due to output length limit"
-                            )
-                            logger.warning(
-                                "truncation_recovery_failed likely_false_positive=%s final_response_chars=%d tool_marker_present=%s",
-                                likely_false_positive,
-                                len(final_response or ""),
-                                bool(tool_marker_present or compression_marker),
-                            )
                             return {
                                 "final_response": None,
                                 "messages": messages,
                                 "api_calls": api_call_count,
                                 "completed": False,
                                 "partial": True,
-                                "error": error_message,
+                                "error": "Response truncated due to output length limit",
                             }
 
                     # If we have prior messages, roll back to last complete state
@@ -4040,72 +3894,16 @@ def run_conversation(
                             f"(finish_reason={finish_reason!r}) — refusing to execute.",
                             force=True,
                         )
-                        tool_marker_present = _detect_truncation_marker_in_messages(messages)
-                        compression_marker = _contains_tool_output_cap_marker(_trunc_content)
-                        likely_false_positive = _is_likely_false_positive_truncation(
-                            final_response=final_response,
-                            original_user_message=original_user_message,
-                            finish_reason=finish_reason,
-                            parse_error=True,
-                            tool_output_marker_present=tool_marker_present or compression_marker,
-                            compression_fallback_signal=tool_marker_present,
-                        )
-
-                        if likely_false_positive and not truncation_recovery_attempted:
-                            _current_user_idx = _find_last_user_idx(messages)
-                            reduced_messages, history_reduced = _reduce_history_for_truncation_recovery(
-                                messages,
-                                _current_user_idx,
-                            )
-
-                            messages[:] = reduced_messages
-                            agent._invalid_json_retries = 0
-                            truncated_tool_call_retries = 0
-                            length_continue_retries = 0
-                            truncated_response_parts = []
-                            truncation_recovery_history_reduced = history_reduced
-                            truncation_recovery_tool_marker = bool(
-                                tool_marker_present or compression_marker
-                            )
-                            truncation_recovery_last_final_chars = len(
-                                final_response or ""
-                            )
-                            truncation_recovery_last_likely_false_positive = True
-                            agent._buffer_status(
-                                "🧯 Retrying truncation recovery with compact turn context (parse recovery)."
-                            )
-                            logger.warning(
-                                "truncation_recovery_attempt likely_false_positive=%s parse_error=true final_response_chars=%d tool_marker_present=%s history_reduced=%s",
-                                likely_false_positive,
-                                len(final_response or ""),
-                                bool(tool_marker_present or compression_marker),
-                                history_reduced,
-                            )
-                            truncation_recovery_attempted = True
-                            continue
-
                         agent._invalid_json_retries = 0
                         agent._cleanup_task_resources(effective_task_id)
                         agent._persist_session(messages, conversation_history)
-                        error_message = (
-                            "응답 생성 중 출력 제한 오류가 발생했습니다. "
-                            "히스토리 단축 후에도 복구하지 못했습니다."
-                            if truncation_recovery_attempted
-                            else "Response truncated due to output length limit"
-                        )
-                        logger.warning(
-                            "truncation_recovery_failed likely_false_positive=%s final_response_chars=%d tool_marker_present=%s",
-                            likely_false_positive,
-                            len(final_response or ""),
-                            bool(tool_marker_present or compression_marker),
-                        )
                         return {
                             "final_response": None,
                             "messages": messages,
                             "api_calls": api_call_count,
                             "completed": False,
                             "partial": True,
-                            "error": error_message,
+                            "error": "Response truncated due to output length limit",
                         }
 
                     # Track retries for invalid JSON arguments
@@ -4655,14 +4453,6 @@ def run_conversation(
                 messages.append(final_msg)
                 
                 _turn_exit_reason = f"text_response(finish_reason={finish_reason})"
-                if truncation_recovery_attempted:
-                    logger.warning(
-                        "truncation_recovery_success likely_false_positive=%s final_response_chars=%d tool_marker_present=%s history_reduced=%s",
-                        truncation_recovery_last_likely_false_positive,
-                        len(final_response or ""),
-                        truncation_recovery_tool_marker,
-                        truncation_recovery_history_reduced,
-                    )
                 if not agent.quiet_mode:
                     agent._safe_print(f"🎉 Conversation completed after {api_call_count} OpenAI-compatible API call(s)")
                 break
