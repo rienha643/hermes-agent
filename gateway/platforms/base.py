@@ -3691,6 +3691,13 @@ class BasePlatformAdapter(ABC):
                 media_files, response = self.extract_media(response)
                 media_files = self.filter_media_delivery_paths(media_files)
                 structured_files_raw = getattr(event, "_structured_attachment_paths", []) or []
+                if len(structured_files_raw) > 20:
+                    logger.warning(
+                        "[%s] suppressing %d structured attachment candidate(s); exceeds provenance safety cap",
+                        self.name,
+                        len(structured_files_raw),
+                    )
+                    structured_files_raw = []
                 structured_files = self.filter_local_delivery_paths(structured_files_raw)
 
                 # Extract image URLs and send them as native platform attachments

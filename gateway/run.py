@@ -1957,13 +1957,73 @@ def _normalize_empty_agent_response(
     return response
 
 
-def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
-    """Extract local attachment candidates from structured agent/tool results.
+_STRUCTURED_ATTACHMENT_EXPLICIT_FIELDS = frozenset(
+    {
+        "artifacts",
+        "artifact_files",
+        "media_files",
+        "output_path",
+        "document_path",
+        "primary_image_path",
+        "image_path",
+        "file_path",
+    }
+)
+_STRUCTURED_ATTACHMENT_ARTIFACT_TOOL_FIELDS = frozenset(
+    {
+        "files",
+        "image",
+        "local_path",
+        "audio_path",
+        "video_path",
+    }
+)
+_STRUCTURED_ATTACHMENT_DENIED_TOOLS = frozenset(
+    {
+        "search_files",
+        "read_file",
+        "terminal",
+        "execute_code",
+    }
+)
+_STRUCTURED_ATTACHMENT_ARTIFACT_TOOLS = frozenset(
+    {
+        "delegate_task",
+        "image_generate",
+        "image_generation",
+        "text_to_speech",
+        "send_message",
+        "document_generate",
+        "publish_document_artifact",
+        "artifact_publish",
+    }
+)
 
-    This complements text parsing of ``MEDIA:`` and bare local paths by scanning
-    structured payloads returned by tools such as ``delegate_task`` and
-    ``image_generate``. Only local filesystem paths are surfaced here; URL-based
-    artifacts remain text-only.
+
+def _normalize_structured_attachment_tool_name(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_")
+
+
+def _coerce_structured_attachment_payload(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.lstrip()
+    if not (stripped.startswith("{") or stripped.startswith("[")):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return value
+
+
+def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
+    """Extract local attachment candidates with explicit artifact provenance.
+
+    Tool outputs frequently contain ordinary path lists (``search_files.files``),
+    stdout, or read-file content.  Those are observations, not deliverables.  To
+    avoid publishing unrelated files, collect only paths carried by explicit
+    artifact fields, and allow generic ``files``/``image``-style fields only for
+    known artifact-producing tools.
     """
     from urllib.parse import unquote, urlparse
 
@@ -1988,77 +2048,68 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
         seen_paths.add(expanded)
         candidates.append(expanded)
 
-    def _walk(node: Any) -> None:
-        if isinstance(node, dict):
-            node_id = id(node)
-            if node_id in seen_nodes:
-                return
-            seen_nodes.add(node_id)
+    def _collect_value(value: Any) -> None:
+        value = _coerce_structured_attachment_payload(value)
+        if isinstance(value, str):
+            _maybe_add_path(value)
+        elif isinstance(value, dict):
+            _collect_payload(value, tool_name="")
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                if isinstance(item, (list, tuple)) and item:
+                    _collect_value(item[0])
+                else:
+                    _collect_value(item)
 
-            raw_artifacts = node.get("artifacts")
-            if isinstance(raw_artifacts, (list, tuple)):
-                for item in raw_artifacts:
-                    if isinstance(item, str):
-                        _maybe_add_path(item)
+    def _collect_payload(payload: Any, *, tool_name: str) -> None:
+        payload = _coerce_structured_attachment_payload(payload)
+        if not isinstance(payload, dict):
+            return
+        node_id = id(payload)
+        if node_id in seen_nodes:
+            return
+        seen_nodes.add(node_id)
+        normalized_tool = _normalize_structured_attachment_tool_name(tool_name)
+        tool_allows_generic_files = normalized_tool in _STRUCTURED_ATTACHMENT_ARTIFACT_TOOLS
 
-            raw_media_files = node.get("media_files")
-            if isinstance(raw_media_files, (list, tuple)):
-                for item in raw_media_files:
-                    if isinstance(item, str):
-                        _maybe_add_path(item)
-                    elif isinstance(item, (list, tuple)) and item:
-                        _maybe_add_path(item[0])
+        for key, value in payload.items():
+            key_text = str(key or "")
+            if key_text in _STRUCTURED_ATTACHMENT_EXPLICIT_FIELDS:
+                _collect_value(value)
+            elif key_text in _STRUCTURED_ATTACHMENT_ARTIFACT_TOOL_FIELDS and tool_allows_generic_files:
+                _collect_value(value)
+            elif isinstance(value, dict):
+                _collect_payload(value, tool_name=normalized_tool)
+            elif isinstance(value, str):
+                coerced = _coerce_structured_attachment_payload(value)
+                if isinstance(coerced, dict):
+                    _collect_payload(coerced, tool_name=normalized_tool)
 
-            for key in (
-                "image",
-                "local_path",
-                "file_path",
-                "path",
-                "output_path",
-                "audio_path",
-                "video_path",
-                "document_path",
-            ):
-                _maybe_add_path(node.get(key))
+    def _tool_name_for_message(message: dict[str, Any]) -> str:
+        function_payload = message.get("function")
+        function_name = function_payload.get("name") if isinstance(function_payload, dict) else ""
+        return _normalize_structured_attachment_tool_name(
+            message.get("tool_name") or message.get("name") or function_name
+        )
 
-            for value in node.values():
-                if isinstance(value, (dict, list, tuple)):
-                    _walk(value)
-                elif isinstance(value, str):
-                    stripped = value.lstrip()
-                    if stripped.startswith("{") or stripped.startswith("["):
-                        try:
-                            _walk(json.loads(value))
-                        except Exception:
-                            pass
-        elif isinstance(node, (list, tuple)):
-            node_id = id(node)
-            if node_id in seen_nodes:
-                return
-            seen_nodes.add(node_id)
-            for item in node:
-                if isinstance(item, (dict, list, tuple)):
-                    _walk(item)
-                elif isinstance(item, str):
-                    stripped = item.lstrip()
-                    if stripped.startswith("{") or stripped.startswith("["):
-                        try:
-                            _walk(json.loads(item))
-                        except Exception:
-                            _maybe_add_path(item)
-                    else:
-                        _maybe_add_path(item)
-        elif isinstance(node, str):
-            stripped = node.lstrip()
-            if stripped.startswith("{") or stripped.startswith("["):
-                try:
-                    _walk(json.loads(node))
-                    return
-                except Exception:
-                    pass
-            _maybe_add_path(node)
+    def _collect_from_tool_message(message: dict[str, Any]) -> None:
+        tool_name = _tool_name_for_message(message)
+        if tool_name in _STRUCTURED_ATTACHMENT_DENIED_TOOLS:
+            return
+        payload = _coerce_structured_attachment_payload(message.get("content"))
+        if payload is None:
+            payload = message
+        _collect_payload(payload, tool_name=tool_name)
 
-    _walk(agent_result)
+    if isinstance(agent_result, dict) and isinstance(agent_result.get("messages"), list):
+        for message in agent_result["messages"]:
+            if not isinstance(message, dict):
+                continue
+            if str(message.get("role") or "").lower() == "tool":
+                _collect_from_tool_message(message)
+        return candidates
+
+    _collect_payload(agent_result, tool_name="")
     return candidates
 
 
