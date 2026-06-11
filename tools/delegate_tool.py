@@ -23,6 +23,7 @@ import re
 
 logger = logging.getLogger(__name__)
 import os
+import shutil
 import threading
 import time
 from concurrent.futures import (
@@ -458,6 +459,11 @@ _DOCUMENT_ARTIFACT_EXTENSIONS = {
     ".xlsx",
     ".txt",
 }
+_FINAL_DOCUMENT_ARTIFACT_EXTENSIONS = {".docx", ".pdf"}
+_DESIGNER_DOCUMENT_TASK_RE = re.compile(
+    r"(?:docx|pdf|문서|이력서|resume|template|템플릿|탬플릿|ocr|재작성|리폼)",
+    re.IGNORECASE,
+)
 
 
 def _extract_artifact_paths(text: Any) -> List[str]:
@@ -1171,6 +1177,103 @@ def _normalize_delegate_artifacts(artifacts: Optional[Iterable[Any]]) -> List[st
     return normalized
 
 
+def _is_final_document_artifact(path: str | Path) -> bool:
+    return Path(path).suffix.lower() in _FINAL_DOCUMENT_ARTIFACT_EXTENSIONS
+
+
+def _is_sidecar_artifact(path: str | Path) -> bool:
+    candidate = Path(path)
+    if any(part == "_sidecars" for part in candidate.parts):
+        return True
+    suffix = candidate.suffix.lower()
+    name = candidate.name.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return bool(re.search(r"(?:page[_-]?\d+|ocr|render|tmp|extracted|image)", name))
+    if suffix in {".txt", ".log", ".json"}:
+        return bool(re.search(r"(?:ocr|page[_-]?\d+|extract|render|debug|manifest)", name))
+    return False
+
+
+def _prepare_delegate_document_artifacts(artifacts: Optional[Iterable[Any]]) -> Dict[str, List[str]]:
+    """Split delegated artifacts into final deliverables and sidecars.
+
+    Final DOCX/PDF artifacts are what the gateway should attach by default.
+    OCR/page text and temporary render/extract images stay visible in metadata
+    only so they do not outrank the final documents in Slack delivery.
+    """
+    normalized = _normalize_delegate_artifacts(artifacts)
+    final_docs = [path for path in normalized if _is_final_document_artifact(path)]
+    original_sidecars = [path for path in normalized if path not in final_docs and _is_sidecar_artifact(path)]
+    sidecars = original_sidecars
+    if final_docs:
+        sidecars = _move_delegate_sidecars_next_to_final_document(final_docs[0], sidecars)
+    other_artifacts = [path for path in normalized if path not in final_docs and path not in original_sidecars]
+    primary = final_docs or other_artifacts or ([] if sidecars else normalized)
+    return {
+        "artifacts": primary,
+        "artifact_files": final_docs,
+        "sidecar_files": sidecars,
+        "intermediate_artifacts": sidecars,
+    }
+
+
+def _move_delegate_sidecars_next_to_final_document(final_doc: str, sidecars: List[str]) -> List[str]:
+    if not sidecars:
+        return []
+    sidecar_dir = Path(final_doc).parent / "_sidecars"
+    moved: List[str] = []
+    for raw_path in sidecars:
+        source = Path(raw_path)
+        if any(part == "_sidecars" for part in source.parts):
+            moved.append(str(source))
+            continue
+        try:
+            sidecar_dir.mkdir(parents=True, exist_ok=True)
+            target = sidecar_dir / source.name
+            if target.exists() and target.resolve(strict=False) != source.resolve(strict=False):
+                stem, suffix = target.stem, target.suffix
+                index = 1
+                while target.exists():
+                    target = sidecar_dir / f"{stem}_{index}{suffix}"
+                    index += 1
+            if target.resolve(strict=False) != source.resolve(strict=False):
+                shutil.move(str(source), str(target))
+            moved.append(str(target))
+        except Exception:
+            logger.debug("Could not move delegate sidecar %s under %s", source, sidecar_dir, exc_info=True)
+            moved.append(str(source))
+    return moved
+
+
+def _delegate_status_from_exit(*, raw_summary: Any, interrupted: bool, completed: bool) -> str:
+    if interrupted:
+        return "interrupted"
+    if completed:
+        return "completed" if raw_summary else "failed"
+    if raw_summary:
+        return "partial"
+    return "failed"
+
+
+def _is_designer_document_delegate_task(task: Dict[str, Any]) -> bool:
+    profile_name = str(task.get("profile") or "").strip().lower()
+    if profile_name != "designer":
+        return False
+    haystack = "\n".join(str(task.get(key) or "") for key in ("goal", "context"))
+    return bool(_DESIGNER_DOCUMENT_TASK_RE.search(haystack))
+
+
+def _effective_delegate_max_iterations(task_list: List[Dict[str, Any]], *, requested_default: int) -> int:
+    """Return per-call iteration budget, raising only Sylvia/designer document work."""
+    try:
+        configured = int(requested_default or DEFAULT_MAX_ITERATIONS)
+    except (TypeError, ValueError):
+        configured = DEFAULT_MAX_ITERATIONS
+    if any(_is_designer_document_delegate_task(task) for task in task_list):
+        return max(configured, 90)
+    return configured
+
+
 def _classify_delegate_artifact(path: str) -> Optional[Dict[str, str]]:
     suffix = Path(path).suffix.lower()
     artifact_type = _UX_ARTIFACT_EXTENSIONS.get(suffix)
@@ -1262,8 +1365,14 @@ def _format_specialist_result_frame(
     label = str(worker_label or "").strip()
     normalized_status = str(status or "").strip().lower()
     is_failure = normalized_status in {"error", "failed", "failure", "timeout", "interrupted"}
+    is_partial = normalized_status in {"partial", "incomplete"}
     normalized_task_type = _normalize_delegate_task_type(task_type)
-    intro = f"{label}가 작업을 완료했습니다." if not is_failure else f"{label}가 작업을 완료하지 못했습니다."
+    if is_failure:
+        intro = f"{label}가 작업을 완료하지 못했습니다."
+    elif is_partial:
+        intro = f"{label}가 작업을 부분 완료했으며 후속 확인이 필요합니다."
+    else:
+        intro = f"{label}가 작업을 완료했습니다."
 
     sections: List[str] = []
     primary_text = _localize_worker_result_section_headers(summary or preview or "") or ""
@@ -1277,7 +1386,8 @@ def _format_specialist_result_frame(
         )
 
     verification_lines: List[str] = []
-    verification_lines.append(f"상태: {'완료' if not is_failure else '실패'}")
+    status_label = "실패" if is_failure else ("부분 완료" if is_partial else "완료")
+    verification_lines.append(f"상태: {status_label}")
     if exit_reason:
         verification_lines.append(f"종료 사유: {exit_reason}")
     if api_calls is not None:
@@ -2759,15 +2869,11 @@ def _run_single_child(
         api_calls = result.get("api_calls", 0)
         specialist_worker_label = getattr(child, "_profile_execution_worker_label", None)
 
-        if interrupted:
-            status = "interrupted"
-        elif raw_summary:
-            # A summary means the subagent produced usable output.
-            # exit_reason ("completed" vs "max_iterations") already
-            # tells the parent *how* the task ended.
-            status = "completed"
-        else:
-            status = "failed"
+        status = _delegate_status_from_exit(
+            raw_summary=raw_summary,
+            interrupted=interrupted,
+            completed=completed,
+        )
 
         summary = raw_summary
         final_activity_snapshot = _snapshot_child_activity(
@@ -2782,6 +2888,7 @@ def _run_single_child(
         trace_by_id: Dict[str, Dict[str, Any]] = {}
         tool_name_by_call_id: Dict[str, str] = {}
         current_task_image_artifacts: List[str] = []
+        current_task_artifacts: List[str] = []
         seen_current_task_artifacts: set[str] = set()
         messages = result.get("messages") or []
         if isinstance(messages, list):
@@ -2802,6 +2909,11 @@ def _run_single_child(
                             tool_name_by_call_id[tc_id] = fn.get("name", "unknown")
                 elif msg.get("role") == "tool":
                     content = msg.get("content", "")
+                    for artifact_path in _extract_artifact_paths(content):
+                        expanded_artifact = os.path.expanduser(artifact_path)
+                        if expanded_artifact not in seen_current_task_artifacts:
+                            seen_current_task_artifacts.add(expanded_artifact)
+                            current_task_artifacts.append(expanded_artifact)
                     is_error = _looks_like_error_output(content)
                     result_meta = {
                         "result_bytes": len(content),
@@ -2825,9 +2937,12 @@ def _run_single_child(
                             candidate = parsed_tool.get("local_path") or parsed_tool.get("image")
                             if isinstance(candidate, str):
                                 expanded = os.path.expanduser(candidate)
-                                if os.path.isfile(expanded) and expanded not in seen_current_task_artifacts:
-                                    seen_current_task_artifacts.add(expanded)
-                                    current_task_image_artifacts.append(expanded)
+                                if os.path.isfile(expanded):
+                                    if expanded not in current_task_image_artifacts:
+                                        current_task_image_artifacts.append(expanded)
+                                    if expanded not in seen_current_task_artifacts:
+                                        seen_current_task_artifacts.add(expanded)
+                                        current_task_artifacts.append(expanded)
 
         canonical_image_artifact = (
             current_task_image_artifacts[-1] if current_task_image_artifacts else None
@@ -2860,11 +2975,21 @@ def _run_single_child(
                 duration,
             )
 
+        summary_artifacts = [] if current_task_artifacts else _extract_artifact_paths(summary)
+        prepared_artifacts = _prepare_delegate_document_artifacts(
+            list(current_task_image_artifacts)
+            + current_task_artifacts
+            + summary_artifacts
+        )
+
         entry: Dict[str, Any] = {
             "task_index": task_index,
             "status": status,
             "summary": summary,
-            "artifacts": list(current_task_image_artifacts),
+            "artifacts": prepared_artifacts["artifacts"],
+            "artifact_files": prepared_artifacts["artifact_files"],
+            "sidecar_files": prepared_artifacts["sidecar_files"],
+            "intermediate_artifacts": prepared_artifacts["intermediate_artifacts"],
             "api_calls": api_calls,
             "duration_seconds": duration,
             "model": _model if isinstance(_model, str) else None,
@@ -2988,9 +3113,9 @@ def _run_single_child(
             "files_read": _files_read,
             "files_written": _files_written,
             "output_tail": _output_tail,
-            "artifacts": _normalize_delegate_artifacts(
-                list(current_task_image_artifacts) + _extract_artifact_paths(summary)
-            ),
+            "artifacts": prepared_artifacts["artifacts"],
+            "artifact_files": prepared_artifacts["artifact_files"],
+            "sidecar_files": prepared_artifacts["sidecar_files"],
             "exit_reason": exit_reason,
             "task_type": _task_type,
         }
@@ -3180,7 +3305,6 @@ def delegate_task(
             "using delegation.max_iterations=%s from config",
             max_iterations, default_max_iter,
         )
-    effective_max_iter = default_max_iter
 
     # Normalize to task list
     max_children = _get_max_concurrent_children()
@@ -3245,6 +3369,8 @@ def delegate_task(
             toolsets=task_toolsets,
         )
         task["_task_type"] = _normalize_delegate_task_type(task.get("task_type") or task.get("type"))
+
+    effective_max_iter = _effective_delegate_max_iterations(task_list, requested_default=default_max_iter)
 
     if len(task_list) == 1 and task_list[0].get("_single_output_image"):
         cache_scope = str(getattr(parent_agent, "_delegate_cache_scope", "") or "").strip() or None

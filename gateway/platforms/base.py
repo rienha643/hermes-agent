@@ -492,6 +492,12 @@ from gateway.session import SessionSource, build_session_key
 from hermes_constants import get_hermes_dir, get_hermes_home
 
 
+_FINAL_DELIVERY_DOCUMENT_EXTENSIONS = {".docx", ".pdf"}
+_SIDECAR_EXCLUDED_PART = "_sidecars"
+_IMAGE_DELIVERY_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+_TEXT_SIDECAR_EXTENSIONS = {".txt", ".log", ".json"}
+
+
 GATEWAY_SECRET_CAPTURE_UNSUPPORTED_MESSAGE = (
     "Secure secret entry is not supported over messaging. "
     "Load this skill in the local CLI to be prompted, or add the key to ~/.hermes/.env manually."
@@ -2463,6 +2469,48 @@ class BasePlatformAdapter(ABC):
         return safe_paths
 
     @staticmethod
+    def is_document_sidecar_path(file_path: str) -> bool:
+        path = Path(str(file_path))
+        return any(part == _SIDECAR_EXCLUDED_PART for part in path.parts)
+
+    @staticmethod
+    def looks_like_document_intermediate_path(file_path: str) -> bool:
+        path = Path(str(file_path))
+        if BasePlatformAdapter.is_document_sidecar_path(file_path):
+            return True
+        suffix = path.suffix.lower()
+        name = path.name.lower()
+        if suffix in _IMAGE_DELIVERY_EXTENSIONS:
+            return bool(re.search(r"(?:page[_-]?\d+|ocr|render|tmp|extracted|image)", name))
+        if suffix in _TEXT_SIDECAR_EXTENSIONS:
+            return bool(re.search(r"(?:ocr|page[_-]?\d+|extract|render|debug|manifest)", name))
+        return False
+
+    @staticmethod
+    def prioritize_document_delivery_paths(file_paths) -> List[str]:
+        """Prefer final DOCX/PDF artifacts and suppress sidecars when present."""
+        paths = [str(path) for path in (file_paths or [])]
+        final_docs = [path for path in paths if Path(path).suffix.lower() in _FINAL_DELIVERY_DOCUMENT_EXTENSIONS]
+        if not final_docs:
+            return [path for path in paths if not BasePlatformAdapter.is_document_sidecar_path(path)]
+
+        prioritized: List[str] = []
+        seen: set[str] = set()
+        for path in final_docs:
+            if path not in seen:
+                seen.add(path)
+                prioritized.append(path)
+        for path in paths:
+            suffix = Path(path).suffix.lower()
+            if path in seen or BasePlatformAdapter.looks_like_document_intermediate_path(path):
+                continue
+            if suffix in _IMAGE_DELIVERY_EXTENSIONS or suffix in _TEXT_SIDECAR_EXTENSIONS:
+                continue
+            seen.add(path)
+            prioritized.append(path)
+        return prioritized
+
+    @staticmethod
     def dedupe_local_delivery_paths(file_paths, *, skip_paths=None) -> List[str]:
         """Deduplicate normalized local delivery paths while preserving order."""
         blocked = {str(path) for path in (skip_paths or [])}
@@ -3717,6 +3765,7 @@ class BasePlatformAdapter(ABC):
                     [*structured_files, *local_files_filtered],
                     skip_paths={path for path, _ in media_files},
                 )
+                local_files = self.prioritize_document_delivery_paths(local_files)
                 if structured_files:
                     logger.info("[%s] structured attachments provided %d file(s)", self.name, len(structured_files))
                 if local_files:
