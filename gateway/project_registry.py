@@ -28,6 +28,7 @@ _PROJECT_REGISTRY_VERSION = 1
 _PROJECT_LOOKUP_FALLBACK_NAME = "project"
 _PROJECT_NAME_TOKEN_RE = re.compile(r"[^0-9A-Za-z가-힣]+")
 _VERSIONED_STEM_RE = re.compile(r"^(?P<base>.+)_v(?P<version>\d+)$")
+_DATED_PROJECT_ID_RE = re.compile(r"^\d{6}_")
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +71,8 @@ def format_project_id(project_name: str, created_on: date | datetime | str) -> s
     """Build the canonical ``YYMMDD_project_name`` identifier."""
     created = _coerce_created_on(created_on)
     normalized_name = normalize_project_name(project_name)
+    if _DATED_PROJECT_ID_RE.match(normalized_name):
+        return normalized_name
     return f"{created:%y%m%d}_{normalized_name}"
 
 

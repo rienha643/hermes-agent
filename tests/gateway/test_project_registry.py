@@ -169,3 +169,18 @@ def test_next_versioned_child_path_advances_from_existing_and_versioned_sources(
 
     assert project_registry.next_versioned_child_path(directory, "brief.docx") == directory / "brief_v3.docx"
     assert project_registry.next_versioned_child_path(directory, "brief_v3.docx") == directory / "brief_v3.docx"
+
+
+def test_format_project_id_preserves_existing_date_prefix():
+    assert project_registry.format_project_id("260610_test", "2026-06-12") == "260610_test"
+
+
+def test_format_project_id_adds_date_prefix_when_missing():
+    assert project_registry.format_project_id("smoke_test", "2026-06-10") == "260610_smoke_test"
+
+
+def test_format_project_id_preserves_comfy_retry_project_name():
+    assert (
+        project_registry.format_project_id("260610_angelica_smoke_retry", "2026-06-12")
+        == "260610_angelica_smoke_retry"
+    )
