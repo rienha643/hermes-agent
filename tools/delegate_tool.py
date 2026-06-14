@@ -34,7 +34,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from gateway.document_artifacts import format_document_artifact_lines
+from gateway.document_artifacts import (
+    format_document_artifact_lines,
+    is_document_artifact_intermediate_path,
+    is_document_artifact_path,
+)
 from toolsets import TOOLSETS
 
 _SINGLE_OUTPUT_IMAGE_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -1313,6 +1317,61 @@ def _normalize_delegate_task_type(task_type: Optional[str]) -> Optional[str]:
     return normalized
 
 
+_DELEGATE_DELIVERABLE_TASK_TYPES = frozenset({"artifact", "document", "documents", "docs"})
+
+
+def _delegate_result_has_delivery_intent(
+    *,
+    task_type: Optional[str],
+    summary: Optional[str],
+    preview: Optional[str],
+    artifacts: Optional[Iterable[Any]],
+) -> bool:
+    normalized_task_type = _normalize_delegate_task_type(task_type)
+    if normalized_task_type in _DELEGATE_DELIVERABLE_TASK_TYPES:
+        return True
+
+    joined = " ".join(
+        str(value or "").strip()
+        for value in (summary, preview)
+        if str(value or "").strip()
+    ).casefold()
+    if not joined:
+        return False
+    if any(token in joined for token in ("최종 산출물", "final deliverable", "deliverable", "publish", "제출", "납품")):
+        return True
+
+    # Fallback: only document-like artifacts count as a publishable intent signal.
+    return any(
+        is_document_artifact_path(path) and not is_document_artifact_intermediate_path(path)
+        for path in _normalize_delegate_artifacts(artifacts)
+    )
+
+
+def _delegate_artifact_is_displayable(path: str, *, delivery_intent: bool) -> bool:
+    """Return True when a worker result frame may mention the artifact.
+
+    Display is separate from upload/delivery.  A report.md can be the explicit
+    final deliverable for an ``artifact`` task and should appear in the worker
+    frame, while sidecars/debug/cache/state files remain hidden and delivery
+    candidates still require the structured gateway gates.
+    """
+    if not delivery_intent or not is_document_artifact_path(path):
+        return False
+    candidate = Path(path)
+    lower_name = candidate.name.lower()
+    lower_parts = {part.lower() for part in candidate.parts}
+    if "_sidecars" in lower_parts:
+        return False
+    if lower_name in {"run.json", "workflow.json", "prompt.json", "metadata.json", "manifest.json"}:
+        return False
+    if lower_name.endswith((".log", ".cache", ".state", ".tmp")):
+        return False
+    if lower_parts & {"tmp", "cache", "state", "debug"}:
+        return False
+    return True
+
+
 def _normalize_delegate_follow_up(follow_up: Any) -> Optional[str]:
     """Return a non-trivial follow-up note, or None for generic filler."""
     if follow_up is None:
@@ -1357,6 +1416,7 @@ def _format_specialist_result_frame(
     api_calls: Optional[Any] = None,
     exit_reason: Optional[str] = None,
     follow_up: Any = None,
+    delivery_intent: bool = False,
 ) -> str:
     """Render the shared hybrid result frame for general specialist workers."""
     if not _is_general_specialist_worker_label(worker_label):
@@ -1367,6 +1427,12 @@ def _format_specialist_result_frame(
     is_failure = normalized_status in {"error", "failed", "failure", "timeout", "interrupted"}
     is_partial = normalized_status in {"partial", "incomplete"}
     normalized_task_type = _normalize_delegate_task_type(task_type)
+    delivery_intent = delivery_intent or _delegate_result_has_delivery_intent(
+        task_type=task_type,
+        summary=summary,
+        preview=preview,
+        artifacts=artifacts,
+    )
     if is_failure:
         intro = f"{label}가 작업을 완료하지 못했습니다."
     elif is_partial:
@@ -1437,18 +1503,14 @@ def _format_specialist_result_frame(
 
     artifact_paths = _normalize_delegate_artifacts(artifacts)
     artifact_entries = [
-        entry for path in artifact_paths if (entry := _classify_delegate_artifact(path)) is not None
+        entry
+        for path in artifact_paths
+        if _delegate_artifact_is_displayable(path, delivery_intent=delivery_intent)
+        and (entry := _classify_delegate_artifact(path)) is not None
     ]
     if artifact_entries:
         artifact_lines: List[str] = []
         for entry in artifact_entries:
-            if entry["format"] == "이미지":
-                artifact_lines.extend([f"형식: {entry['format']}", f"전달 방식: {entry['delivery']}"])
-                artifact_lines.append(
-                    f"저장 위치: `{_display_delegate_artifact_path(entry['path'])}`"
-                )
-                artifact_lines.append(f"표시 방식: {entry['display']}")
-                continue
             artifact_lines.extend(format_document_artifact_lines(entry["path"]))
         sections.append("- 산출물\n  - " + "\n  - ".join(artifact_lines))
 
@@ -2981,6 +3043,24 @@ def _run_single_child(
             + current_task_artifacts
             + summary_artifacts
         )
+        has_delivery_intent = _delegate_result_has_delivery_intent(
+            task_type=_kwargs.get("task_type"),
+            summary=summary,
+            preview=summary,
+            artifacts=prepared_artifacts["artifacts"],
+        )
+        if not has_delivery_intent:
+            sanitized_intermediates = list(dict.fromkeys([
+                *prepared_artifacts["intermediate_artifacts"],
+                *prepared_artifacts["sidecar_files"],
+                *prepared_artifacts["artifacts"],
+            ]))
+            prepared_artifacts = {
+                "artifacts": [],
+                "artifact_files": [],
+                "sidecar_files": prepared_artifacts["sidecar_files"],
+                "intermediate_artifacts": sanitized_intermediates,
+            }
 
         entry: Dict[str, Any] = {
             "task_index": task_index,

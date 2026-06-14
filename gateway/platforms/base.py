@@ -1029,6 +1029,15 @@ _SENSITIVE_DELIVERY_NAME_TOKENS = (
     "session",
 )
 
+_INTERMEDIATE_DELIVERY_NAME_RE = re.compile(
+    r"(?:^|/)(?:report(?:_v\d+)?\.md|run\.json|workflow\.json|prompt\.json|metadata\.json|manifest\.json)(?:$|/)",
+    re.IGNORECASE,
+)
+_INTERMEDIATE_DELIVERY_PART_RE = re.compile(
+    r"(?:^|[._-])(debug(?:[._-].*)?|tmp|cache|state)(?:$|[._-])",
+    re.IGNORECASE,
+)
+
 _SLACK_PNG_ONLY_EXTENSIONS = {".png"}
 _SLACK_DOCUMENT_BLOCKED_SUFFIXES = set()
 _SLACK_ALLOWED_PUBLISH_ROOTS = (
@@ -1071,6 +1080,24 @@ def _delivery_path_is_sidecar(path: Path) -> bool:
         or "metadata.json" in lower_name
         or "manifest.json" in lower_name
     )
+
+
+def _delivery_path_is_intermediate(path: Path) -> bool:
+    parts = [part.lower() for part in path.parts]
+    lower_name = path.name.lower()
+    if any(part == "_sidecars" for part in parts):
+        return True
+    if lower_name in {"run.json", "workflow.json", "prompt.json", "metadata.json", "manifest.json"}:
+        return True
+    if lower_name == "report.md" or re.fullmatch(r"report_v\d+\.md", lower_name):
+        return True
+    if lower_name.endswith((".log", ".cache", ".state", ".tmp")):
+        return True
+    if _INTERMEDIATE_DELIVERY_PART_RE.search(lower_name):
+        return True
+    if any(part in {"tmp", "cache", "state"} for part in parts):
+        return True
+    return bool(_INTERMEDIATE_DELIVERY_NAME_RE.search(path.as_posix()))
 
 
 def _delivery_path_is_blocked(path: Path) -> bool:
@@ -2649,6 +2676,9 @@ class BasePlatformAdapter(ABC):
             if not safe_path:
                 logger.warning("Skipping unsafe local file path outside allowed roots")
                 continue
+            if _delivery_path_is_intermediate(Path(safe_path)):
+                logger.debug("Skipping intermediate local file path: %s", safe_path)
+                continue
             if image_only and Path(safe_path).suffix.lower() != ".png":
                 logger.warning("Skipping non-PNG local file path in PNG-only mode: %s", safe_path)
                 continue
@@ -2681,7 +2711,12 @@ class BasePlatformAdapter(ABC):
         paths = [str(path) for path in (file_paths or [])]
         final_docs = [path for path in paths if Path(path).suffix.lower() in _FINAL_DELIVERY_DOCUMENT_EXTENSIONS]
         if not final_docs:
-            return [path for path in paths if not BasePlatformAdapter.is_document_sidecar_path(path)]
+            return [
+                path
+                for path in paths
+                if not BasePlatformAdapter.is_document_sidecar_path(path)
+                and not BasePlatformAdapter.looks_like_document_intermediate_path(path)
+            ]
 
         prioritized: List[str] = []
         seen: set[str] = set()
@@ -3970,12 +4005,10 @@ class BasePlatformAdapter(ABC):
                     logger.info("[%s] extract_images found %d image(s) in response (%d chars)", self.name, len(images), len(response))
 
                 # Auto-detect bare local file paths for native media delivery
-                # (helps small models that don't use MEDIA: syntax). Slack is
-                # fail-closed here: RCA/test/worker reports often include
-                # "산출물" blocks with reference paths, and those must remain
-                # text-only unless the response used explicit MEDIA: tags or
-                # structured media_files/document_files delivery fields.
-                if self.platform == Platform.SLACK:
+                # (helps small models that don't use MEDIA: syntax). To avoid
+                # contaminating worker results, we only allow this fallback when
+                # the current turn already produced structured attachment intent.
+                if not structured_files or self.platform == Platform.SLACK:
                     local_files_raw = []
                 else:
                     local_files_raw, text_content = self.extract_local_files(text_content)
@@ -4005,6 +4038,8 @@ class BasePlatformAdapter(ABC):
 
                 def _publish_document_for_ux(path: str) -> str:
                     if not is_document_artifact_path(path):
+                        return path
+                    if BasePlatformAdapter.looks_like_document_intermediate_path(path):
                         return path
                     if self.platform == Platform.SLACK:
                         return path

@@ -412,6 +412,43 @@ def test_user_requested_delivery_false_does_not_enable_legacy_artifacts(tmp_path
     assert _collect_structured_attachment_paths(agent_result) == []
 
 
+def test_user_requested_delivery_false_blocks_media_files_too(tmp_path):
+    image = tmp_path / "image.png"
+    image.write_bytes(b"png")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "delegate_task",
+                "content": {
+                    "user_requested_delivery": False,
+                    "media_files": [str(image)],
+                },
+            }
+        ]
+    }
+
+    assert _collect_structured_attachment_paths(agent_result) == []
+
+
+def test_bare_local_path_in_body_is_not_collected_without_explicit_delivery_intent(tmp_path):
+    report = tmp_path / "body-only-report.md"
+    report.write_text("rca")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "delegate_task",
+                "content": f"RCA complete\n산출물\n- {report}",
+            }
+        ]
+    }
+
+    assert _collect_structured_attachment_paths(agent_result) == []
+
+
 def test_explicit_document_files_are_collected(tmp_path):
     report = tmp_path / "final.pdf"
     report.write_bytes(b"pdf")

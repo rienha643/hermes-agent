@@ -16,6 +16,9 @@ import os
 import threading
 import time
 import unittest
+
+import pytest
+
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -553,8 +556,7 @@ class TestDelegateTask(unittest.TestCase):
         self.assertEqual(result["results"][1]["summary"], "Result B")
         self.assertIn("total_duration_seconds", result)
 
-    def _assert_gateway_attachment_delivery(self, path: Path, artifacts: list[str], summary: str):
-        from gateway.platforms.base import BasePlatformAdapter
+    def _run_gateway_attachment_delivery(self, *, event_payload, task=None):
         from gateway.run import GatewayRunner
 
         async def _run():
@@ -562,7 +564,6 @@ class TestDelegateTask(unittest.TestCase):
                 send_multiple_images=AsyncMock(),
                 send_document=AsyncMock(),
                 send_video=AsyncMock(),
-                extract_local_files=BasePlatformAdapter.extract_local_files,
             )
             runner = GatewayRunner.__new__(GatewayRunner)
             await GatewayRunner._deliver_kanban_artifacts(
@@ -570,83 +571,172 @@ class TestDelegateTask(unittest.TestCase):
                 adapter=adapter,
                 chat_id="C123",
                 metadata={"platform": "slack"},
-                event_payload={"artifacts": artifacts, "summary": summary},
-                task=None,
+                event_payload=event_payload,
+                task=task,
             )
             return adapter
 
-        adapter = asyncio.run(_run())
+        return asyncio.run(_run())
+
+    @patch("tools.delegate_tool._run_single_child")
+    def test_kanban_completion_summary_and_task_result_bare_paths_do_not_attach(self, mock_run):
+        md_path = Path(os.environ.get("TMPDIR", "/tmp")) / "kanban" / "summary-report.md"
+        txt_path = md_path.with_suffix(".txt")
+        html_path = md_path.with_suffix(".html")
+        json_path = md_path.with_suffix(".json")
+        for path in (md_path, txt_path, html_path, json_path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("payload", encoding="utf-8")
+        summary = "\n".join(str(path) for path in (md_path, txt_path, html_path, json_path))
+        mock_run.return_value = {
+            "task_index": 0,
+            "status": "completed",
+            "summary": summary,
+            "result": summary,
+            "api_calls": 1,
+            "duration_seconds": 1.0,
+        }
+        parent = _make_mock_parent()
+
+        result = json.loads(delegate_task(goal="Generate a report", parent_agent=parent))
+
+        self.assertIn("results", result)
+        adapter = self._run_gateway_attachment_delivery(
+            event_payload={
+                "summary": summary,
+            },
+            task=SimpleNamespace(result=summary),
+        )
+        adapter.send_multiple_images.assert_not_awaited()
+        adapter.send_document.assert_not_awaited()
+
+    def test_kanban_completion_provenance_free_artifacts_are_ignored(self):
+        path = _generate_openai_image_path()
+        adapter = self._run_gateway_attachment_delivery(
+            event_payload={
+                "artifacts": [str(path)],
+            },
+        )
+
+        adapter.send_multiple_images.assert_not_awaited()
+        adapter.send_document.assert_not_awaited()
+
+    def test_kanban_completion_explicit_media_files_png_are_delivered(self):
+        path = _generate_openai_image_path()
+        adapter = self._run_gateway_attachment_delivery(
+            event_payload={
+                "user_requested_delivery": True,
+                "media_files": [str(path)],
+                "artifacts": [
+                    {
+                        "path": str(path),
+                        "provenance": "forge-local",
+                        "kind": "media",
+                    }
+                ],
+            },
+        )
+
         adapter.send_multiple_images.assert_awaited_once()
         batch = adapter.send_multiple_images.await_args.kwargs["images"]
         self.assertEqual(batch[0][0], f"file://{path}")
+        adapter.send_document.assert_not_awaited()
 
-    @patch("tools.delegate_tool._run_single_child")
-    def test_forge_local_image_summary_exposes_plain_artifact_for_attachment(self, mock_run):
-        path = _generate_forge_local_image_path()
-        mock_run.return_value = {
-            "task_index": 0,
-            "status": "completed",
-            "summary": f"Rendered local image at `{path}`",
-            "api_calls": 1,
-            "duration_seconds": 1.0,
-        }
-        parent = _make_mock_parent()
+    def test_kanban_completion_sensitive_and_source_paths_are_blocked(self):
+        root = Path(os.environ.get("TMPDIR", "/tmp")) / f"kanban-sensitive-{os.getpid()}"
+        cases = [
+            (root / "skills" / "source.md", "document_files"),
+            (root / "node_modules" / "docs" / "index.html", "document_files"),
+            (root / "auth" / "token.json", "document_files"),
+            (root / "config" / "settings.json", "document_files"),
+            (root / "state" / "state.json", "document_files"),
+            (root / "cache" / "cache.log", "document_files"),
+            (root / "logs" / "worker.log", "document_files"),
+        ]
 
-        result = json.loads(delegate_task(goal="Generate a local image", parent_agent=parent))
+        for path, field_name in cases:
+            with self.subTest(path=str(path)):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("payload", encoding="utf-8")
 
-        self.assertEqual(result["artifacts"], [str(path)])
-        self._assert_gateway_attachment_delivery(path, result["artifacts"], result["results"][0]["summary"])
+                adapter = self._run_gateway_attachment_delivery(
+                    event_payload={
+                        "user_requested_delivery": True,
+                        field_name: [str(path)],
+                        "artifacts": [
+                            {
+                                "path": str(path),
+                                "provenance": "kanban-worker",
+                                "kind": "document",
+                            }
+                        ],
+                    },
+                )
 
-    @patch("tools.delegate_tool._run_single_child")
-    def test_openai_image_summary_exposes_plain_artifact_for_attachment(self, mock_run):
+                adapter.send_multiple_images.assert_not_awaited()
+                adapter.send_document.assert_not_awaited()
+
+    def test_kanban_preview_and_actual_delivery_candidates_match(self):
         path = _generate_openai_image_path()
-        mock_run.return_value = {
-            "task_index": 0,
-            "status": "completed",
-            "summary": f"Rendered OpenAI image at `{path}`",
-            "api_calls": 1,
-            "duration_seconds": 1.0,
+        event_payload = {
+            "user_requested_delivery": True,
+            "media_files": [str(path)],
+            "artifacts": [
+                {
+                    "path": str(path),
+                    "provenance": "forge-local",
+                    "kind": "media",
+                }
+            ],
         }
-        parent = _make_mock_parent()
 
-        result = json.loads(delegate_task(goal="Generate an OpenAI image", parent_agent=parent))
+        from gateway.run import _collect_kanban_artifact_delivery_candidates
 
-        self.assertEqual(result["artifacts"], [str(path)])
-        self._assert_gateway_attachment_delivery(path, result["artifacts"], result["results"][0]["summary"])
+        preview_a, debug_a = _collect_kanban_artifact_delivery_candidates(event_payload)
+        preview_b, debug_b = _collect_kanban_artifact_delivery_candidates(event_payload)
+
+        self.assertEqual(preview_a, preview_b)
+        self.assertEqual(debug_a, debug_b)
+        adapter = self._run_gateway_attachment_delivery(event_payload=event_payload)
+        batch = adapter.send_multiple_images.await_args.kwargs["images"]
+        self.assertEqual([item[0] for item in batch], [f"file://{path}"])
 
     @patch("nas_sync_hooks.queue_nas_sync_hook")
     @patch("tools.delegate_tool._run_single_child")
     def test_document_artifact_under_documents_queues_hook_without_copy(self, mock_run, mock_hook):
-        doc_path = Path("/mnt/c/Users/AI_Agent/HermesWork/Documents/test-doc/report.docx")
-        doc_path.parent.mkdir(parents=True, exist_ok=True)
-        doc_path.write_text("hello", encoding="utf-8")
-        mock_hook.return_value = True
-        mock_run.return_value = {
-            "task_index": 0,
-            "status": "completed",
-            "summary": f"Saved report at `{doc_path}`",
-            "artifacts": [str(doc_path)],
-            "api_calls": 1,
-            "duration_seconds": 1.0,
-        }
-        parent = _make_mock_parent()
+        with TemporaryDirectory() as tmpdir:
+            doc_path = Path(tmpdir) / "HermesWork" / "Documents" / "test-doc" / "report.docx"
+            doc_path.parent.mkdir(parents=True, exist_ok=True)
+            doc_path.write_text("hello", encoding="utf-8")
+            mock_hook.return_value = True
+            mock_run.return_value = {
+                "task_index": 0,
+                "status": "completed",
+                "summary": f"Saved report at `{doc_path}`",
+                "artifacts": [str(doc_path)],
+                "api_calls": 1,
+                "duration_seconds": 1.0,
+            }
+            parent = _make_mock_parent()
 
-        result = json.loads(delegate_task(goal="Generate a document", parent_agent=parent))
+            result = json.loads(delegate_task(goal="Generate a document", parent_agent=parent))
 
-        self.assertEqual(result["artifacts"], [str(doc_path)])
-        self.assertEqual(result["results"][0]["artifacts"], [str(doc_path)])
+        published = Path(result["artifacts"][0])
+        self.assertTrue(published.exists())
+        self.assertEqual(published.read_text(encoding="utf-8"), "hello")
+        self.assertEqual(result["results"][0]["artifacts"], [str(published)])
         mock_hook.assert_called_once()
         _, kwargs = mock_hook.call_args
         self.assertEqual(kwargs["category"], "documents")
-        self.assertEqual(kwargs["artifact_path"], doc_path)
-        self.assertEqual(kwargs["source_root"], doc_path.parent)
-        self.assertEqual(kwargs["scope"], "test-doc")
+        self.assertEqual(kwargs["artifact_path"], published)
+        self.assertEqual(kwargs["source_root"], published.parent)
+        self.assertEqual(kwargs["scope"], published.parent.name)
 
     @patch("nas_sync_hooks.queue_nas_sync_hook")
     @patch("tools.delegate_tool._run_single_child")
     def test_document_artifact_outside_documents_is_published_then_hooked(self, mock_run, mock_hook):
         with TemporaryDirectory() as tmpdir:
-            outside = Path(tmpdir) / "worker" / "draft.md"
+            outside = Path(tmpdir) / "worker" / "draft.docx"
             outside.parent.mkdir(parents=True, exist_ok=True)
             outside.write_text("hello", encoding="utf-8")
             mock_hook.return_value = True
@@ -664,7 +754,6 @@ class TestDelegateTask(unittest.TestCase):
 
         published = Path(result["artifacts"][0])
         self.assertTrue(published.exists())
-        self.assertTrue(str(published).startswith("/mnt/c/Users/AI_Agent/HermesWork/Documents/260601_worker/"))
         self.assertEqual(published.read_text(encoding="utf-8"), "hello")
         self.assertEqual(result["results"][0]["artifacts"], [str(published)])
         mock_hook.assert_called_once()
@@ -672,7 +761,8 @@ class TestDelegateTask(unittest.TestCase):
         self.assertEqual(kwargs["category"], "documents")
         self.assertEqual(kwargs["artifact_path"], published)
         self.assertEqual(kwargs["source_root"], published.parent)
-        self.assertEqual(kwargs["scope"], "260601_worker")
+        self.assertEqual(kwargs["scope"], published.parent.name)
+
 
     @patch("tools.delegate_tool._run_single_child")
     def test_batch_mode_accepts_json_string_tasks(self, mock_run):
@@ -3715,6 +3805,31 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertIn("- 추가 확인 사항", general_frame)
         self.assertIn("린트 규칙을 한 번 더 확인해 주세요.", general_frame)
         self.assertNotIn("- 산출물", general_frame)
+
+        audit_frame = _format_specialist_result_frame(
+            "Eclipse",
+            status="completed",
+            task_type="audit",
+            preview="RCA/audit 결과를 점검했습니다.",
+            summary="RCA/audit 결과를 점검했습니다.",
+            artifacts=["/tmp/fake-report.md"],
+            exit_reason="completed",
+        )
+        self.assertIn("- 수행 내용", audit_frame)
+        self.assertIn("- 검증 결과", audit_frame)
+        self.assertNotIn("- 산출물", audit_frame)
+
+        for task_type in ("status", "debug", "validation", "profile audit", "skill audit", "rca"):
+            frame = _format_specialist_result_frame(
+                "Eclipse",
+                status="completed",
+                task_type=task_type,
+                preview="검증 결과만 정리했습니다.",
+                summary="검증 결과만 정리했습니다.",
+                artifacts=["/tmp/fake-report.md"],
+                exit_reason="completed",
+            )
+            self.assertNotIn("- 산출물", frame)
 
         with TemporaryDirectory() as tmpdir:
             artifact = Path(tmpdir) / "HermesWork" / "Story" / "worldbuilding" / "report.docx"

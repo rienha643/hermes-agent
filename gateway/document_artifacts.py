@@ -49,6 +49,15 @@ _DOCUMENT_ARTIFACT_EXTENSIONS = {
     ".xls",
 }
 
+_DOCUMENT_ARTIFACT_INTERMEDIATE_NAME_RE = re.compile(
+    r"(?:^|/)(?:report(?:_v\d+)?\.md|run\.json|workflow\.json|prompt\.json|metadata\.json|manifest\.json)(?:$|/)",
+    re.IGNORECASE,
+)
+_DOCUMENT_ARTIFACT_INTERMEDIATE_PART_RE = re.compile(
+    r"(?:^|[._-])(debug(?:[._-].*)?|tmp|cache|state)(?:$|[._-])",
+    re.IGNORECASE,
+)
+
 _DOCX_CONTENT_TYPES = {
     "settings": "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml",
     "fontTable": "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml",
@@ -363,6 +372,27 @@ def is_document_artifact_path(path: str | Path) -> bool:
     """Return True when *path* looks like a document artifact we should publish."""
     suffix = Path(str(path)).suffix.lower()
     return suffix in _DOCUMENT_ARTIFACT_EXTENSIONS
+
+
+def is_document_artifact_intermediate_path(path: str | Path) -> bool:
+    """Return True for report/log/sidecar outputs that should stay intermediate."""
+    candidate = Path(str(path))
+    lower_name = candidate.name.lower()
+    lower_parts = [part.lower() for part in candidate.parts]
+
+    if any(part == "_sidecars" for part in lower_parts):
+        return True
+    if lower_name in {"run.json", "workflow.json", "prompt.json", "metadata.json", "manifest.json"}:
+        return True
+    if lower_name == "report.md" or re.fullmatch(r"report_v\d+\.md", lower_name):
+        return True
+    if lower_name.endswith((".log", ".cache", ".state", ".tmp")):
+        return True
+    if _DOCUMENT_ARTIFACT_INTERMEDIATE_PART_RE.search(lower_name):
+        return True
+    if any(part in {"tmp", "cache", "state"} for part in lower_parts):
+        return True
+    return bool(_DOCUMENT_ARTIFACT_INTERMEDIATE_NAME_RE.search(candidate.as_posix()))
 
 
 def _display_document_artifact_path(path: str | Path) -> str:
@@ -691,7 +721,12 @@ def publish_document_artifact(source: Path, *, folder_name: Optional[str] = None
     if not isinstance(source, Path):
         source = Path(source)
     source = _absolute_path(source)
-    if not source.exists() or not source.is_file() or not is_document_artifact_path(source):
+    if (
+        not source.exists()
+        or not source.is_file()
+        or not is_document_artifact_path(source)
+        or is_document_artifact_intermediate_path(source)
+    ):
         return source
 
     try:

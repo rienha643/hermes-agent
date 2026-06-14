@@ -82,13 +82,13 @@ async def test_final_docx_pdf_suppress_sidecar_uploads(monkeypatch, tmp_path):
 
 
 def test_intermediate_priority_without_final_docs_keeps_root_ocr_but_excludes_sidecar_dir(tmp_path):
-    root_ocr = tmp_path / "ocr_all.txt"
+    root_report = tmp_path / "report.csv"
     sidecar_dir = tmp_path / "_sidecars"
     sidecar_dir.mkdir()
     hidden_page = sidecar_dir / "page_1.png"
-    for path in (root_ocr, hidden_page):
+    for path in (root_report, hidden_page):
         path.write_bytes(b"x")
 
-    prioritized = BasePlatformAdapter.prioritize_document_delivery_paths([str(root_ocr), str(hidden_page)])
+    prioritized = BasePlatformAdapter.prioritize_document_delivery_paths([str(root_report), str(hidden_page)])
 
-    assert prioritized == [str(root_ocr)]
+    assert prioritized == [str(root_report)]

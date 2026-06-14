@@ -101,10 +101,20 @@ class TestPublishDocumentArtifact:
         published = document_artifacts.publish_document_artifact(existing)
 
         assert published == existing
-        assert hook_calls
-        assert hook_calls[0]["artifact_path"] == existing
-        assert hook_calls[0]["source_root"] == work_root / "Documents" / "docs"
-        assert hook_calls[0]["scope"] == "docs"
+        assert hook_calls == []
+        assert document_artifacts.is_document_artifact_intermediate_path(existing)
+
+    def test_intermediate_report_files_are_not_published(self, fake_hermes_work):
+        work_root, hook_calls = fake_hermes_work
+        intermediate = work_root / "logs" / "curator" / "20260614-123456" / "run.json"
+        intermediate.parent.mkdir(parents=True, exist_ok=True)
+        intermediate.write_text("{}", encoding="utf-8")
+
+        published = document_artifacts.publish_document_artifact(intermediate)
+
+        assert published == intermediate
+        assert hook_calls == []
+        assert document_artifacts.is_document_artifact_intermediate_path(intermediate)
 
     def test_routes_story_like_documents_to_story_and_ignores_ai_agent_scope(self, fake_hermes_work, tmp_path):
         work_root, hook_calls = fake_hermes_work

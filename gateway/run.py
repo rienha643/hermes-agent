@@ -2100,6 +2100,9 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
             or "document_files" in payload
         )
 
+        if payload.get("user_requested_delivery") is False:
+            return
+
         for key, value in payload.items():
             key_text = str(key or "")
             if key_text in _STRUCTURED_ATTACHMENT_EXPLICIT_FIELDS:
@@ -2240,6 +2243,173 @@ def _extract_body_local_delivery_paths(
     paths, cleaned = adapter.extract_local_files(content)
     paths = BasePlatformAdapter.filter_local_delivery_paths(paths, image_only=image_only)
     return paths, cleaned
+
+
+def _collect_kanban_artifact_delivery_candidates(event_payload: Any) -> tuple[list[str], dict[str, Any]]:
+    """Return only explicitly structured kanban delivery candidates.
+
+    Kanban completion delivery is intentionally structured-only.  We never
+    scan ``summary`` / ``task.result`` / free-form text for bare local paths,
+    and we only accept attachment paths that ride through explicit delivery
+    fields:
+
+    - ``media_files`` / ``document_files`` with ``user_requested_delivery``
+      set to ``True``
+    - ``artifacts`` entries that are dictionaries with an explicit provenance
+      marker and a recognized artifact kind/path field
+
+    Bare strings in ``artifacts`` are ignored.  This keeps worker summaries,
+    tool stdout, and copied source-document paths from being reinterpreted as
+    native uploads.
+    """
+    from urllib.parse import unquote, urlparse
+
+    if not isinstance(event_payload, dict):
+        return [], {"reason": "no_event_payload"}
+
+    provenance_keys = {
+        "provenance",
+        "artifact_provenance",
+        "delivery_provenance",
+        "source_provenance",
+    }
+    kind_keys = {"kind", "artifact_kind"}
+    path_keys = {
+        "path",
+        "file_path",
+        "output_path",
+        "image_path",
+        "document_path",
+        "artifact_path",
+    }
+    blocked_suffixes = {
+        ".md",
+        ".txt",
+        ".html",
+        ".htm",
+        ".json",
+        ".log",
+    }
+    blocked_parts = {
+        "skills",
+        "optional-skills",
+        "node_modules",
+        ".npm",
+        ".cache",
+        "cache",
+        "auth",
+        "config",
+        "state",
+        "log",
+        "logs",
+    }
+
+    candidates: list[str] = []
+    blocked: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def _normalize_path(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        raw = value.strip().strip("`\"'")
+        if not raw:
+            return None
+        if raw.startswith("file://"):
+            parsed = urlparse(raw)
+            raw = unquote(parsed.path or "")
+        if not (raw.startswith("/") or raw.startswith("~/")):
+            return None
+        return os.path.expanduser(raw)
+
+    def _blocked_reason(path: str) -> Optional[str]:
+        path_obj = Path(path)
+        parts = {part.lower() for part in path_obj.parts}
+        if path_obj.suffix.lower() in blocked_suffixes:
+            return "blocked_extension"
+        if parts & blocked_parts:
+            return "blocked_path_component"
+        return None
+
+    def _record_has_provenance(record: dict[str, Any]) -> bool:
+        for key in provenance_keys:
+            value = record.get(key)
+            if value is True:
+                return True
+            if isinstance(value, str) and value.strip():
+                return True
+            if isinstance(value, dict) and value:
+                return True
+        return False
+
+    def _record_kind(record: dict[str, Any]) -> str:
+        for key in kind_keys:
+            value = record.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower().replace("-", "_")
+        return ""
+
+    def _add_path(value: Any, *, source: str) -> None:
+        normalized = _normalize_path(value)
+        if not normalized:
+            return
+        if normalized in seen:
+            return
+        reason = _blocked_reason(normalized)
+        if reason:
+            blocked.append({"path": normalized, "reason": reason, "source": source})
+            return
+        seen.add(normalized)
+        candidates.append(normalized)
+
+    def _collect_record(record: Any, *, source: str) -> None:
+        if not isinstance(record, dict):
+            return
+        if record.get("user_requested_delivery") is False:
+            return
+
+        provenance = _record_has_provenance(record)
+        kind = _record_kind(record)
+        explicit_delivery = record.get("user_requested_delivery") is True
+
+        if explicit_delivery:
+            for key in ("media_files", "document_files"):
+                value = record.get(key)
+                if isinstance(value, (list, tuple)):
+                    for item in value:
+                        if isinstance(item, dict):
+                            _collect_record(item, source=f"{source}.{key}")
+                        else:
+                            _add_path(item, source=f"{source}.{key}")
+
+        if explicit_delivery and provenance:
+            for key in path_keys:
+                if key in record:
+                    _add_path(record.get(key), source=f"{source}.{key}")
+
+        if explicit_delivery and provenance and kind in {"media", "image", "document"}:
+            for key in path_keys:
+                if key in record:
+                    _add_path(record.get(key), source=f"{source}.{kind or 'artifact'}.{key}")
+
+        for key, value in record.items():
+            if key in {"summary", "result", "results"}:
+                continue
+            if isinstance(value, dict):
+                _collect_record(value, source=f"{source}.{key}")
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    if isinstance(item, dict):
+                        _collect_record(item, source=f"{source}.{key}")
+
+    _collect_record(event_payload, source="event_payload")
+
+    debug = {
+        "candidate_count": len(candidates),
+        "blocked_count": len(blocked),
+        "candidate_names": [Path(path).name for path in candidates[:10]],
+        "blocked": blocked[:10],
+    }
+    return candidates, debug
 
 
 def _should_clear_resume_pending_after_turn(agent_result: dict) -> bool:
@@ -5843,69 +6013,30 @@ class GatewayRunner:
         event_payload: Optional[dict],
         task,
     ) -> None:
-        """Upload artifact files referenced by a completed kanban task.
+        """Upload explicitly structured artifact files for a completed kanban task.
 
-        Workers passing ``kanban_complete(artifacts=[...])`` ship absolute
-        file paths through the completion event so downstream humans get
-        the deliverable as a native upload instead of a path printed in
-        chat.
-
-        Sources scanned, in priority order:
-          1. ``event_payload['artifacts']`` (explicit list — preferred)
-          2. ``event_payload['summary']`` (truncated first line)
-          3. ``task.result`` (legacy fallback)
-
-        Files are deduplicated, missing files are silently skipped (the
-        path may have been mentioned for reference only), and delivery
-        errors are logged but do not break the notifier loop.
+        This path is structured-only: it consumes only provenance-backed
+        attachment fields from the completion payload and refuses to infer
+        attachments from summary text, task results, or bare local paths.
         """
         from pathlib import Path as _Path
+        from urllib.parse import quote as _quote
 
-        candidates: list[str] = []
-        seen: set[str] = set()
-
-        def _add(path: str) -> None:
-            if not path:
-                return
-            expanded = os.path.expanduser(path)
-            if expanded in seen:
-                return
-            if not os.path.isfile(expanded):
-                return
-            seen.add(expanded)
-            candidates.append(expanded)
-
-        # 1. Explicit artifacts list in payload.
-        if isinstance(event_payload, dict):
-            raw = event_payload.get("artifacts")
-            if isinstance(raw, (list, tuple)):
-                for item in raw:
-                    if isinstance(item, str):
-                        _add(item)
-
-            # 2. Paths embedded in the payload summary.
-            summary = event_payload.get("summary")
-            if isinstance(summary, str) and summary:
-                paths, _ = adapter.extract_local_files(summary)
-                for p in paths:
-                    _add(p)
-
-        # 3. Legacy: paths embedded in task.result.
-        if task is not None and getattr(task, "result", None):
-            result_text = str(task.result)
-            paths, _ = adapter.extract_local_files(result_text)
-            for p in paths:
-                _add(p)
-
-        if not candidates:
+        raw_candidates, preview = _collect_kanban_artifact_delivery_candidates(event_payload)
+        if not raw_candidates:
+            logger.debug(
+                "kanban notifier: no structured artifact candidates for %s (preview=%s)",
+                chat_id,
+                preview,
+            )
             return
 
         from gateway.platforms.base import BasePlatformAdapter
 
         if getattr(adapter, "platform", None) == Platform.SLACK:
             image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-            raw_image_candidates = [p for p in candidates if _Path(p).suffix.lower() in image_exts]
-            raw_other_candidates = [p for p in candidates if _Path(p).suffix.lower() not in image_exts]
+            raw_image_candidates = [p for p in raw_candidates if _Path(p).suffix.lower() in image_exts]
+            raw_other_candidates = [p for p in raw_candidates if _Path(p).suffix.lower() not in image_exts]
             allowed_images, blocked_images = BasePlatformAdapter.validate_slack_delivery_paths(
                 raw_image_candidates,
                 image_only=True,
@@ -5914,36 +6045,44 @@ class GatewayRunner:
                 raw_other_candidates,
                 image_only=False,
             )
-            expected_count = len(raw_image_candidates) + len(raw_other_candidates)
-            actual_count = len(allowed_images) + len(allowed_other)
-            if blocked_images or blocked_other or actual_count != expected_count:
+            allowed_candidates = [*allowed_images, *allowed_other]
+            blocked_candidates = [*blocked_images, *blocked_other]
+            preview_payload = {
+                "delivery_mode": "slack_kanban_artifacts",
+                "candidate_count": len(raw_candidates),
+                "actual_candidate_count": len(allowed_candidates),
+                "allowed_files": [Path(path).name for path in allowed_candidates],
+                "blocked_files": blocked_candidates,
+                "structured_preview": preview,
+            }
+            if blocked_candidates or len(allowed_candidates) != len(raw_candidates):
                 logger.warning(
                     "[Slack] kanban artifact delivery blocked: expected=%d actual=%d blocked=%d",
-                    expected_count,
-                    actual_count,
-                    len(blocked_images) + len(blocked_other),
+                    len(raw_candidates),
+                    len(allowed_candidates),
+                    len(blocked_candidates),
                 )
-                logger.info(
-                    "[Slack] kanban artifact delivery preview: %s",
-                    {
-                        "delivery_mode": "slack_kanban_artifacts",
-                        "expected_count": expected_count,
-                        "actual_candidate_count": actual_count,
-                        "allowed_files": [Path(path).name for path in allowed_images + allowed_other],
-                        "blocked_files": blocked_images + blocked_other,
-                    },
-                )
+                logger.info("[Slack] kanban artifact delivery preview: %s", preview_payload)
                 return
-            candidates = [*allowed_images, *allowed_other]
+            candidates = allowed_candidates
         else:
-            candidates = BasePlatformAdapter.filter_local_delivery_paths(candidates)
+            candidates = BasePlatformAdapter.filter_local_delivery_paths(raw_candidates)
+            preview_payload = {
+                "delivery_mode": "kanban_artifacts",
+                "candidate_count": len(raw_candidates),
+                "actual_candidate_count": len(candidates),
+                "allowed_files": [Path(path).name for path in candidates],
+                "blocked_files": preview.get("blocked", []),
+                "structured_preview": preview,
+            }
             if not candidates:
+                logger.info("kanban artifact delivery preview: %s", preview_payload)
                 return
+
+        logger.info("kanban artifact delivery preview: %s", preview_payload)
 
         _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
         _VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
-
-        from urllib.parse import quote as _quote
 
         # Partition images so they ride a single send_multiple_images call
         # on platforms that support batch image uploads (Signal/Slack RPCs).

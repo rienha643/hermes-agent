@@ -1,9 +1,10 @@
 """Local ComfyUI image generation backend.
 
-This provider talks to a Windows-hosted ComfyUI API from WSL, waits for
-`/history/<prompt_id>` success, verifies the exact output file for the run,
-then publishes the result into `HermesWork/Image/<project_id>/` with workflow /
-prompt / metadata sidecars before queueing the existing NAS sync hook.
+This provider talks to a macOS local ComfyUI API, with legacy Windows/WSL
+fallback support, waits for `/history/<prompt_id>` success, verifies the exact
+output file for the run, then publishes the result into
+`HermesWork/Image/<project_id>/` with workflow / prompt / metadata sidecars
+before queueing the existing NAS sync hook.
 """
 
 from __future__ import annotations
@@ -32,13 +33,14 @@ from agent.image_gen_provider import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE_URL = "http://172.22.224.1:8188"
-DEFAULT_OUTPUT_DIR = "/mnt/c/AI/ComfyUI/output"
+DEFAULT_BASE_URL = "http://127.0.0.1:8188"
+DEFAULT_OUTPUT_DIR = "/Volumes/SSD_Hermes/ComfyUI/output"
 DEFAULT_OUTPUT_DIR_FALLBACKS: Tuple[str, ...] = (
-    "/mnt/d/AI/ComfyUI/output",
-    "/mnt/e/AI/ComfyUI/output",
     "/Volumes/SSD_Hermes/ComfyUI/output",
     "/Volumes/SSD_Hermes/ComfyUI/ComfyUI/output",
+    "/mnt/c/AI/ComfyUI/output",
+    "/mnt/d/AI/ComfyUI/output",
+    "/mnt/e/AI/ComfyUI/output",
 )
 DEFAULT_CHECKPOINT = "AOM3A1_orangemixs.safetensors"
 DEFAULT_STEPS = 12
