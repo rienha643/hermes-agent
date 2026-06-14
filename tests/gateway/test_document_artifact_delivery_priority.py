@@ -30,8 +30,10 @@ async def test_final_docx_pdf_suppress_sidecar_uploads(monkeypatch, tmp_path):
     sidecars.mkdir()
     ocr = sidecars / "ocr_all.txt"
     page = sidecars / "page_1.png"
-    for path in (final_docx, final_pdf, ocr, page):
-        path.write_bytes(b"x")
+    final_docx.write_bytes(b"docx")
+    final_pdf.write_bytes(b"pdf")
+    ocr.write_bytes(b"x")
+    page.write_bytes(b"y")
 
     sent_documents: list[str] = []
     sent_images: list[Any] = []
@@ -73,7 +75,8 @@ async def test_final_docx_pdf_suppress_sidecar_uploads(monkeypatch, tmp_path):
 
     assert sent_documents == [str(final_docx), str(final_pdf)]
     assert sent_images == []
-    assert sent_texts and "ARTIFACT:" in sent_texts[0]
+    assert sent_texts == ["done"]
+    assert "ARTIFACT:" not in sent_texts[0]
     assert str(ocr) not in sent_documents
     assert str(page) not in sent_documents
 

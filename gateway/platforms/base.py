@@ -6,6 +6,7 @@ and implement the required methods.
 """
 
 import asyncio
+import hashlib
 import inspect
 import ipaddress
 import logging
@@ -1003,6 +1004,79 @@ def _path_is_within(path: Path, root: Path) -> bool:
         return False
 
 
+_SENSITIVE_DELIVERY_NAME_TOKENS = (
+    "auth.json",
+    "sessions.json",
+    "org.chromium.chromoting.json",
+    "credentials",
+    "credential",
+    "token",
+    "secret",
+    "refresh_token",
+    "private_key",
+    "host_secret",
+    "oauth",
+    ".env",
+    "config",
+    "state",
+    "cache",
+    "key",
+    "pem",
+    "p12",
+    "sqlite",
+    "db",
+    "log",
+    "session",
+)
+
+_SLACK_PNG_ONLY_EXTENSIONS = {".png"}
+_SLACK_DOCUMENT_BLOCKED_SUFFIXES = set()
+_SLACK_ALLOWED_PUBLISH_ROOTS = (
+    "/Volumes/SSD_Hermes/HermesWork/Image",
+    "/Users/hermes/HermesWork/Image",
+)
+_SLACK_BLOCKED_SOURCE_ROOTS = (
+    "/Volumes/SSD_Hermes/ComfyUI/output",
+)
+
+
+def _delivery_path_is_sensitive(path: Path) -> bool:
+    parts = [part.lower() for part in path.parts]
+    lower_name = path.name.lower()
+
+    def _matches(token: str) -> bool:
+        candidates = [lower_name, *parts]
+        return any(
+            candidate == token
+            or candidate.startswith(f"{token}.")
+            or candidate.startswith(f"{token}_")
+            for candidate in candidates
+        )
+
+    return any(_matches(token) for token in _SENSITIVE_DELIVERY_NAME_TOKENS)
+
+
+def _delivery_path_is_sidecar(path: Path) -> bool:
+    parts = {part.lower() for part in path.parts}
+    lower_name = path.name.lower()
+    return (
+        "_sidecars" in parts
+        or "sidecar" in lower_name
+        or "tmp" in lower_name
+        or "intermediate" in lower_name
+        or "metadata" in lower_name
+        or "manifest" in lower_name
+        or "workflow.json" in lower_name
+        or "prompt.json" in lower_name
+        or "metadata.json" in lower_name
+        or "manifest.json" in lower_name
+    )
+
+
+def _delivery_path_is_blocked(path: Path) -> bool:
+    return _delivery_path_is_sensitive(path) or _delivery_path_is_sidecar(path)
+
+
 def validate_media_delivery_path(path: str) -> Optional[str]:
     """Return a safe absolute file path for native media delivery, else None.
 
@@ -1045,6 +1119,9 @@ def validate_media_delivery_path(path: str) -> Optional[str]:
     if not resolved.is_file():
         return None
 
+    if _delivery_path_is_blocked(resolved):
+        return None
+
     # Cache / operator allowlist is always honored — these are unconditionally
     # trusted regardless of mode.
     for root in _media_delivery_allowed_roots():
@@ -1075,6 +1152,86 @@ def validate_media_delivery_path(path: str) -> Optional[str]:
             return str(resolved)
 
     return None
+
+
+def _slack_delivery_path_block_reason(path: Path, *, image_only: bool = False) -> str | None:
+    """Return a Slack-specific block reason for a delivery candidate."""
+    suffix = path.suffix.lower()
+
+    if any(_path_is_within(path, Path(root)) for root in _SLACK_BLOCKED_SOURCE_ROOTS):
+        return "blocked_source_root:/Volumes/SSD_Hermes/ComfyUI/output"
+
+    if image_only:
+        if suffix not in _SLACK_PNG_ONLY_EXTENSIONS:
+            return f"forbidden_extension:{suffix or '<none>'}"
+        allow_roots = tuple(_media_delivery_allowed_roots()) + tuple(Path(root) for root in _SLACK_ALLOWED_PUBLISH_ROOTS)
+        if not any(_path_is_within(path, root) for root in allow_roots):
+            return "outside_allowed_publish_roots"
+    elif suffix in _SLACK_DOCUMENT_BLOCKED_SUFFIXES:
+        return f"forbidden_extension:{suffix}"
+
+    if _delivery_path_is_blocked(path):
+        return "blocked_sensitive_or_sidecar"
+
+    return None
+
+
+def validate_slack_delivery_path(path: str, *, image_only: bool = False) -> Optional[str]:
+    """Return a resolved Slack delivery path if the Slack policy allows it."""
+    if not path:
+        return None
+
+    candidate = str(path).strip()
+    if len(candidate) >= 2 and candidate[0] == candidate[-1] and candidate[0] in "`\"'":
+        candidate = candidate[1:-1].strip()
+    candidate = candidate.lstrip("`\"'").rstrip("`\"',.;:)}]")
+    if not candidate:
+        return None
+
+    expanded = Path(os.path.expanduser(candidate))
+    if not expanded.is_absolute():
+        return None
+
+    try:
+        resolved = expanded.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+    if not resolved.is_file():
+        return None
+
+    if _slack_delivery_path_block_reason(resolved, image_only=image_only):
+        return None
+
+    return str(resolved)
+
+
+def validate_slack_delivery_paths(
+    file_paths,
+    *,
+    image_only: bool = False,
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Validate Slack delivery candidates and return (allowed, blocked)."""
+    allowed: list[str] = []
+    blocked: list[dict[str, str]] = []
+
+    for file_path in file_paths or []:
+        resolved = validate_slack_delivery_path(str(file_path), image_only=image_only)
+        if resolved:
+            allowed.append(resolved)
+            continue
+        path_obj = Path(os.path.expanduser(str(file_path)))
+        blocked.append(
+            {
+                "path": str(file_path),
+                "reason": _slack_delivery_path_block_reason(path_obj, image_only=image_only) or "unsafe_or_missing_path",
+            }
+        )
+
+    if allowed:
+        allowed = BasePlatformAdapter.dedupe_local_delivery_paths_by_sha256(allowed)
+
+    return allowed, blocked
 
 
 SUPPORTED_DOCUMENT_TYPES = {
@@ -2445,27 +2602,59 @@ class BasePlatformAdapter(ABC):
         return validate_media_delivery_path(path)
 
     @staticmethod
-    def filter_media_delivery_paths(media_files) -> List[Tuple[str, bool]]:
+    def validate_slack_delivery_path(path: str, *, image_only: bool = False) -> Optional[str]:
+        """Return a resolved Slack delivery path if the Slack policy allows it."""
+        return validate_slack_delivery_path(path, image_only=image_only)
+
+    @staticmethod
+    def validate_slack_delivery_paths(file_paths, *, image_only: bool = False) -> tuple[list[str], list[dict[str, str]]]:
+        """Validate Slack delivery candidates and return (allowed, blocked)."""
+        return validate_slack_delivery_paths(file_paths, image_only=image_only)
+
+    @staticmethod
+    def filter_media_delivery_paths(media_files, *, image_only: bool = False) -> List[Tuple[str, bool]]:
         """Drop unsafe MEDIA paths and normalize accepted paths."""
         safe_media: List[Tuple[str, bool]] = []
         for media_path, is_voice in media_files or []:
             safe_path = validate_media_delivery_path(str(media_path))
-            if safe_path:
-                safe_media.append((safe_path, bool(is_voice)))
-            else:
+            if not safe_path:
                 logger.warning("Skipping unsafe MEDIA directive path outside allowed roots")
+                continue
+            if image_only and Path(safe_path).suffix.lower() != ".png":
+                logger.warning("Skipping non-PNG MEDIA candidate in PNG-only mode: %s", safe_path)
+                continue
+            safe_media.append((safe_path, bool(is_voice)))
+        if safe_media:
+            deduped_paths = BasePlatformAdapter.dedupe_local_delivery_paths_by_sha256(
+                [path for path, _ in safe_media]
+            )
+            seen = set(deduped_paths)
+            safe_media = [(path, is_voice) for path, is_voice in safe_media if path in seen]
+            # Preserve order by the deduped path list.
+            ordered: List[Tuple[str, bool]] = []
+            for path in deduped_paths:
+                for candidate in safe_media:
+                    if candidate[0] == path:
+                        ordered.append(candidate)
+                        break
+            safe_media = ordered
         return safe_media
 
     @staticmethod
-    def filter_local_delivery_paths(file_paths) -> List[str]:
+    def filter_local_delivery_paths(file_paths, *, image_only: bool = False) -> List[str]:
         """Drop unsafe bare local file paths and normalize accepted paths."""
         safe_paths: List[str] = []
         for file_path in file_paths or []:
             safe_path = validate_media_delivery_path(str(file_path))
-            if safe_path:
-                safe_paths.append(safe_path)
-            else:
+            if not safe_path:
                 logger.warning("Skipping unsafe local file path outside allowed roots")
+                continue
+            if image_only and Path(safe_path).suffix.lower() != ".png":
+                logger.warning("Skipping non-PNG local file path in PNG-only mode: %s", safe_path)
+                continue
+            safe_paths.append(safe_path)
+        if safe_paths:
+            safe_paths = BasePlatformAdapter.dedupe_local_delivery_paths_by_sha256(safe_paths)
         return safe_paths
 
     @staticmethod
@@ -2481,9 +2670,9 @@ class BasePlatformAdapter(ABC):
         suffix = path.suffix.lower()
         name = path.name.lower()
         if suffix in _IMAGE_DELIVERY_EXTENSIONS:
-            return bool(re.search(r"(?:page[_-]?\d+|ocr|render|tmp|extracted|image)", name))
+            return bool(re.search(r"(?:page[_-]?\d+|ocr|render|tmp|extracted|image|sidecar|metadata)", name))
         if suffix in _TEXT_SIDECAR_EXTENSIONS:
-            return bool(re.search(r"(?:ocr|page[_-]?\d+|extract|render|debug|manifest)", name))
+            return bool(re.search(r"(?:ocr|page[_-]?\d+|extract|render|debug|manifest|sidecar|metadata)", name))
         return False
 
     @staticmethod
@@ -2521,6 +2710,29 @@ class BasePlatformAdapter(ABC):
             if normalized in blocked or normalized in seen:
                 continue
             seen.add(normalized)
+            deduped.append(normalized)
+        return deduped
+
+    @staticmethod
+    def dedupe_local_delivery_paths_by_sha256(file_paths, *, skip_paths=None) -> List[str]:
+        """Deduplicate local delivery paths by SHA256 content hash."""
+        blocked = {str(path) for path in (skip_paths or [])}
+        deduped: List[str] = []
+        seen_hashes: set[str] = set()
+        for file_path in file_paths or []:
+            normalized = str(file_path)
+            if normalized in blocked:
+                continue
+            try:
+                with open(normalized, "rb") as fh:
+                    digest = hashlib.sha256(fh.read()).hexdigest()
+            except OSError:
+                deduped.append(normalized)
+                continue
+            if digest in seen_hashes:
+                logger.warning("Skipping duplicate local delivery path with same SHA256: %s", normalized)
+                continue
+            seen_hashes.add(digest)
             deduped.append(normalized)
         return deduped
 
@@ -3758,8 +3970,15 @@ class BasePlatformAdapter(ABC):
                     logger.info("[%s] extract_images found %d image(s) in response (%d chars)", self.name, len(images), len(response))
 
                 # Auto-detect bare local file paths for native media delivery
-                # (helps small models that don't use MEDIA: syntax)
-                local_files_raw, text_content = self.extract_local_files(text_content)
+                # (helps small models that don't use MEDIA: syntax). Slack is
+                # fail-closed here: RCA/test/worker reports often include
+                # "산출물" blocks with reference paths, and those must remain
+                # text-only unless the response used explicit MEDIA: tags or
+                # structured media_files/document_files delivery fields.
+                if self.platform == Platform.SLACK:
+                    local_files_raw = []
+                else:
+                    local_files_raw, text_content = self.extract_local_files(text_content)
                 local_files_filtered = self.filter_local_delivery_paths(local_files_raw)
                 local_files = self.dedupe_local_delivery_paths(
                     [*structured_files, *local_files_filtered],
@@ -3786,6 +4005,8 @@ class BasePlatformAdapter(ABC):
 
                 def _publish_document_for_ux(path: str) -> str:
                     if not is_document_artifact_path(path):
+                        return path
+                    if self.platform == Platform.SLACK:
                         return path
                     published_path = str(
                         publish_document_artifact(
@@ -3939,6 +4160,53 @@ class BasePlatformAdapter(ABC):
                         _image_paths.append(file_path)
                     else:
                         _non_image_local.append(file_path)
+
+                if self.platform == Platform.SLACK:
+                    raw_image_candidates = list(_image_paths)
+                    raw_other_candidates = [path for path, _ in _non_image_media] + list(_non_image_local)
+                    allowed_images, blocked_images = self.validate_slack_delivery_paths(
+                        raw_image_candidates,
+                        image_only=True,
+                    )
+                    allowed_other, blocked_other = self.validate_slack_delivery_paths(
+                        raw_other_candidates,
+                        image_only=False,
+                    )
+                    expected_count = len(raw_image_candidates) + len(raw_other_candidates)
+                    actual_count = len(allowed_images) + len(allowed_other)
+                    thread_ts_preview = ""
+                    if _thread_metadata:
+                        thread_ts_preview = str(
+                            _thread_metadata.get("thread_ts")
+                            or _thread_metadata.get("thread_id")
+                            or ""
+                        )
+                    preview = {
+                        "delivery_mode": "slack_auto_delivery",
+                        "target_channel": event.source.chat_id,
+                        "thread_ts": thread_ts_preview,
+                        "expected_count": expected_count,
+                        "actual_candidate_count": actual_count,
+                        "allowed_files": [Path(path).name for path in allowed_images + allowed_other],
+                        "blocked_files": blocked_images + blocked_other,
+                    }
+                    logger.info("[Slack] delivery preview: %s", preview)
+                    if blocked_images or blocked_other or actual_count != expected_count:
+                        logger.warning(
+                            "[Slack] Slack auto-delivery blocked media batch: expected=%d actual=%d blocked=%d",
+                            expected_count,
+                            actual_count,
+                            len(blocked_images) + len(blocked_other),
+                        )
+                        _image_paths = []
+                        _non_image_media = []
+                        _non_image_local = []
+                    else:
+                        allowed_image_set = set(allowed_images)
+                        allowed_other_set = set(allowed_other)
+                        _image_paths = [path for path in _image_paths if path in allowed_image_set]
+                        _non_image_media = [(path, is_voice) for path, is_voice in _non_image_media if path in allowed_other_set]
+                        _non_image_local = [path for path in _non_image_local if path in allowed_other_set]
 
                 if _image_paths:
                     try:

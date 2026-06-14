@@ -324,16 +324,21 @@ class TestSlackSendImageFile:
         a._app = MagicMock()
         return a
 
-    def test_sends_local_image_via_upload(self, adapter, tmp_path):
+    def test_sends_local_image_via_upload(self, adapter, tmp_path, monkeypatch):
         """send_image_file should call files_upload_v2 with the local path."""
-        img = tmp_path / "screenshot.png"
+        img_root = tmp_path / "HermesWork" / "Image"
+        img_root.mkdir(parents=True)
+        img = img_root / "screenshot.png"
         img.write_bytes(b"\x89PNG" + b"\x00" * 50)
+
+        monkeypatch.setattr("gateway.platforms.slack._SLACK_ALLOWED_PUBLISH_ROOTS", (str(img_root),), raising=False)
+        monkeypatch.setattr("gateway.platforms.slack._SLACK_BLOCKED_SOURCE_ROOTS", (), raising=False)
 
         mock_result = MagicMock()
         adapter._app.client.files_upload_v2 = AsyncMock(return_value=mock_result)
 
         result = _run(
-            adapter.send_image_file(chat_id="C12345", image_path=str(img))
+            adapter.send_image_file(chat_id="C12345", image_path=str(img), reply_to="1781023592.888399")
         )
         assert result.success
         adapter._app.client.files_upload_v2.assert_awaited_once()
@@ -342,6 +347,31 @@ class TestSlackSendImageFile:
         assert call_kwargs["file"] == str(img)
         assert call_kwargs["filename"] == "screenshot.png"
         assert call_kwargs["channel"] == "C12345"
+
+    def test_returns_error_on_not_in_channel_without_fallback(self, adapter, tmp_path, monkeypatch):
+        img_root = tmp_path / "HermesWork" / "Image"
+        img_root.mkdir(parents=True)
+        img = img_root / "blocked.png"
+        img.write_bytes(b"\x89PNG" + b"\x00" * 50)
+
+        monkeypatch.setattr("gateway.platforms.slack._SLACK_ALLOWED_PUBLISH_ROOTS", (str(img_root),), raising=False)
+        monkeypatch.setattr("gateway.platforms.slack._SLACK_BLOCKED_SOURCE_ROOTS", (), raising=False)
+
+        class _Resp:
+            data = {"error": "not_in_channel"}
+
+        class _Exc(Exception):
+            response = _Resp()
+
+        async def _raise(**kwargs):
+            raise _Exc("not_in_channel")
+
+        adapter._app.client.files_upload_v2 = AsyncMock(side_effect=_raise)
+
+        result = _run(adapter.send_image_file(chat_id="C12345", image_path=str(img), reply_to="1781023592.888399"))
+        assert not result.success
+        assert "not_in_channel" in result.error
+        adapter._app.client.files_upload_v2.assert_awaited_once()
 
     def test_returns_error_when_file_missing(self, adapter):
         result = _run(

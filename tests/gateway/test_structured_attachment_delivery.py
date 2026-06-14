@@ -155,15 +155,159 @@ async def test_media_only_response_still_works(allow_tmp_delivery):
 
 
 @pytest.mark.asyncio
+async def test_post_stream_response_body_paths_are_suppressed_when_media_tags_are_present(allow_tmp_delivery):
+    media_path = allow_tmp_delivery / "media.png"
+    body_path = allow_tmp_delivery / "body.pdf"
+    media_path.write_bytes(b"png")
+    body_path.write_bytes(b"pdf")
+
+    adapter = _make_adapter("unused")
+    event = _make_event(thread_id="1779980356.888399")
+    runner = _MiniRunner()
+
+    await runner._deliver_media_from_response(
+        f"완료했습니다.\nMEDIA:{media_path}\n{body_path}",
+        event,
+        adapter,
+    )
+
+    assert len(adapter.sent_images) == 1
+    assert adapter.sent_documents == []
+
+
+@pytest.mark.asyncio
+async def test_post_stream_response_body_paths_are_suppressed_when_structured_attachments_exist(allow_tmp_delivery):
+    structured_path = allow_tmp_delivery / "structured.png"
+    body_path = allow_tmp_delivery / "body.pdf"
+    structured_path.write_bytes(b"png")
+    body_path.write_bytes(b"pdf")
+
+    adapter = _make_adapter("unused")
+    event = _make_event(thread_id="1779980356.888399")
+    event._structured_attachment_paths = [str(structured_path)]
+    runner = _MiniRunner()
+
+    await runner._deliver_media_from_response(
+        f"완료했습니다.\n{body_path}",
+        event,
+        adapter,
+    )
+
+    assert len(adapter.sent_images) == 1
+    assert adapter.sent_documents == []
+
+
+@pytest.mark.asyncio
+async def test_post_stream_png_only_mode_skips_non_png_response_body_paths(allow_tmp_delivery):
+    body_path = allow_tmp_delivery / "body.pdf"
+    body_path.write_bytes(b"pdf")
+
+    adapter = _make_adapter(f"완료했습니다.\n{body_path}")
+    event = _make_event(thread_id="1779980356.888399")
+    runner = _MiniRunner()
+
+    await runner._deliver_media_from_response(
+        f"완료했습니다.\n{body_path}",
+        event,
+        adapter,
+    )
+
+    assert adapter.sent_images == []
+    assert adapter.sent_documents == []
+
+
+@pytest.mark.asyncio
+async def test_slack_rca_response_body_md_path_is_text_only(allow_tmp_delivery):
+    report_path = allow_tmp_delivery / "artifacts_v1.md"
+    report_path.write_text("rca")
+
+    adapter = _make_adapter(f"Root Cause\n산출물:\n- {report_path}")
+    event = _make_event()
+
+    await adapter._process_message_background(event, build_session_key(event.source))
+
+    assert adapter.sent_texts == [f"Root Cause\n산출물:\n- {report_path}"]
+    assert adapter.sent_images == []
+    assert adapter.sent_documents == []
+
+
+@pytest.mark.asyncio
+async def test_slack_test_report_body_paths_are_text_only(allow_tmp_delivery):
+    md_path = allow_tmp_delivery / "slack_v3.md"
+    txt_path = allow_tmp_delivery / "report.txt"
+    json_path = allow_tmp_delivery / "result.json"
+    for path in (md_path, txt_path, json_path):
+        path.write_text("report")
+
+    response = f"Test Result\n{md_path}\n{txt_path}\n{json_path}"
+    adapter = _make_adapter(response)
+    event = _make_event()
+
+    await adapter._process_message_background(event, build_session_key(event.source))
+
+    assert adapter.sent_texts == [response]
+    assert adapter.sent_images == []
+    assert adapter.sent_documents == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_document_files_pdf_allows_document_attachment(allow_tmp_delivery):
+    doc_path = allow_tmp_delivery / "final.pdf"
+    doc_path.write_bytes(b"pdf")
+
+    adapter = _make_adapter("문서 전달합니다.")
+    event = _make_event()
+    event._structured_attachment_paths = [str(doc_path)]
+
+    await adapter._process_message_background(event, build_session_key(event.source))
+
+    assert adapter.sent_texts == ["문서 전달합니다."]
+    assert adapter.sent_documents == [{"file_path": str(doc_path), "metadata": {"notify": True}}]
+    assert adapter.sent_images == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_media_files_png_allows_image_attachment(allow_tmp_delivery):
+    image_path = allow_tmp_delivery / "final.png"
+    image_path.write_bytes(b"png")
+
+    adapter = _make_adapter("이미지 전달합니다.")
+    event = _make_event()
+    event._structured_attachment_paths = [str(image_path)]
+
+    await adapter._process_message_background(event, build_session_key(event.source))
+
+    assert adapter.sent_texts == ["이미지 전달합니다."]
+    assert len(adapter.sent_images) == 1
+    assert adapter.sent_documents == []
+
+
+@pytest.mark.asyncio
+async def test_sensitive_json_document_files_are_always_blocked(allow_tmp_delivery):
+    sensitive = allow_tmp_delivery / "token.json"
+    sensitive.write_text("{}")
+
+    adapter = _make_adapter("민감 파일은 차단합니다.")
+    event = _make_event()
+    event._structured_attachment_paths = [str(sensitive)]
+
+    await adapter._process_message_background(event, build_session_key(event.source))
+
+    assert adapter.sent_texts == ["민감 파일은 차단합니다."]
+    assert adapter.sent_images == []
+    assert adapter.sent_documents == []
+
+
+@pytest.mark.asyncio
 async def test_text_only_response_does_not_attempt_attachment_send(allow_tmp_delivery):
     adapter = _make_adapter("텍스트만 보냅니다.")
     event = _make_event()
 
     await adapter._process_message_background(event, build_session_key(event.source))
 
-    assert adapter.sent_texts == ["텍스트만 보냅니다."]
-    assert adapter.sent_images == []
-    assert adapter.sent_documents == []
+    assert adapter.sent_texts == ["텍스트만 보냅니다."]  # type: ignore[attr-defined]
+    assert adapter.sent_images == []  # type: ignore[attr-defined]
+    assert adapter.sent_documents == []  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -198,7 +342,7 @@ async def test_post_stream_structured_attachment_without_media_tag_is_uploaded(a
     assert str(image_path) in batch_urls[0]
 
 
-def test_collect_structured_attachment_paths_finds_delegate_and_image_results(tmp_path):
+def test_collect_structured_attachment_paths_finds_explicit_delivery_results(tmp_path):
     image_path = tmp_path / "avatar.png"
     doc_path = tmp_path / "report.pdf"
     image_path.write_bytes(b"png")
@@ -208,19 +352,81 @@ def test_collect_structured_attachment_paths_finds_delegate_and_image_results(tm
         "messages": [
             {
                 "role": "tool",
+                "tool_name": "delegate_task",
                 "content": (
-                    "{\"results\":[{\"summary\":\"done\",\"artifacts\":[\""
+                    "{\"results\":[{\"summary\":\"done\",\"user_requested_delivery\":true,\"artifacts\":[\""
                     + str(image_path)
-                    + "\"]}],\"image\":\""
+                    + "\"]}],\"media_files\":[\""
                     + str(image_path)
-                    + "\"}"
+                    + "\"]}"
                 ),
             },
-            {"role": "tool", "content": {"file_path": str(doc_path)}},
+            {"role": "tool", "content": {"document_files": [str(doc_path)]}},
         ]
     }
 
     assert _collect_structured_attachment_paths(agent_result) == [str(image_path), str(doc_path)]
+
+
+def test_worker_result_artifact_paths_without_delivery_intent_are_not_collected(tmp_path):
+    report = tmp_path / "artifacts_v1.md"
+    report.write_text("rca")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "delegate_task",
+                "content": {
+                    "results": [
+                        {
+                            "summary": f"산출물\n- {report}",
+                            "artifacts": [str(report)],
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+
+    assert _collect_structured_attachment_paths(agent_result) == []
+
+
+def test_user_requested_delivery_false_does_not_enable_legacy_artifacts(tmp_path):
+    report = tmp_path / "test_report.txt"
+    report.write_text("test")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "delegate_task",
+                "content": {
+                    "user_requested_delivery": False,
+                    "artifacts": [str(report)],
+                },
+            }
+        ]
+    }
+
+    assert _collect_structured_attachment_paths(agent_result) == []
+
+
+def test_explicit_document_files_are_collected(tmp_path):
+    report = tmp_path / "final.pdf"
+    report.write_bytes(b"pdf")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "document_generate",
+                "content": {"document_files": [str(report)]},
+            }
+        ]
+    }
+
+    assert _collect_structured_attachment_paths(agent_result) == [str(report)]
 
 
 def test_slice_turn_messages_uses_history_offset_boundary():
@@ -246,7 +452,11 @@ def test_turn_scoped_structured_attachments_ignore_old_tool_artifacts(tmp_path):
             {"role": "tool", "tool_name": "delegate_task", "content": {"artifacts": [str(old_a)]}},
             {"role": "tool", "tool_name": "image_generate", "content": {"image": str(old_b)}},
             {"role": "user", "content": "current request"},
-            {"role": "tool", "tool_name": "delegate_task", "content": {"artifacts": [str(current)]}},
+            {
+                "role": "tool",
+                "tool_name": "delegate_task",
+                "content": {"user_requested_delivery": True, "artifacts": [str(current)]},
+            },
         ]
     }
 
@@ -294,6 +504,7 @@ def test_turn_scoped_structured_attachments_collect_delegate_fields_from_current
                     "results": [
                         {
                             "summary": "done",
+                            "user_requested_delivery": True,
                             "artifacts": [str(image_path)],
                             "image": str(image_path),
                             "file_path": str(image_path),
@@ -324,7 +535,7 @@ def test_turn_scoped_structured_attachments_collect_image_generate_fields_from_c
                 "role": "tool",
                 "tool_name": "image_generate",
                 "content": {
-                    "local_path": str(image_path),
+                    "media_files": [str(image_path)],
                     "output_path": str(output_path),
                 },
             },

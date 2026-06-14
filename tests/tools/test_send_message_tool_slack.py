@@ -73,6 +73,10 @@ async def test_send_slack_via_adapter_image_path_uses_send_multiple_images(monke
     adapter = _DummySlackAdapter(SimpleNamespace())
     monkeypatch.setattr(slack_mod, "SlackAdapter", lambda *_: adapter, raising=False)
     monkeypatch.setattr(async_client_mod, "AsyncWebClient", _DummyAsyncWebClient, raising=False)
+    monkeypatch.setattr(slack_mod, "_SLACK_ALLOWED_PUBLISH_ROOTS", (str(tmp_path),), raising=False)
+    monkeypatch.setattr(slack_mod, "_SLACK_BLOCKED_SOURCE_ROOTS", (), raising=False)
+    monkeypatch.setattr(smt, "_SLACK_ALLOWED_PUBLISH_ROOTS", (str(tmp_path),), raising=False)
+    monkeypatch.setattr(smt, "_SLACK_BLOCKED_SOURCE_ROOTS", (), raising=False)
 
     image = tmp_path / "smoke_ssd_hmw_1781023592_v1.png"
     image.write_bytes(b"png")
@@ -97,7 +101,7 @@ async def test_send_slack_via_adapter_image_path_uses_send_multiple_images(monke
 
 
 @pytest.mark.asyncio
-async def test_send_slack_via_adapter_document_path_uses_send_document(monkeypatch, tmp_path):
+async def test_send_slack_via_adapter_document_path_is_blocked(monkeypatch, tmp_path):
     _ensure_slack_mocks()
     import tools.send_message_tool as smt
     import gateway.platforms.slack as slack_mod
@@ -106,6 +110,10 @@ async def test_send_slack_via_adapter_document_path_uses_send_document(monkeypat
     adapter = _DummySlackAdapter(SimpleNamespace())
     monkeypatch.setattr(slack_mod, "SlackAdapter", lambda *_: adapter, raising=False)
     monkeypatch.setattr(async_client_mod, "AsyncWebClient", _DummyAsyncWebClient, raising=False)
+    monkeypatch.setattr(slack_mod, "_SLACK_ALLOWED_PUBLISH_ROOTS", (str(tmp_path),), raising=False)
+    monkeypatch.setattr(slack_mod, "_SLACK_BLOCKED_SOURCE_ROOTS", (), raising=False)
+    monkeypatch.setattr(smt, "_SLACK_ALLOWED_PUBLISH_ROOTS", (str(tmp_path),), raising=False)
+    monkeypatch.setattr(smt, "_SLACK_BLOCKED_SOURCE_ROOTS", (), raising=False)
 
     doc = tmp_path / "report.pdf"
     doc.write_bytes(b"pdf")
@@ -116,12 +124,13 @@ async def test_send_slack_via_adapter_document_path_uses_send_document(monkeypat
         chat_id="C123",
         message="",
         media_files=[(str(doc), False)],
+        thread_id="1781023592.888399",
     )
 
-    assert result.get("success")
+    assert "error" in result
+    assert "PNG-only" in result["error"]
     assert getattr(adapter, "multi_calls", 0) == 0
-    assert adapter.doc_calls == 1
-    assert adapter.last_doc[1] == str(doc)
+    assert getattr(adapter, "doc_calls", 0) == 0
 
 
 @pytest.mark.asyncio

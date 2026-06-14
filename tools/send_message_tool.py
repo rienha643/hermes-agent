@@ -6,12 +6,14 @@ human-friendly channel names to IDs. Works in both CLI and gateway contexts.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import re
 import ssl
 import time
+from pathlib import Path
 from email.utils import formatdate
 
 from agent.redact import redact_sensitive_text
@@ -154,6 +156,105 @@ def _normalize_media_files_arg(media_files) -> list[tuple[str, bool]]:
         if path:
             normalized.append((str(path), is_voice))
     return normalized
+
+
+def _dedupe_media_files_by_sha256(media_files: list[tuple[str, bool]]) -> list[tuple[str, bool]]:
+    """Drop duplicate media entries that point to files with identical bytes."""
+    deduped: list[tuple[str, bool]] = []
+    seen_hashes: set[str] = set()
+    for path, is_voice in media_files or []:
+        try:
+            with open(path, "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            deduped.append((path, is_voice))
+            continue
+        if digest in seen_hashes:
+            logger.warning("Skipping duplicate media file with same SHA256: %s", path)
+            continue
+        seen_hashes.add(digest)
+        deduped.append((path, is_voice))
+    return deduped
+
+
+_SLACK_ALLOWED_PUBLISH_ROOTS = (
+    "/Volumes/SSD_Hermes/HermesWork/Image",
+    "/Users/hermes/HermesWork/Image",
+)
+_SLACK_BLOCKED_SOURCE_ROOTS = (
+    "/Volumes/SSD_Hermes/ComfyUI/output",
+)
+
+
+def _is_path_within_root(path: str, root: str) -> bool:
+    try:
+        return Path(path).resolve(strict=False).is_relative_to(Path(root).resolve(strict=False))
+    except Exception:
+        return False
+
+
+def _slack_media_block_reason(path: str) -> str | None:
+    suffix = Path(path).suffix.lower()
+    lower_path = path.lower()
+    if not suffix:
+        return "missing_extension"
+    if suffix != ".png":
+        return f"forbidden_extension:{suffix}"
+    if any(_is_path_within_root(path, root) for root in _SLACK_BLOCKED_SOURCE_ROOTS):
+        return "blocked_source_root:/Volumes/SSD_Hermes/ComfyUI/output"
+    if not any(_is_path_within_root(path, root) for root in _SLACK_ALLOWED_PUBLISH_ROOTS):
+        return "outside_allowed_publish_roots"
+    if any(token in lower_path for token in ("auth.json", "credentials", "token", "secret", ".env", "config", "state", "cache", "key", "pem", "p12", "sqlite", "db", "log", "workflow.json", "prompt.json", "metadata.json", "manifest.json", "_sidecars", "sidecar", "tmp", "intermediate")):
+        return "blocked_sensitive_or_sidecar"
+    return None
+
+
+def _validate_slack_media_candidates(media_files: list[tuple[str, bool]], *, expected_count: int | None = None) -> tuple[list[tuple[str, bool]], list[dict[str, str]]]:
+    validated: list[tuple[str, bool]] = []
+    blocked: list[dict[str, str]] = []
+    for path, is_voice in media_files or []:
+        reason = _slack_media_block_reason(path)
+        if reason:
+            blocked.append({"path": path, "reason": reason})
+            continue
+        validated.append((path, is_voice))
+    validated = _dedupe_media_files_by_sha256(validated)
+    if expected_count is not None and len(validated) != expected_count:
+        raise ValueError(
+            f"Slack PNG-only delivery candidate count mismatch: expected {expected_count}, got {len(validated)}"
+        )
+    return validated, blocked
+
+
+def _slack_delivery_preview(chat_id: str, thread_id: str | None, candidates: list[tuple[str, bool]], blocked: list[dict[str, str]], expected_count: int | None) -> dict[str, object]:
+    return {
+        "target_channel": chat_id,
+        "thread_ts": thread_id or "",
+        "candidate_count": len(candidates),
+        "expected_count": expected_count,
+        "filenames": [Path(path).name for path, _ in candidates],
+        "extensions": [Path(path).suffix.lower() for path, _ in candidates],
+        "source_paths": [path for path, _ in candidates],
+        "blocked_files_count": len(blocked),
+        "block_reasons": blocked,
+    }
+
+
+def _log_delivery_preview(*, platform_name: str, chat_id: str | None, thread_id: str | None, message: str, media_files: list[tuple[str, bool]], explicit_media_files: bool, force_document: bool) -> None:
+    """Log a deterministic preview of the delivery plan before upload."""
+    preview = {
+        "platform": platform_name,
+        "chat_id": chat_id,
+        "thread_ts": thread_id or "",
+        "message_chars": len(message or ""),
+        "message_has_text": bool((message or "").strip()),
+        "media_count": len(media_files or []),
+        "media_files": [os.path.basename(path) for path, _ in (media_files or [])[:10]],
+        "explicit_media_files": explicit_media_files,
+        "force_document": force_document,
+        "preview_gate": True,
+    }
+    logger.info("delivery preview gate: %s", preview)
 
 
 def _telegram_retry_delay(exc: Exception, attempt: int) -> float | None:
@@ -342,9 +443,13 @@ def _handle_send(args, media_files=None):
 
     extracted_media_files, cleaned_message = BasePlatformAdapter.extract_media(message)
     cleaned_message = cleaned_message.replace(_ALLOW_TOP_LEVEL_DIRECTIVE, "").strip()
+    explicit_media_files = args.get("media_files") is not None
+    if explicit_media_files:
+        extracted_media_files = []
     media_files = BasePlatformAdapter.filter_media_delivery_paths(
         list(extracted_media_files) + list(media_files or [])
     )
+    media_files = _dedupe_media_files_by_sha256(media_files)
     mirror_text = cleaned_message.strip() or _describe_media_for_mirror(media_files)
 
     used_home_channel = False
@@ -368,6 +473,44 @@ def _handle_send(args, media_files=None):
     duplicate_skip = _maybe_skip_cron_duplicate_send(platform_name, chat_id, thread_id)
     if duplicate_skip:
         return json.dumps(duplicate_skip)
+
+    if platform_name == "slack" and media_files:
+        try:
+            media_files, blocked_files = _validate_slack_media_candidates(media_files, expected_count=args.get("expected_file_count"))
+        except ValueError as exc:
+            logger.warning("delivery preview gate rejected Slack media candidates: %s", exc)
+            return json.dumps({"error": str(exc), "blocked_files": [], "candidate_count": len(media_files), "expected_count": args.get("expected_file_count")})
+        if blocked_files:
+            logger.warning(
+                "delivery preview gate blocked Slack files: blocked=%d candidate_count=%d filenames=%s",
+                len(blocked_files),
+                len(media_files),
+                [item["path"] for item in blocked_files],
+            )
+        if not thread_id:
+            return json.dumps({"error": "Slack media delivery requires thread_ts; refusing main-channel fallback", "thread_ts": ""})
+        preview = {
+            "target_channel": chat_id,
+            "thread_ts": thread_id or "",
+            "candidate_count": len(media_files),
+            "expected_count": args.get("expected_file_count"),
+            "filenames": [Path(path).name for path, _ in media_files],
+            "extensions": [Path(path).suffix.lower() for path, _ in media_files],
+            "source_paths": [path for path, _ in media_files],
+            "blocked_files_count": len(blocked_files),
+            "block_reasons": blocked_files,
+        }
+        logger.info("delivery preview gate: %s", preview)
+
+    _log_delivery_preview(
+        platform_name=platform_name,
+        chat_id=str(chat_id) if chat_id is not None else None,
+        thread_id=thread_id,
+        message=message,
+        media_files=media_files,
+        explicit_media_files=explicit_media_files,
+        force_document=force_document_attachments,
+    )
 
     slack_thread_safety = _resolve_slack_thread_safety(
         platform_name=platform_name,
@@ -1628,6 +1771,26 @@ async def _send_slack_via_adapter(pconfig, chat_id, message, media_files=None, t
         adapter._app = _SimpleNamespace(client=AsyncWebClient(token=pconfig.token))
         metadata = {"thread_id": thread_id} if thread_id else None
         message_id = None
+
+        if media_files:
+            try:
+                media_files, blocked_files = _validate_slack_media_candidates(media_files)
+            except ValueError as exc:
+                return {"error": str(exc)}
+            if blocked_files:
+                return {
+                    "error": "Slack PNG-only delivery blocked candidate files",
+                    "blocked_files": blocked_files,
+                }
+            if not thread_id:
+                return {"error": "Slack media delivery requires thread_ts; refusing main-channel fallback"}
+            logger.info("delivery preview gate: %s", _slack_delivery_preview(
+                chat_id=str(chat_id),
+                thread_id=thread_id,
+                candidates=media_files,
+                blocked=blocked_files,
+                expected_count=None,
+            ))
 
         if message.strip():
             text_result = await adapter.send(chat_id, message, metadata=metadata)

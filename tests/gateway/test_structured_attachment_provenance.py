@@ -49,12 +49,12 @@ def test_search_files_files_are_not_structured_attachments(tmp_path):
     assert debug["collected_count"] == 0
 
 
-def test_explicit_artifact_files_are_collected(tmp_path):
+def test_explicit_document_files_are_collected(tmp_path):
     final_doc = tmp_path / "final.docx"
     final_doc.write_text("doc", encoding="utf-8")
     agent_result = {
         "messages": [
-            _tool_message("document_generate", {"artifact_files": [str(final_doc)]})
+            _tool_message("document_generate", {"document_files": [str(final_doc)]})
         ]
     }
 
@@ -86,7 +86,7 @@ def test_untrusted_tool_output_paths_are_blocked(tool_name, tmp_path):
     assert collected == []
 
 
-def test_files_field_only_allowed_for_artifact_tool(tmp_path):
+def test_files_field_requires_explicit_delivery_intent_for_artifact_tool(tmp_path):
     final_doc = tmp_path / "final.docx"
     final_doc.write_text("doc", encoding="utf-8")
     blocked_doc = tmp_path / "blocked.docx"
@@ -94,7 +94,10 @@ def test_files_field_only_allowed_for_artifact_tool(tmp_path):
     agent_result = {
         "messages": [
             _tool_message("search_files", {"files": [str(blocked_doc)]}),
-            _tool_message("document_generate", {"files": [str(final_doc)]}),
+            _tool_message(
+                "document_generate",
+                {"user_requested_delivery": True, "files": [str(final_doc)]},
+            ),
         ]
     }
 

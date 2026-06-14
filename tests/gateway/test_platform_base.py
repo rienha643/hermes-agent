@@ -578,13 +578,17 @@ class TestMediaDeliveryDefaultMode:
         assert BasePlatformAdapter.validate_media_delivery_path(str(notes)) == str(notes.resolve())
 
     def test_accepts_any_extension_not_on_denylist(self, tmp_path, monkeypatch):
-        """No extension allowlist — .md, .txt, .json, .py all deliver."""
+        """No extension allowlist — .md, .txt, .json, .py all deliver.
+
+        Hard-blocked log files are the exception.
+        """
         self._patch_roots(monkeypatch)
 
         for name in ("report.md", "log.txt", "data.json", "script.py", "blob.bin"):
             f = tmp_path / name
             f.write_bytes(b"x")
-            assert BasePlatformAdapter.validate_media_delivery_path(str(f)) == str(f.resolve())
+            expected = None if name.startswith("log") else str(f.resolve())
+            assert BasePlatformAdapter.validate_media_delivery_path(str(f)) == expected
 
     def test_denylist_still_blocks_credentials(self, tmp_path, monkeypatch):
         """Default mode is permissive but not naive — credential paths

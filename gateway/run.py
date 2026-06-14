@@ -1959,14 +1959,28 @@ def _normalize_empty_agent_response(
 
 _STRUCTURED_ATTACHMENT_EXPLICIT_FIELDS = frozenset(
     {
+        "media_files",
+        "document_files",
+    }
+)
+_STRUCTURED_ATTACHMENT_LEGACY_ARTIFACT_FIELDS = frozenset(
+    {
         "artifacts",
         "artifact_files",
-        "media_files",
         "output_path",
         "document_path",
         "primary_image_path",
         "image_path",
         "file_path",
+    }
+)
+_STRUCTURED_ATTACHMENT_DELIVERY_INTENT_FIELDS = frozenset(
+    {
+        "media_files",
+        "document_files",
+        "expected_file_count",
+        "delivery_mode",
+        "user_requested_delivery",
     }
 )
 _STRUCTURED_ATTACHMENT_ARTIFACT_TOOL_FIELDS = frozenset(
@@ -2017,13 +2031,15 @@ def _coerce_structured_attachment_payload(value: Any) -> Any:
 
 
 def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
-    """Extract local attachment candidates with explicit artifact provenance.
+    """Extract local attachment candidates with explicit delivery intent.
 
-    Tool outputs frequently contain ordinary path lists (``search_files.files``),
-    stdout, or read-file content.  Those are observations, not deliverables.  To
-    avoid publishing unrelated files, collect only paths carried by explicit
-    artifact fields, and allow generic ``files``/``image``-style fields only for
-    known artifact-producing tools.
+    Tool outputs frequently contain ordinary path lists, stdout, report text, or
+    worker handoff summaries.  Those are observations, not deliverables.  To
+    avoid publishing RCA/test/diagnostic artifacts, collect only paths carried by
+    explicit delivery fields (``media_files`` / ``document_files``).  Legacy
+    artifact fields are accepted only when the same payload declares delivery
+    intent via ``user_requested_delivery=True``, ``expected_file_count``, or
+    ``delivery_mode``.
     """
     from urllib.parse import unquote, urlparse
 
@@ -2071,15 +2087,41 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
         seen_nodes.add(node_id)
         normalized_tool = _normalize_structured_attachment_tool_name(tool_name)
         tool_allows_generic_files = normalized_tool in _STRUCTURED_ATTACHMENT_ARTIFACT_TOOLS
+        has_delivery_intent = any(
+            str(key or "") in _STRUCTURED_ATTACHMENT_DELIVERY_INTENT_FIELDS
+            for key in payload.keys()
+        )
+        user_requested_delivery = payload.get("user_requested_delivery") is True
+        explicit_delivery_requested = has_delivery_intent and (
+            user_requested_delivery
+            or payload.get("expected_file_count") is not None
+            or bool(payload.get("delivery_mode"))
+            or "media_files" in payload
+            or "document_files" in payload
+        )
 
         for key, value in payload.items():
             key_text = str(key or "")
             if key_text in _STRUCTURED_ATTACHMENT_EXPLICIT_FIELDS:
                 _collect_value(value)
-            elif key_text in _STRUCTURED_ATTACHMENT_ARTIFACT_TOOL_FIELDS and tool_allows_generic_files:
+            elif key_text in _STRUCTURED_ATTACHMENT_LEGACY_ARTIFACT_FIELDS and explicit_delivery_requested:
+                _collect_value(value)
+            elif (
+                key_text in _STRUCTURED_ATTACHMENT_ARTIFACT_TOOL_FIELDS
+                and tool_allows_generic_files
+                and explicit_delivery_requested
+            ):
                 _collect_value(value)
             elif isinstance(value, dict):
                 _collect_payload(value, tool_name=normalized_tool)
+            elif isinstance(value, (list, tuple)):
+                # For non-delivery fields, descend into structured child
+                # payloads only.  Do not collect raw strings from generic lists
+                # such as delegate_task artifacts/results summaries unless the
+                # list's own key passed an explicit delivery gate above.
+                for item in value:
+                    if isinstance(item, dict):
+                        _collect_payload(item, tool_name=normalized_tool)
             elif isinstance(value, str):
                 coerced = _coerce_structured_attachment_payload(value)
                 if isinstance(coerced, dict):
@@ -2147,6 +2189,57 @@ def _collect_turn_scoped_structured_attachments(
         "collected_file_names": [Path(path).name for path in collected[:10]],
     }
     return collected, debug
+
+
+def _validate_gateway_delivery_candidates(
+    adapter: Any,
+    candidates: list[str],
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Validate artifact candidates using the same policy as the send path."""
+    from gateway.platforms.base import BasePlatformAdapter
+
+    if not candidates:
+        return [], []
+
+    if getattr(adapter, "platform", None) == Platform.SLACK:
+        image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+        raw_image_candidates = [path for path in candidates if Path(path).suffix.lower() in image_exts]
+        raw_other_candidates = [path for path in candidates if Path(path).suffix.lower() not in image_exts]
+        allowed_images, blocked_images = BasePlatformAdapter.validate_slack_delivery_paths(
+            raw_image_candidates,
+            image_only=True,
+        )
+        allowed_other, blocked_other = BasePlatformAdapter.validate_slack_delivery_paths(
+            raw_other_candidates,
+            image_only=False,
+        )
+        return [*allowed_images, *allowed_other], [*blocked_images, *blocked_other]
+
+    allowed = BasePlatformAdapter.filter_local_delivery_paths(candidates)
+    blocked = []
+    allowed_set = set(allowed)
+    for candidate in candidates:
+        if candidate not in allowed_set:
+            blocked.append({"path": candidate, "reason": "unsafe_or_missing_path"})
+    return allowed, blocked
+
+
+def _extract_body_local_delivery_paths(
+    adapter: Any,
+    content: str,
+    *,
+    suppress: bool = False,
+    image_only: bool = False,
+) -> tuple[list[str], str]:
+    """Extract bare local paths from response text when body discovery is allowed."""
+    from gateway.platforms.base import BasePlatformAdapter
+
+    if not isinstance(content, str) or suppress:
+        return [], content
+
+    paths, cleaned = adapter.extract_local_files(content)
+    paths = BasePlatformAdapter.filter_local_delivery_paths(paths, image_only=image_only)
+    return paths, cleaned
 
 
 def _should_clear_resume_pending_after_turn(agent_result: dict) -> bool:
@@ -5808,9 +5901,44 @@ class GatewayRunner:
             return
 
         from gateway.platforms.base import BasePlatformAdapter
-        candidates = BasePlatformAdapter.filter_local_delivery_paths(candidates)
-        if not candidates:
-            return
+
+        if getattr(adapter, "platform", None) == Platform.SLACK:
+            image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+            raw_image_candidates = [p for p in candidates if _Path(p).suffix.lower() in image_exts]
+            raw_other_candidates = [p for p in candidates if _Path(p).suffix.lower() not in image_exts]
+            allowed_images, blocked_images = BasePlatformAdapter.validate_slack_delivery_paths(
+                raw_image_candidates,
+                image_only=True,
+            )
+            allowed_other, blocked_other = BasePlatformAdapter.validate_slack_delivery_paths(
+                raw_other_candidates,
+                image_only=False,
+            )
+            expected_count = len(raw_image_candidates) + len(raw_other_candidates)
+            actual_count = len(allowed_images) + len(allowed_other)
+            if blocked_images or blocked_other or actual_count != expected_count:
+                logger.warning(
+                    "[Slack] kanban artifact delivery blocked: expected=%d actual=%d blocked=%d",
+                    expected_count,
+                    actual_count,
+                    len(blocked_images) + len(blocked_other),
+                )
+                logger.info(
+                    "[Slack] kanban artifact delivery preview: %s",
+                    {
+                        "delivery_mode": "slack_kanban_artifacts",
+                        "expected_count": expected_count,
+                        "actual_candidate_count": actual_count,
+                        "allowed_files": [Path(path).name for path in allowed_images + allowed_other],
+                        "blocked_files": blocked_images + blocked_other,
+                    },
+                )
+                return
+            candidates = [*allowed_images, *allowed_other]
+        else:
+            candidates = BasePlatformAdapter.filter_local_delivery_paths(candidates)
+            if not candidates:
+                return
 
         _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
         _VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
@@ -12281,8 +12409,19 @@ class GatewayRunner:
                 getattr(event, "_structured_attachment_paths", []) or []
             )
             _, cleaned = adapter.extract_images(response)
-            local_files, _ = adapter.extract_local_files(cleaned)
-            local_files = BasePlatformAdapter.filter_local_delivery_paths(local_files)
+            if getattr(adapter, "platform", None) == Platform.SLACK:
+                # Streaming Slack replies are already text-delivered. Do not
+                # auto-promote bare report/body paths from RCA/test/diagnostic
+                # text; only explicit MEDIA: tags or structured
+                # media_files/document_files may attach.
+                local_files = []
+            else:
+                local_files, _ = _extract_body_local_delivery_paths(
+                    adapter,
+                    cleaned,
+                    suppress=bool(media_files or structured_files),
+                    image_only=False,
+                )
             if structured_files:
                 seen_media_paths = {path for path, _ in media_files}
                 merged_local_files: list[str] = []

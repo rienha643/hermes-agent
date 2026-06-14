@@ -286,6 +286,60 @@ def _resolve_slack_proxy_url() -> Optional[str]:
     return proxy_url
 
 
+_SLACK_ALLOWED_PUBLISH_ROOTS = (
+    "/Volumes/SSD_Hermes/HermesWork/Image",
+    "/Users/hermes/HermesWork/Image",
+)
+_SLACK_BLOCKED_SOURCE_ROOTS = (
+    "/Volumes/SSD_Hermes/ComfyUI/output",
+)
+
+
+def _slack_path_within_root(path: str, root: str) -> bool:
+    try:
+        return _Path(path).resolve(strict=False).is_relative_to(_Path(root).resolve(strict=False))
+    except Exception:
+        return False
+
+
+def _slack_media_block_reason(file_path: str) -> str | None:
+    path = _Path(file_path)
+    suffix = path.suffix.lower()
+    lowered = str(path).lower()
+    if suffix != ".png":
+        return f"forbidden_extension:{suffix or '<none>'}"
+    if any(_slack_path_within_root(file_path, root) for root in _SLACK_BLOCKED_SOURCE_ROOTS):
+        return "blocked_source_root:/Volumes/SSD_Hermes/ComfyUI/output"
+    if not any(_slack_path_within_root(file_path, root) for root in _SLACK_ALLOWED_PUBLISH_ROOTS):
+        return "outside_allowed_publish_roots"
+    if any(token in lowered for token in ("auth.json", "credentials", "credential", "token", "secret", "refresh_token", "private_key", "host_secret", "oauth", ".env", "config", "state", "cache", "key", "pem", "p12", "sqlite", "db", "log", "workflow.json", "prompt.json", "metadata.json", "manifest.json", "_sidecars", "sidecar", "tmp", "intermediate", "session")):
+        return "blocked_sensitive_or_sidecar"
+    return None
+
+
+def _slack_preview_payload(*, chat_id: str, thread_id: str | None, candidates: list[tuple[str, bool]], blocked: list[dict[str, str]], expected_count: int | None) -> dict[str, object]:
+    return {
+        "target_channel": chat_id,
+        "thread_ts": thread_id or "",
+        "candidate_count": len(candidates),
+        "expected_count": expected_count,
+        "filenames": [_Path(path).name for path, _ in candidates],
+        "extensions": [_Path(path).suffix.lower() for path, _ in candidates],
+        "source_paths": [path for path, _ in candidates],
+        "blocked_files_count": len(blocked),
+        "block_reasons": blocked,
+    }
+
+
+def _is_slack_not_in_channel_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    if "not_in_channel" in text:
+        return True
+    response = getattr(exc, "response", None)
+    error = getattr(response, "data", {}).get("error") if response is not None else None
+    return str(error).lower() == "not_in_channel"
+
+
 class SlackAdapter(BasePlatformAdapter):
     """
     Slack bot adapter using Socket Mode.
@@ -1012,6 +1066,13 @@ class SlackAdapter(BasePlatformAdapter):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         thread_ts = self._resolve_thread_ts(reply_to, metadata)
+        if not thread_ts:
+            return SendResult(success=False, error="Slack media delivery requires thread_ts; refusing main-channel fallback")
+
+        block_reason = _slack_media_block_reason(file_path)
+        if block_reason:
+            return SendResult(success=False, error=f"Blocked Slack media candidate: {block_reason}")
+
         last_exc = None
         for attempt in range(3):
             try:
@@ -1026,8 +1087,10 @@ class SlackAdapter(BasePlatformAdapter):
                 return SendResult(success=True, raw_response=result)
             except Exception as exc:
                 last_exc = exc
+                if _is_slack_not_in_channel_error(exc):
+                    return SendResult(success=False, error="Slack upload failed: not_in_channel")
                 if not self._is_retryable_upload_error(exc) or attempt >= 2:
-                    raise
+                    return SendResult(success=False, error=str(exc))
                 logger.debug(
                     "[Slack] Upload retry %d/2 for %s: %s",
                     attempt + 1,
@@ -1036,7 +1099,7 @@ class SlackAdapter(BasePlatformAdapter):
                 )
                 await asyncio.sleep(1.5 * (attempt + 1))
 
-        raise last_exc
+        return SendResult(success=False, error=str(last_exc) if last_exc else "Slack upload failed")
 
     async def send_multiple_images(
         self,
@@ -1049,8 +1112,7 @@ class SlackAdapter(BasePlatformAdapter):
 
         Uses ``files_upload_v2`` with its ``file_uploads`` parameter so all
         images show up attached to one ``initial_comment`` message instead
-        of N separate messages. Falls back to the base per-image loop on
-        any failure.
+        of N separate messages. Fail-closed on any upload problem.
 
         The batch limit is 10 file uploads per call (Slack server-side cap).
         """
@@ -1068,6 +1130,8 @@ class SlackAdapter(BasePlatformAdapter):
             return
 
         thread_ts = self._resolve_thread_ts(None, metadata)
+        if not thread_ts:
+            raise RuntimeError("Slack media delivery requires thread_ts; refusing main-channel fallback")
 
         CHUNK = 10
         chunks = [images[i:i + CHUNK] for i in range(0, len(images), CHUNK)]
@@ -1089,6 +1153,9 @@ class SlackAdapter(BasePlatformAdapter):
                             if not os.path.exists(local_path):
                                 logger.warning("[Slack] Skipping missing image: %s", local_path)
                                 continue
+                            block_reason = _slack_media_block_reason(local_path)
+                            if block_reason:
+                                raise RuntimeError(f"Blocked Slack media candidate: {block_reason}")
                             file_uploads.append({
                                 "file": local_path,
                                 "filename": os.path.basename(local_path),
@@ -1136,12 +1203,9 @@ class SlackAdapter(BasePlatformAdapter):
                 self._record_uploaded_file_thread(chat_id, thread_ts)
                 _ = result
             except Exception as e:
-                logger.warning(
-                    "[Slack] Multi-image files_upload_v2 failed (chunk %d/%d), falling back to per-image: %s",
-                    chunk_idx + 1, len(chunks), e,
-                    exc_info=True,
-                )
-                await super().send_multiple_images(chat_id, chunk, metadata, human_delay=human_delay)
+                if _is_slack_not_in_channel_error(e):
+                    raise RuntimeError("Slack upload failed: not_in_channel") from e
+                raise
 
     def _record_uploaded_file_thread(self, chat_id: str, thread_ts: Optional[str]) -> None:
         """Treat successful file uploads as bot participation in a thread."""
@@ -1404,10 +1468,7 @@ class SlackAdapter(BasePlatformAdapter):
                 e,
                 exc_info=True,
             )
-            text = f"🖼️ Image: {image_path}"
-            if caption:
-                text = f"{caption}\n{text}"
-            return await self.send(chat_id, text, reply_to=reply_to, metadata=metadata)
+            return SendResult(success=False, error=str(e))
 
     async def send_image(
         self,
@@ -1459,19 +1520,12 @@ class SlackAdapter(BasePlatformAdapter):
 
         except Exception as e:  # pragma: no cover - defensive logging
             logger.warning(
-                "[Slack] Failed to upload image from URL %s, falling back to text: %s",
+                "[Slack] Failed to upload image from URL %s: %s",
                 safe_url_for_log(image_url),
                 e,
                 exc_info=True,
             )
-            # Fall back to sending the URL as text
-            text = f"{caption}\n{image_url}" if caption else image_url
-            return await self.send(
-                chat_id=chat_id,
-                content=text,
-                reply_to=reply_to,
-                metadata=metadata,
-            )
+            return SendResult(success=False, error=str(e))
 
     async def send_voice(
         self,
@@ -1547,10 +1601,7 @@ class SlackAdapter(BasePlatformAdapter):
                 e,
                 exc_info=True,
             )
-            text = f"🎬 Video: {video_path}"
-            if caption:
-                text = f"{caption}\n{text}"
-            return await self.send(chat_id, text, reply_to=reply_to, metadata=metadata)
+            return SendResult(success=False, error=str(e))
 
     async def send_document(
         self,
@@ -1572,12 +1623,17 @@ class SlackAdapter(BasePlatformAdapter):
         thread_ts = self._resolve_thread_ts(reply_to, metadata)
 
         try:
+            validated_path = self.validate_slack_delivery_path(file_path, image_only=False)
+            if not validated_path:
+                block_reason = _slack_media_block_reason(file_path) or "unsafe_or_missing_path"
+                return SendResult(success=False, error=f"Blocked Slack document candidate: {block_reason}")
+
             last_exc = None
             for attempt in range(3):
                 try:
                     result = await self._get_client(chat_id).files_upload_v2(
                         channel=chat_id,
-                        file=file_path,
+                        file=validated_path,
                         filename=display_name,
                         initial_comment=caption or "",
                         thread_ts=thread_ts,
@@ -1606,10 +1662,7 @@ class SlackAdapter(BasePlatformAdapter):
                 e,
                 exc_info=True,
             )
-            text = f"📎 File: {file_path}"
-            if caption:
-                text = f"{caption}\n{text}"
-            return await self.send(chat_id, text, reply_to=reply_to, metadata=metadata)
+            return SendResult(success=False, error=str(e))
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         """Get information about a Slack channel."""

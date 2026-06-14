@@ -1,9 +1,10 @@
 import asyncio
 from pathlib import Path
-
+from types import SimpleNamespace
 
 from gateway.config import Platform
 from gateway.run import GatewayRunner
+from gateway.platforms.base import BasePlatformAdapter
 from hermes_cli import kanban_db as kb
 
 
@@ -13,6 +14,27 @@ class RecordingAdapter:
 
     async def send(self, chat_id, text, metadata=None):
         self.sent.append({"chat_id": chat_id, "text": text, "metadata": metadata or {}})
+
+
+class SlackRecordingAdapter:
+    platform = Platform.SLACK
+
+    def __init__(self):
+        self.sent_images = []
+        self.sent_documents = []
+        self.sent_videos = []
+
+    def extract_local_files(self, content):
+        return BasePlatformAdapter.extract_local_files(content)
+
+    async def send_multiple_images(self, chat_id, images, metadata=None, **kwargs):
+        self.sent_images.append({"chat_id": chat_id, "images": list(images), "metadata": metadata or {}})
+
+    async def send_document(self, chat_id, file_path, metadata=None, **kwargs):
+        self.sent_documents.append({"chat_id": chat_id, "file_path": file_path, "metadata": metadata or {}})
+
+    async def send_video(self, chat_id, video_path, metadata=None, **kwargs):
+        self.sent_videos.append({"chat_id": chat_id, "video_path": video_path, "metadata": metadata or {}})
 
 
 class DisconnectedAdapters(dict):
@@ -171,6 +193,49 @@ def test_kanban_notifier_rewinds_claim_on_send_exception(tmp_path, monkeypatch):
     # still returns the event for retry on the next tick.
     assert adapter.attempts >= 1, "send should have been attempted at least once"
     assert [ev.kind for ev in _unseen_terminal_events(tid)] == ["completed"]
+
+
+def test_kanban_notifier_blocks_slack_body_paths_when_summary_mentions_md_and_artifacts_exist(tmp_path, monkeypatch):
+    db_path = tmp_path / "slack-kanban.db"
+    monkeypatch.setenv("HERMES_KANBAN_DB", str(db_path))
+    kb.init_db()
+
+    png = tmp_path / "artifact.png"
+    md = tmp_path / "leak.md"
+    png.write_bytes(b"png")
+    md.write_text("# leak", encoding="utf-8")
+
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(conn, title="slack artifact", assignee="worker")
+        kb.add_notify_sub(conn, task_id=tid, platform="slack", chat_id="C123")
+        kb.complete_task(conn, tid, summary=f"artifact: {md}")
+    finally:
+        conn.close()
+
+    adapter = SlackRecordingAdapter()
+    runner = GatewayRunner.__new__(GatewayRunner)
+    runner._running = True
+    runner.adapters = {Platform.SLACK: adapter}  # type: ignore[assignment]
+    runner._kanban_sub_fail_counts = {}
+
+    event_payload = {"artifacts": [str(png)], "summary": f"artifact: {md}"}
+    task = SimpleNamespace(result=None, status="done")
+
+    asyncio.run(
+        GatewayRunner._deliver_kanban_artifacts(
+            runner,
+            adapter=adapter,
+            chat_id="C123",
+            metadata={},
+            event_payload=event_payload,
+            task=task,
+        )
+    )
+
+    assert adapter.sent_images == []
+    assert adapter.sent_documents == []
+    assert adapter.sent_videos == []
 
 
 def test_notifier_redelivers_same_kind_on_dispatch_cycle(tmp_path, monkeypatch):
