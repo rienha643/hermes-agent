@@ -1591,10 +1591,7 @@ def _format_specialist_result_frame(
     parts = [f"[WORKER RESULT: {label}]", "", intro]
     if sections:
         parts.extend(["", "\n\n".join(sections)])
-    frame_text = "\n".join(parts)
-    if _looks_like_evaluation_report_text(task_type, summary, preview, frame_text):
-        return frame_text
-    return _compact_specialist_result_frame_text(frame_text)
+    return "\n".join(parts)
 
 
 def _infer_specialist_profile(*texts: Optional[str]) -> Optional[str]:
