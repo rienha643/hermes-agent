@@ -546,7 +546,7 @@ from hermes_constants import get_hermes_dir, get_hermes_home
 
 
 _FINAL_DELIVERY_DOCUMENT_EXTENSIONS = {".docx", ".pdf"}
-_SIDECAR_EXCLUDED_PART = "_sidecars"
+_SIDECAR_EXCLUDED_PARTS = {"sidecar", "_sidecars"}
 _IMAGE_DELIVERY_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _TEXT_SIDECAR_EXTENSIONS = {".txt", ".log", ".json"}
 
@@ -1121,7 +1121,8 @@ def _delivery_path_is_sidecar(path: Path) -> bool:
     parts = {part.lower() for part in path.parts}
     lower_name = path.name.lower()
     return (
-        "_sidecars" in parts
+        "sidecar" in parts
+        or "_sidecars" in parts
         or "sidecar" in lower_name
         or "tmp" in lower_name
         or "intermediate" in lower_name
@@ -1137,7 +1138,7 @@ def _delivery_path_is_sidecar(path: Path) -> bool:
 def _delivery_path_is_intermediate(path: Path) -> bool:
     parts = [part.lower() for part in path.parts]
     lower_name = path.name.lower()
-    if any(part == "_sidecars" for part in parts):
+    if any(part in {"sidecar", "_sidecars"} for part in parts):
         return True
     if lower_name in {"run.json", "workflow.json", "prompt.json", "metadata.json", "manifest.json"}:
         return True
@@ -2742,7 +2743,7 @@ class BasePlatformAdapter(ABC):
     @staticmethod
     def is_document_sidecar_path(file_path: str) -> bool:
         path = Path(str(file_path))
-        return any(part == _SIDECAR_EXCLUDED_PART for part in path.parts)
+        return any(part.lower() in _SIDECAR_EXCLUDED_PARTS for part in path.parts)
 
     @staticmethod
     def looks_like_document_intermediate_path(file_path: str) -> bool:

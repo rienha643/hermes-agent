@@ -4335,6 +4335,32 @@ class AIAgent:
         persist_user_message: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Forwarder — see ``agent.conversation_loop.run_conversation``."""
+        if isinstance(user_message, str) and user_message.lstrip().startswith("[WORKER:"):
+            try:
+                from gateway.run import _extract_explicit_worker_labels, _run_explicit_worker_delegation
+
+                if _extract_explicit_worker_labels(user_message):
+                    explicit_result = _run_explicit_worker_delegation(self, user_message)
+                    if explicit_result is not None:
+                        return explicit_result
+                    return {
+                        "final_response": "delegation failed\nExplicit worker delegation could not be started.",
+                        "messages": [],
+                        "api_calls": 0,
+                        "completed": False,
+                        "failed": True,
+                        "error": "Explicit worker delegation could not be started",
+                    }
+            except Exception as exc:
+                logger.warning("Explicit worker delegation preflight failed in run_conversation: %s", exc, exc_info=True)
+                return {
+                    "final_response": "delegation failed\nExplicit worker delegation could not be started.",
+                    "messages": [],
+                    "api_calls": 0,
+                    "completed": False,
+                    "failed": True,
+                    "error": "Explicit worker delegation could not be started",
+                }
         from agent.conversation_loop import run_conversation
         return run_conversation(self, user_message, system_message, conversation_history, task_id, stream_callback, persist_user_message)
 

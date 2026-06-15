@@ -274,10 +274,14 @@ def _iter_image_bundle_manifests(image_root: Path):
     for candidate in sorted(image_root.iterdir()):
         if not candidate.is_dir():
             continue
-        manifest_path = candidate / "_sidecars" / "manifest.json"
+        manifest_path = candidate / "sidecar" / "manifest.json"
         manifest_payload = _read_json_if_exists(manifest_path)
         if not isinstance(manifest_payload, dict):
-            continue
+            legacy_manifest_path = candidate / "_sidecars" / "manifest.json"
+            manifest_payload = _read_json_if_exists(legacy_manifest_path)
+            if not isinstance(manifest_payload, dict):
+                continue
+            manifest_path = legacy_manifest_path
 
         sidecars = manifest_payload.get("sidecars")
         if not isinstance(sidecars, dict):
@@ -348,7 +352,9 @@ def _load_existing_bundle(
     if not isinstance(sidecars, dict):
         sidecars = {}
 
-    sidecar_dir = published_dir / "_sidecars"
+    sidecar_dir = published_dir / "sidecar"
+    if not (sidecar_dir / str(sidecars.get("manifest") or "manifest.json")).exists() and (published_dir / "_sidecars").exists():
+        sidecar_dir = published_dir / "_sidecars"
     workflow_name = str(sidecars.get("workflow") or "")
     prompt_name = str(sidecars.get("prompt") or "")
     metadata_name = str(sidecars.get("metadata") or "")
@@ -422,11 +428,11 @@ def publish_filesystem_image_bundle(
     shutil.copyfile(source, primary_image_path)
 
     versioned_stem = primary_image_path.stem
-    sidecar_dir = published_dir / "_sidecars"
+    sidecar_dir = published_dir / "sidecar"
     sidecar_dir.mkdir(parents=True, exist_ok=True)
-    workflow_path = sidecar_dir / f"{versioned_stem}.workflow.json"
-    prompt_path = sidecar_dir / f"{versioned_stem}.prompt.json"
-    metadata_path = sidecar_dir / f"{versioned_stem}.metadata.json"
+    workflow_path = sidecar_dir / "workflow.json"
+    prompt_path = sidecar_dir / "prompt.json"
+    metadata_path = sidecar_dir / "metadata.json"
     manifest_path = sidecar_dir / "manifest.json"
 
     metadata_payload = dict(metadata)

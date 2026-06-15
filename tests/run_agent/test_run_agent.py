@@ -52,6 +52,56 @@ def test_is_destructive_command_treats_install_as_mutating():
     assert run_agent._is_destructive_command("install template.env .env") is True
 
 
+def test_run_conversation_routes_explicit_worker_before_normal_loop():
+    agent = AIAgent.__new__(AIAgent)
+    explicit_result = {
+        "final_response": "[WORKER RESULT: Eclipse]\nOK",
+        "messages": [],
+        "api_calls": 1,
+        "completed": True,
+    }
+    with (
+        patch("gateway.run._extract_explicit_worker_labels", return_value=["Eclipse"]),
+        patch("gateway.run._run_explicit_worker_delegation", return_value=explicit_result) as mock_route,
+        patch("agent.conversation_loop.run_conversation", side_effect=AssertionError("normal loop should not run")),
+    ):
+        result = AIAgent.run_conversation(agent, "[WORKER: Eclipse]\nPING")
+    assert result == explicit_result
+    mock_route.assert_called_once()
+
+
+def test_run_conversation_no_worker_directive_uses_normal_loop():
+    agent = AIAgent.__new__(AIAgent)
+    fallback_result = {
+        "final_response": "plain fallback",
+        "messages": [],
+        "api_calls": 0,
+        "completed": True,
+    }
+    with (
+        patch("gateway.run._run_explicit_worker_delegation") as mock_route,
+        patch("agent.conversation_loop.run_conversation", return_value=fallback_result) as mock_loop,
+    ):
+        result = AIAgent.run_conversation(agent, "PING")
+    assert result == fallback_result
+    mock_route.assert_not_called()
+    mock_loop.assert_called_once()
+
+
+def test_run_conversation_explicit_worker_missing_delegation_fails_loud():
+    agent = AIAgent.__new__(AIAgent)
+    with (
+        patch("gateway.run._extract_explicit_worker_labels", return_value=["Eclipse"]),
+        patch("gateway.run._run_explicit_worker_delegation", return_value=None) as mock_route,
+        patch("agent.conversation_loop.run_conversation", side_effect=AssertionError("normal loop should not run")),
+    ):
+        result = AIAgent.run_conversation(agent, "[WORKER: Eclipse]\nPING")
+    mock_route.assert_called_once()
+    assert result["failed"] is True
+    assert "[WORKER RESULT:" not in result["final_response"]
+    assert "delegation failed" in result["final_response"]
+
+
 @pytest.fixture()
 def agent():
     """Minimal AIAgent with mocked OpenAI client and tool loading."""

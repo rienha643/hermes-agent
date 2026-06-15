@@ -309,6 +309,17 @@ def _build_explicit_worker_provenance(
     }
 
 
+def _build_explicit_worker_result_failure(
+    worker_label: str,
+    error_text: str,
+    *,
+    include_result_frame: bool,
+) -> str:
+    if include_result_frame:
+        return f"[WORKER RESULT: {worker_label}]\n\ndelegation failed\n{error_text}"
+    return f"delegation failed\n{error_text}"
+
+
 def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[str, Any]]:
     sanitized_message = _strip_routing_context_prefixes(message)
     worker_labels = _extract_explicit_worker_labels(sanitized_message)

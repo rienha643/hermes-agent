@@ -380,7 +380,7 @@ def is_document_artifact_intermediate_path(path: str | Path) -> bool:
     lower_name = candidate.name.lower()
     lower_parts = [part.lower() for part in candidate.parts]
 
-    if any(part == "_sidecars" for part in lower_parts):
+    if any(part in {"sidecar", "_sidecars"} for part in lower_parts):
         return True
     if lower_name in {"run.json", "workflow.json", "prompt.json", "metadata.json", "manifest.json"}:
         return True
