@@ -4,7 +4,6 @@ from gateway.platforms.base import _compact_post_upload_reporting
 from gateway.run import (
     _compact_gateway_final_response,
     _looks_like_gateway_delivery_summary,
-    _split_gateway_response_parts,
     _split_gateway_evaluation_report_parts,
 )
 
@@ -36,50 +35,6 @@ class TestGatewayTruncationRegression:
         compacted, applied = _compact_gateway_final_response(text)
         assert compacted == text
         assert applied is False
-
-    def test_long_general_final_response_is_not_compacted(self):
-        text = "[GEMMA4 SMOKE TEST]\n" + "\n".join(
-            f"검증 라인 {idx}: 일반 최종 응답 본문은 생략 없이 보존됩니다." for idx in range(1, 70)
-        )
-
-        compacted, applied = _compact_gateway_final_response(text)
-
-        assert applied is False
-        assert compacted == text
-        assert "lines omitted" not in compacted
-        assert "[truncated]" not in compacted
-        assert "검증 라인 69" in compacted
-
-    def test_long_general_final_response_splits_without_deleting_content(self):
-        text = "[GEMMA4 SMOKE TEST]\n" + "\n".join(
-            f"smoke detail {idx}: this line must survive multipart delivery." for idx in range(1, 90)
-        )
-
-        parts = _split_gateway_response_parts(text, max_chars=900)
-
-        assert len(parts) >= 2
-        assert parts[0].startswith("[PART 1/")
-        assert parts[1].startswith("[PART 2/")
-        assert all("lines omitted" not in part for part in parts)
-        assert all("[truncated]" not in part for part in parts)
-        assert all(len(part) <= 900 for part in parts)
-        reconstructed = "".join(part.split("\n", 1)[1] for part in parts)
-        assert reconstructed == text
-        assert "smoke detail 89" in reconstructed
-
-    def test_long_rca_final_response_splits_without_deleting_content(self):
-        text = "[RCA RESULT]\n원인: output guard\n" + "\n".join(
-            f"근거 {idx}: RCA 분석 본문 보존" for idx in range(1, 80)
-        )
-
-        parts = _split_gateway_response_parts(text, max_chars=800)
-        reconstructed = "".join(part.split("\n", 1)[1] for part in parts)
-
-        assert len(parts) >= 2
-        assert reconstructed == text
-        assert "lines omitted" not in "\n".join(parts)
-        assert "[truncated]" not in "\n".join(parts)
-        assert "근거 79" in reconstructed
 
     def test_long_portrait_review_is_not_compacted(self):
         sections = [

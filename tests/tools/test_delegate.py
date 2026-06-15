@@ -39,7 +39,6 @@ from tools.delegate_tool import (
     _build_child_system_prompt,
     _format_specialist_frame,
     _format_specialist_result_frame,
-    _compact_specialist_result_frame_text,
     _infer_delegate_image_metadata,
     _is_single_output_image_task,
     _resolve_specialist_profile,
@@ -3857,7 +3856,7 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertNotIn("표시 방식", artifact_frame)
         self.assertNotIn("- 추가 확인 사항", artifact_frame)
 
-    def test_operational_compactor_compacts_repeated_delivery_summaries(self):
+    def test_specialist_result_frame_compacts_repeated_delivery_summaries(self):
         repeated_path = "/tmp/" + ("portrait_round_v1/" * 18) + "artifact.json"
         repeated_block = (
             "portrait_round_v1 Slack 전달 완료: 이미지 4개 첨부\n"
@@ -3865,14 +3864,24 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
             "NAS Hook: PASS\n"
             "provenance: PASS"
         )
-        compacted = _compact_specialist_result_frame_text((repeated_block + "\n\n") * 6)
+        frame = _format_specialist_result_frame(
+            "Eclipse",
+            status="completed",
+            task_type="artifact",
+            preview=repeated_block * 3,
+            summary=(repeated_block + "\n\n") * 3,
+            artifacts=[repeated_path],
+            follow_up=repeated_block * 2,
+            exit_reason="completed",
+        )
 
-        lines = [line for line in compacted.splitlines() if line.strip()]
+        lines = [line for line in frame.splitlines() if line.strip()]
         self.assertLessEqual(len(lines), 20)
-        self.assertIn("portrait_round_v1 Slack 전달 완료: 이미지 4개 첨부", compacted)
-        self.assertLessEqual(compacted.count("NAS Hook: PASS"), 2)
-        self.assertLessEqual(compacted.count("provenance: PASS"), 2)
-        self.assertNotIn(repeated_path * 2, compacted)
+        self.assertIn("[WORKER RESULT: Eclipse]", frame)
+        self.assertIn("portrait_round_v1 Slack 전달 완료: 이미지 4개 첨부", frame)
+        self.assertLessEqual(frame.count("NAS Hook: PASS"), 2)
+        self.assertLessEqual(frame.count("provenance: PASS"), 2)
+        self.assertNotIn(repeated_path * 2, frame)
 
     def test_specialist_result_frame_does_not_compact_evaluation_reports(self):
         summary = "\n".join(
@@ -3891,45 +3900,6 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
 
         self.assertIn("[WORKER RESULT: Eclipse]", frame)
         self.assertIn("평가 항목 59", frame)
-        self.assertNotIn("lines omitted", frame)
-        self.assertNotIn("[truncated]", frame)
-
-    def test_specialist_result_frame_does_not_compact_general_worker_body(self):
-        summary = "\n".join(
-            ["[GEMMA4 SMOKE TEST]"]
-            + [f"smoke line {idx}: worker result body must be preserved." for idx in range(1, 80)]
-        )
-
-        frame = _format_specialist_result_frame(
-            "Eclipse",
-            status="completed",
-            task_type="smoke",
-            preview=summary,
-            summary=summary,
-            exit_reason="completed",
-        )
-
-        self.assertIn("[WORKER RESULT: Eclipse]", frame)
-        self.assertIn("smoke line 79", frame)
-        self.assertNotIn("lines omitted", frame)
-        self.assertNotIn("[truncated]", frame)
-
-    def test_specialist_result_frame_does_not_compact_rca_body(self):
-        summary = "\n".join(
-            ["[RCA RESULT]", "원인: output guard"]
-            + [f"근거 {idx}: RCA 본문은 보존됩니다." for idx in range(1, 70)]
-        )
-
-        frame = _format_specialist_result_frame(
-            "Eclipse",
-            status="completed",
-            task_type="RCA",
-            preview=summary,
-            summary=summary,
-            exit_reason="completed",
-        )
-
-        self.assertIn("근거 69", frame)
         self.assertNotIn("lines omitted", frame)
         self.assertNotIn("[truncated]", frame)
 

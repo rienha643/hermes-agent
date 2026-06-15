@@ -790,8 +790,7 @@ _GATEWAY_DELIVERY_SUMMARY_MARKERS = (
 _GATEWAY_DELIVERY_SUMMARY_MAX_LINES = 20
 _GATEWAY_DELIVERY_SUMMARY_MAX_LINE_CHARS = 240
 _GATEWAY_DELIVERY_SUMMARY_MAX_CHARS = 2000
-_GATEWAY_RESPONSE_PART_MAX_CHARS = 3500
-_GATEWAY_EVALUATION_REPORT_PART_MAX_CHARS = _GATEWAY_RESPONSE_PART_MAX_CHARS
+_GATEWAY_EVALUATION_REPORT_PART_MAX_CHARS = 3500
 
 _GATEWAY_EVALUATION_REPORT_MARKERS = (
     "checkpoint review",
@@ -818,12 +817,12 @@ def _looks_like_gateway_evaluation_report(text: str) -> bool:
     return any(marker in body for marker in _GATEWAY_EVALUATION_REPORT_MARKERS)
 
 
-def _split_gateway_response_parts(
+def _split_gateway_evaluation_report_parts(
     text: str,
     *,
-    max_chars: int = _GATEWAY_RESPONSE_PART_MAX_CHARS,
+    max_chars: int = _GATEWAY_EVALUATION_REPORT_PART_MAX_CHARS,
 ) -> list[str]:
-    """Split long user-facing responses for delivery without deleting content."""
+    """Split long evaluation reports for delivery without deleting content."""
     body = str(text or "")
     if not body:
         return []
@@ -854,22 +853,11 @@ def _split_gateway_response_parts(
     return [f"[PART {idx}/{total}]\n{chunk}" for idx, chunk in enumerate(chunks, start=1)]
 
 
-def _split_gateway_evaluation_report_parts(
-    text: str,
-    *,
-    max_chars: int = _GATEWAY_EVALUATION_REPORT_PART_MAX_CHARS,
-) -> list[str]:
-    """Backward-compatible wrapper for lossless report multipart splitting."""
-    return _split_gateway_response_parts(text, max_chars=max_chars)
-
-
 def _compact_gateway_final_response(text: str) -> tuple[str, bool]:
-    """Compact only operational delivery summaries, never final answer bodies."""
+    """Collapse repeated summary/delivery blocks and keep a small response budget."""
     if not text:
         return text, False
     if _looks_like_gateway_evaluation_report(text):
-        return text, False
-    if not _looks_like_gateway_delivery_summary(text):
         return text, False
 
     original = str(text)
@@ -10388,38 +10376,42 @@ class GatewayRunner:
                     "fresh_execution_evidence": _fresh_execution_evidence,
                 }
 
-            # Long user-facing final responses must be delivered losslessly.  Do
+            # Long evaluation/review reports must be delivered losslessly.  Do
             # this after transcript persistence so the canonical assistant turn
-            # remains the full response, then suppress the normal single-message
+            # remains the full report, then suppress the normal single-message
             # send by returning None after successful multipart delivery.
             _already_sent = bool(agent_result.get("already_sent"))
-            if response and not _already_sent:
-                _response_parts = _split_gateway_response_parts(response)
-                if len(_response_parts) > 1:
-                    _response_adapter = self.adapters.get(source.platform)
-                    if _response_adapter:
+            if (
+                response
+                and not _already_sent
+                and _looks_like_gateway_evaluation_report(response)
+            ):
+                _eval_parts = _split_gateway_evaluation_report_parts(response)
+                if len(_eval_parts) > 1:
+                    _eval_adapter = self.adapters.get(source.platform)
+                    if _eval_adapter:
                         try:
-                            _response_meta = self._thread_metadata_for_source(
+                            _eval_meta = self._thread_metadata_for_source(
                                 source,
                                 self._reply_anchor_for_event(event),
                             )
-                            for _part in _response_parts:
-                                await _response_adapter.send(
+                            for _part in _eval_parts:
+                                await _eval_adapter.send(
                                     source.chat_id,
                                     _part,
-                                    metadata=_response_meta,
+                                    metadata=_eval_meta,
                                 )
                             logger.info(
-                                "final response multipart delivery: session_id=%s parts=%d chars=%d",
+                                "evaluation report multipart delivery: session_id=%s parts=%d chars=%d",
                                 session_entry.session_id,
-                                len(_response_parts),
+                                len(_eval_parts),
                                 len(response),
                             )
                             return None
-                        except Exception as _response_send_err:
+                        except Exception as _eval_send_err:
                             logger.warning(
-                                "final response multipart delivery failed; falling back to normal send: %s",
-                                _response_send_err,
+                                "evaluation report multipart delivery failed; falling back to normal send: %s",
+                                _eval_send_err,
                             )
 
             # Auto voice reply: send TTS audio before the text response
