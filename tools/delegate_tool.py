@@ -1439,42 +1439,14 @@ def _looks_like_evaluation_report_text(*texts: Optional[str]) -> bool:
 
 
 def _compact_specialist_result_frame_text(text: str) -> str:
-    """Keep specialist result frames short and deduplicated.
+    """Preserve user-facing specialist worker result frames verbatim.
 
-    Result frames can balloon when a child worker includes long artifact,
-    provenance, or status blocks. This helper collapses repeated blocks and
-    caps the rendered frame so the parent turn doesn't inherit an oversized
-    delivery summary.
+    Worker-result frames are final user-facing deliverables.  Applying the
+    operational preview line budget here changes meaning by deleting child
+    output and inserting ``... (N lines omitted)``.  Keep progress/debug preview
+    compaction in the progress-preview paths, not in the final worker body.
     """
-    if not text:
-        return text
-    if _looks_like_evaluation_report_text(text):
-        return text
-
-    blocks: List[str] = []
-    seen_blocks: set[str] = set()
-    for block in re.split(r"\n\s*\n", text.strip()):
-        cleaned = block.strip()
-        if not cleaned:
-            continue
-        normalized = re.sub(r"\s+", " ", cleaned).casefold()
-        if normalized in seen_blocks:
-            continue
-        seen_blocks.add(normalized)
-        blocks.append(cleaned)
-
-    compacted = "\n\n".join(blocks).strip()
-    if not compacted:
-        return compacted
-
-    lines = [line.rstrip() for line in compacted.splitlines() if line.strip()]
-    if len(compacted) <= _SPECIALIST_RESULT_MAX_CHARS and len(lines) <= _SPECIALIST_RESULT_MAX_LINES:
-        return compacted
-
-    clipped = [line[:_SPECIALIST_RESULT_MAX_LINE_CHARS].rstrip() for line in lines[:_SPECIALIST_RESULT_MAX_LINES]]
-    if len(lines) > _SPECIALIST_RESULT_MAX_LINES:
-        clipped.append(f"... ({len(lines) - _SPECIALIST_RESULT_MAX_LINES} lines omitted)")
-    return "\n".join(clipped)
+    return text
 
 
 def _format_specialist_result_frame(

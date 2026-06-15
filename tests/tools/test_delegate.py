@@ -3856,7 +3856,7 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertNotIn("표시 방식", artifact_frame)
         self.assertNotIn("- 추가 확인 사항", artifact_frame)
 
-    def test_specialist_result_frame_compacts_repeated_delivery_summaries(self):
+    def test_specialist_result_frame_preserves_repeated_delivery_summaries_without_omission(self):
         repeated_path = "/tmp/" + ("portrait_round_v1/" * 18) + "artifact.json"
         repeated_block = (
             "portrait_round_v1 Slack 전달 완료: 이미지 4개 첨부\n"
@@ -3875,13 +3875,48 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
             exit_reason="completed",
         )
 
-        lines = [line for line in frame.splitlines() if line.strip()]
-        self.assertLessEqual(len(lines), 20)
         self.assertIn("[WORKER RESULT: Eclipse]", frame)
         self.assertIn("portrait_round_v1 Slack 전달 완료: 이미지 4개 첨부", frame)
-        self.assertLessEqual(frame.count("NAS Hook: PASS"), 2)
-        self.assertLessEqual(frame.count("provenance: PASS"), 2)
-        self.assertNotIn(repeated_path * 2, frame)
+        self.assertEqual(frame.count("NAS Hook: PASS"), 3)
+        self.assertEqual(frame.count("provenance: PASS"), 3)
+        self.assertNotIn("lines omitted", frame)
+
+    def test_specialist_result_frame_preserves_15_line_summary_after_wrapping(self):
+        summary = "\n".join(
+            ["[OMISSION_TRACE_TEST]"]
+            + [f"line {idx:02d}" for idx in range(1, 16)]
+            + ["[/OMISSION_TRACE_TEST]"]
+        )
+
+        frame = _format_specialist_result_frame(
+            "Eclipse",
+            status="completed",
+            task_type="general",
+            summary=summary,
+            exit_reason="completed",
+        )
+
+        self.assertIn("[WORKER RESULT: Eclipse]", frame)
+        for idx in range(1, 16):
+            self.assertIn(f"line {idx:02d}", frame)
+        self.assertIn("[/OMISSION_TRACE_TEST]", frame)
+        self.assertNotIn("lines omitted", frame)
+
+    def test_specialist_result_frame_preserves_30_line_worker_body(self):
+        summary = "\n".join(f"worker body line {idx:02d}" for idx in range(1, 31))
+
+        frame = _format_specialist_result_frame(
+            "Eclipse",
+            status="completed",
+            task_type="general",
+            summary=summary,
+            exit_reason="completed",
+        )
+
+        self.assertIn("[WORKER RESULT: Eclipse]", frame)
+        for idx in range(1, 31):
+            self.assertIn(f"worker body line {idx:02d}", frame)
+        self.assertNotIn("lines omitted", frame)
 
     def test_specialist_result_frame_does_not_compact_evaluation_reports(self):
         summary = "\n".join(
