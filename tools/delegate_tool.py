@@ -1139,6 +1139,8 @@ def _format_specialist_frame(
     worker_label: Optional[str],
     phase: str,
     body: Optional[str] = None,
+    *,
+    relay_label: Optional[str] = None,
 ) -> str:
     """Format the shared start/result frame for specialist subagents.
 
@@ -1150,8 +1152,17 @@ def _format_specialist_frame(
         return body_text
 
     if phase == "start":
-        header = f"[WORKER: {worker_label}]"
-        intro = f"{worker_label}가 해당 작업을 수행합니다."
+        relay = str(relay_label or "").strip()
+        if relay:
+            header = f"[RELAY: {relay}]"
+            intro = (
+                f"{relay}가 {worker_label} 작업 결과를 중계합니다."
+                if worker_label
+                else f"{relay}가 작업 결과를 중계합니다."
+            )
+        else:
+            header = f"[WORKER: {worker_label}]"
+            intro = f"{worker_label}가 해당 작업을 수행합니다."
     else:
         header = f"[WORKER RESULT: {worker_label}]"
         intro = f"{worker_label}가 작업을 완료했습니다."
@@ -1404,7 +1415,50 @@ def _normalize_delegate_follow_up(follow_up: Any) -> Optional[str]:
     return text
 
 
+_SPECIALIST_RESULT_MAX_LINES = 20
+_SPECIALIST_RESULT_MAX_LINE_CHARS = 240
+_SPECIALIST_RESULT_MAX_CHARS = 2000
+
+
+def _compact_specialist_result_frame_text(text: str) -> str:
+    """Keep specialist result frames short and deduplicated.
+
+    Result frames can balloon when a child worker includes long artifact,
+    provenance, or status blocks. This helper collapses repeated blocks and
+    caps the rendered frame so the parent turn doesn't inherit an oversized
+    delivery summary.
+    """
+    if not text:
+        return text
+
+    blocks: List[str] = []
+    seen_blocks: set[str] = set()
+    for block in re.split(r"\n\s*\n", text.strip()):
+        cleaned = block.strip()
+        if not cleaned:
+            continue
+        normalized = re.sub(r"\s+", " ", cleaned).casefold()
+        if normalized in seen_blocks:
+            continue
+        seen_blocks.add(normalized)
+        blocks.append(cleaned)
+
+    compacted = "\n\n".join(blocks).strip()
+    if not compacted:
+        return compacted
+
+    lines = [line.rstrip() for line in compacted.splitlines() if line.strip()]
+    if len(compacted) <= _SPECIALIST_RESULT_MAX_CHARS and len(lines) <= _SPECIALIST_RESULT_MAX_LINES:
+        return compacted
+
+    clipped = [line[:_SPECIALIST_RESULT_MAX_LINE_CHARS].rstrip() for line in lines[:_SPECIALIST_RESULT_MAX_LINES]]
+    if len(lines) > _SPECIALIST_RESULT_MAX_LINES:
+        clipped.append(f"... ({len(lines) - _SPECIALIST_RESULT_MAX_LINES} lines omitted)")
+    return "\n".join(clipped)
+
+
 def _format_specialist_result_frame(
+
     worker_label: Optional[str],
     *,
     status: Optional[str] = None,
@@ -1517,7 +1571,7 @@ def _format_specialist_result_frame(
     parts = [f"[WORKER RESULT: {label}]", "", intro]
     if sections:
         parts.extend(["", "\n\n".join(sections)])
-    return "\n".join(parts)
+    return _compact_specialist_result_frame_text("\n".join(parts))
 
 
 def _infer_specialist_profile(*texts: Optional[str]) -> Optional[str]:
@@ -1757,6 +1811,7 @@ def _build_child_progress_callback(
     model: Optional[str] = None,
     toolsets: Optional[List[str]] = None,
     specialist_worker_label: Optional[str] = None,
+    relay_worker_label: Optional[str] = None,
 ) -> Optional[callable]:
     """Build a callback that relays child agent tool calls to the parent display.
 
@@ -1806,6 +1861,8 @@ def _build_child_progress_callback(
             kw["toolsets"] = list(toolsets)
         if specialist_worker_label is not None:
             kw["worker_label"] = specialist_worker_label
+        if relay_worker_label is not None:
+            kw["relay_worker_label"] = relay_worker_label
         kw["tool_count"] = _tool_count[0]
         return kw
 
@@ -1830,6 +1887,7 @@ def _build_child_progress_callback(
             start_preview = _format_specialist_frame(
                 specialist_worker_label,
                 "start",
+                relay_label=relay_worker_label,
             )
             if spinner and start_preview:
                 short = (
@@ -2145,6 +2203,14 @@ def _build_child_agent(
     # Resolve the child's effective model early so it can ride on every event.
     effective_model_for_cb = model or getattr(parent_agent, "model", None)
     specialist_worker_label = _resolve_specialist_worker_label(profile)
+    relay_worker_label = None
+    for attr_name in ("_relay_worker_label", "relay_worker_label", "display_name", "name"):
+        candidate = getattr(parent_agent, attr_name, None)
+        if isinstance(candidate, str):
+            candidate = candidate.strip()
+        if candidate:
+            relay_worker_label = str(candidate).strip()
+            break
 
     # Build progress callback to relay tool calls to parent display.
     # Identity kwargs thread the subagent_id through every emitted event so the
@@ -2160,6 +2226,7 @@ def _build_child_agent(
         model=effective_model_for_cb,
         toolsets=child_toolsets,
         specialist_worker_label=specialist_worker_label,
+        relay_worker_label=relay_worker_label,
     )
 
     # Each subagent gets its own iteration budget capped at max_iterations
@@ -2560,12 +2627,12 @@ def _run_single_child(
     _stale_count = [0]
 
     def _heartbeat_loop():
-        while not _heartbeat_stop.wait(_HEARTBEAT_INTERVAL):
+        def _touch_parent_activity() -> bool:
             if parent_agent is None:
-                continue
+                return False
             touch = getattr(parent_agent, "_touch_activity", None)
             if not touch:
-                continue
+                return False
             # Pull detail from the child's own activity tracker
             desc = f"delegate_task: subagent {task_index} working"
             try:
@@ -2607,7 +2674,7 @@ def _run_single_child(
                         _stale_count[0],
                         child_tool or "<none>",
                     )
-                    break  # stop touching parent, let gateway timeout fire
+                    return False  # stop touching parent, let gateway timeout fire
 
                 if child_tool:
                     desc = (
@@ -2627,6 +2694,15 @@ def _run_single_child(
                 touch(desc)
             except Exception:
                 pass
+            return True
+
+        # Emit an immediate heartbeat so short-lived delegated work still
+        # refreshes the parent activity trail before the first interval elapses.
+        if not _touch_parent_activity():
+            return
+        while not _heartbeat_stop.wait(_HEARTBEAT_INTERVAL):
+            if not _touch_parent_activity():
+                break
 
     _heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
 

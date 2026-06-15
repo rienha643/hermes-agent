@@ -48,6 +48,7 @@ from tools.tool_result_storage import (
     maybe_persist_tool_result,
     enforce_turn_budget,
 )
+from tools.budget_config import DEFAULT_BUDGET
 
 logger = logging.getLogger(__name__)
 
@@ -455,7 +456,22 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     num_tools = len(parsed_calls)
     if num_tools > 0:
         turn_tool_msgs = messages[-num_tools:]
+        turn_tool_output_chars = sum(
+            len(msg.get("content", "")) if isinstance(msg.get("content", ""), str) else len(str(msg.get("content", "")))
+            for msg in turn_tool_msgs
+        )
         enforce_turn_budget(turn_tool_msgs, env=get_active_env(effective_task_id))
+        try:
+            session_id = getattr(agent, "session_id", "") or ""
+        except Exception:
+            session_id = ""
+        logger.info(
+            "tool turn budget: session_id=%s tool_output_chars=%d turn_budget=%d tool_count=%d",
+            session_id,
+            turn_tool_output_chars,
+            DEFAULT_BUDGET.turn_budget,
+            num_tools,
+        )
 
     # ── /steer injection ──────────────────────────────────────────────
     # Append any pending user steer text to the last tool result so the

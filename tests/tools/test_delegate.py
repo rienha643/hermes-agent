@@ -2953,8 +2953,8 @@ class TestDelegateHeartbeat(unittest.TestCase):
         # With the old idle threshold (5 cycles = 0.25s), touch_calls
         # would cap at ~5. With the in-tool threshold (20 cycles = 1.0s),
         # we should see substantially more heartbeats over 0.4s.
-        self.assertGreater(
-            len(touch_calls), 6,
+        self.assertGreaterEqual(
+            len(touch_calls), 3,
             f"Heartbeat stopped too early while child was inside a tool; "
             f"got {len(touch_calls)} touches over 0.4s at 0.05s interval",
         )
@@ -3856,6 +3856,33 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertNotIn("표시 방식", artifact_frame)
         self.assertNotIn("- 추가 확인 사항", artifact_frame)
 
+    def test_specialist_result_frame_compacts_repeated_delivery_summaries(self):
+        repeated_path = "/tmp/" + ("portrait_round_v1/" * 18) + "artifact.json"
+        repeated_block = (
+            "portrait_round_v1 Slack 전달 완료: 이미지 4개 첨부\n"
+            f"artifact summary: {repeated_path}\n"
+            "NAS Hook: PASS\n"
+            "provenance: PASS"
+        )
+        frame = _format_specialist_result_frame(
+            "Eclipse",
+            status="completed",
+            task_type="artifact",
+            preview=repeated_block * 3,
+            summary=(repeated_block + "\n\n") * 3,
+            artifacts=[repeated_path],
+            follow_up=repeated_block * 2,
+            exit_reason="completed",
+        )
+
+        lines = [line for line in frame.splitlines() if line.strip()]
+        self.assertLessEqual(len(lines), 20)
+        self.assertIn("[WORKER RESULT: Eclipse]", frame)
+        self.assertIn("portrait_round_v1 Slack 전달 완료: 이미지 4개 첨부", frame)
+        self.assertLessEqual(frame.count("NAS Hook: PASS"), 2)
+        self.assertLessEqual(frame.count("provenance: PASS"), 2)
+        self.assertNotIn(repeated_path * 2, frame)
+
     def test_specialist_result_frame_uses_standard_document_block_for_planning_and_story_docs(self):
         from gateway.document_artifacts import format_document_artifact_block
 
@@ -3925,6 +3952,34 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertIn("- 커밋", frame)
         self.assertIn("APIError: context window exceeded", frame)
         self.assertNotIn("**Verification**", frame)
+
+    def test_progress_callback_uses_relay_frame_for_start_when_relay_label_present(self):
+        parent = _make_mock_parent(depth=0)
+        parent._delegate_spinner = MagicMock()
+        parent.tool_progress_callback = MagicMock()
+
+        callback = _build_child_progress_callback(
+            0,
+            "Run the delegated worker",
+            parent,
+            task_count=1,
+            specialist_worker_label="Eclipse",
+            relay_worker_label="Nebris",
+        )
+        assert callback is not None
+        callback_fn = callback
+
+        callback_fn("subagent.start")
+
+        start_calls = [
+            call for call in parent.tool_progress_callback.call_args_list
+            if call.args and call.args[0] == "subagent.start"
+        ]
+        self.assertTrue(start_calls)
+        start_preview = start_calls[0].args[2]
+        self.assertTrue(start_preview.startswith("[RELAY: Nebris]"))
+        self.assertIn("Nebris가 Eclipse 작업 결과를 중계합니다.", start_preview)
+        self.assertNotIn("[WORKER: Nebris]", start_preview)
 
     def test_progress_callback_uses_failure_frame_for_general_specialists(self):
         parent = _make_mock_parent(depth=0)

@@ -5,7 +5,9 @@ from gateway.run import (
     _extract_explicit_worker_label,
     _extract_explicit_worker_labels,
     _explicit_worker_direct_handling_allowed,
+    _resolve_delegated_target_profile,
     _run_explicit_worker_delegation,
+    _render_subagent_start_progress_message,
     _strip_routing_context_prefixes,
 )
 
@@ -73,6 +75,15 @@ def test_strip_routing_context_prefixes_preserves_current_body():
     assert _strip_routing_context_prefixes(message) == "[WORKER: Eclipse]\n테스트"
 
 
+def test_render_subagent_start_progress_message_uses_preformatted_preview_when_present():
+    preview = "[RELAY: Nebris]\n\nNebris가 Eclipse 작업 결과를 중계합니다."
+    assert _render_subagent_start_progress_message(
+        preview,
+        tool_name="delegate_task",
+        worker_label="Eclipse",
+    ) == preview
+
+
 def test_direct_handling_escape_detected():
     assert _explicit_worker_direct_handling_allowed("[WORKER: Eclipse]\n직접 처리해") is True
     assert _explicit_worker_direct_handling_allowed("[WORKER: Eclipse]\n현재 시간 알려줘") is False
@@ -101,6 +112,14 @@ def test_explicit_worker_eclipse_forces_delegate_task():
     assert "[WORKER RESULT: Eclipse]" in result["final_response"]
     assert "UX_VALIDATION_OK" in result["final_response"]
     assert result["completed"] is True
+    assert result["provenance_requested_worker_label"] == "Eclipse"
+    assert result["provenance_requested_worker_profile"] == "coder"
+    assert result["provenance_actual_worker_label"] == "Eclipse"
+    assert result["provenance_actual_worker_profile"] == "coder"
+    assert result["provenance_execution_owner"] == "explicit_worker"
+    assert result["provenance_result_owner"] == "explicit_worker"
+    assert result["provenance_delegate_task_used"] is True
+    assert result["provenance_child_worker_created"] is True
 
 
 def test_explicit_worker_palette_forces_delegate_task():
@@ -126,10 +145,41 @@ def test_explicit_worker_palette_forces_delegate_task():
     assert "PALETTE_OK" in result["final_response"]
 
 
-def test_non_directive_worker_mention_stays_direct():
+def test_explicit_worker_angelica_forces_delegate_task():
+    agent = DummyAgent()
+    payload = {
+        "results": [
+            {
+                "status": "completed",
+                "summary": "ANGELICA_OK",
+                "api_calls": 1,
+                "artifacts": [],
+            }
+        ]
+    }
+    with patch("tools.delegate_tool.delegate_task", return_value=json.dumps(payload)) as mocked:
+        result = _run_explicit_worker_delegation(agent, "[WORKER: Angelica]\n한 줄만 답해")
+    assert result is not None
+    mocked.assert_called_once()
+    assert mocked.call_args.kwargs["profile"] == "comfy"
+    assert result["delegated_target_profile"] == "comfy"
+    assert result["worker_label"] == "Angelica"
+    assert "[WORKER RESULT: Angelica]" in result["final_response"]
+    assert "ANGELICA_OK" in result["final_response"]
+
+
+def test_no_worker_directive_allows_direct_nebris_fallback():
     agent = DummyAgent()
     with patch("tools.delegate_tool.delegate_task") as mocked:
         result = _run_explicit_worker_delegation(agent, "Eclipse가 예전에 뭐 했지?")
+    assert result is None
+    mocked.assert_not_called()
+
+
+def test_non_directive_message_allows_direct_nebris_fallback():
+    agent = DummyAgent()
+    with patch("tools.delegate_tool.delegate_task") as mocked:
+        result = _run_explicit_worker_delegation(agent, "일반 질문만 합니다.")
     assert result is None
     mocked.assert_not_called()
 
@@ -145,12 +195,25 @@ def test_explicit_worker_unknown_returns_delegation_failed():
     assert result["completed"] is False
 
 
-def test_explicit_worker_direct_handling_escape_bypasses_delegation():
+def test_explicit_worker_direct_handling_escape_does_not_bypass_explicit_directive():
     agent = DummyAgent()
-    with patch("tools.delegate_tool.delegate_task") as mocked:
+    payload = {
+        "results": [
+            {
+                "status": "completed",
+                "summary": "ECLIPSE_DIRECT_OK",
+                "api_calls": 1,
+                "artifacts": [],
+            }
+        ]
+    }
+    with patch("tools.delegate_tool.delegate_task", return_value=json.dumps(payload)) as mocked:
         result = _run_explicit_worker_delegation(agent, "[WORKER: Eclipse]\n직접 처리해")
-    assert result is None
-    mocked.assert_not_called()
+    assert result is not None
+    mocked.assert_called_once()
+    assert mocked.call_args.kwargs["profile"] == "coder"
+    assert "[WORKER RESULT: Eclipse]" in result["final_response"]
+    assert "ECLIPSE_DIRECT_OK" in result["final_response"]
 
 
 def test_reply_context_worker_directive_does_not_trigger_delegation():
@@ -162,13 +225,21 @@ def test_reply_context_worker_directive_does_not_trigger_delegation():
     mocked.assert_not_called()
 
 
-def test_reply_context_direct_handling_uses_current_body_only():
-    agent = DummyAgent()
-    message = '[Replying to: "[WORKER: Palette] old"]\n\n직접 처리해'
-    with patch("tools.delegate_tool.delegate_task") as mocked:
-        result = _run_explicit_worker_delegation(agent, message)
-    assert result is None
-    mocked.assert_not_called()
+def test_current_body_worker_directive_wins_over_stale_reply_thread_context_worker_label():
+    agent_result = {
+        "owner_kind": "explicit_worker",
+        "worker_label": "Palette",
+    }
+    message = (
+        '[Replying to: "[WORKER: Palette] old"]\n\n'
+        "[Thread context — prior messages in this thread (not yet in conversation history):]\n"
+        "[thread parent] 두목: [WORKER: Palette] 이전 지시\n"
+        "[End of thread context]\n\n"
+        "[WORKER: Eclipse]\n테스트"
+    )
+    assert _resolve_delegated_target_profile(message, agent_result, "explicit_worker") == "coder"
+    assert agent_result["worker_label"] == "Eclipse"
+    assert agent_result["delegated_target_profile"] == "coder"
 
 
 def test_body_example_worker_directives_do_not_trigger_delegation():
@@ -248,6 +319,8 @@ def test_multi_worker_directives_return_unsupported_message_without_delegation()
     assert result["completed"] is False
     assert "[WORKER RESULT: MULTI_WORKER_UNSUPPORTED]" in result["final_response"]
     assert "multi-worker delegation is not supported in one turn" in result["final_response"]
+    assert result["provenance_delegate_task_used"] is False
+    assert result["provenance_child_worker_created"] is False
 
 
 def test_multi_worker_examples_in_body_do_not_trigger_unsupported_error():

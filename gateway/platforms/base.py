@@ -35,6 +35,58 @@ _AUDIO_EXTS = frozenset({'.ogg', '.opus', '.mp3', '.wav', '.m4a', '.flac'})
 _TELEGRAM_AUDIO_ATTACHMENT_EXTS = frozenset({'.mp3', '.m4a'})
 _TELEGRAM_VOICE_EXTS = frozenset({'.ogg', '.opus'})
 
+_POST_UPLOAD_REPORT_MAX_LINES = 12
+_POST_UPLOAD_REPORT_MAX_LINE_CHARS = 240
+_POST_UPLOAD_REPORT_MAX_CHARS = 2000
+_POST_UPLOAD_REPORT_MARKERS = (
+    "slack upload",
+    "slack 전달 완료",
+    "nas hook",
+    "artifact summary",
+    "provenance",
+    "delivery complete",
+    "delivery partial",
+    "delivery failed",
+)
+
+
+def _compact_post_upload_reporting(text: str) -> str:
+    """Keep post-upload completion reporting short and deduplicated.
+
+    The delivery pipeline sometimes accumulates a final completion summary plus
+    artifact/provenance/NAS sub-sections into one response body. That can push
+    the message past platform output budgets and cause truncation. This helper
+    trims repeated blocks and collapses completion-style reports to a small,
+    stable summary.
+    """
+    if not text:
+        return text
+
+    paragraphs: list[str] = []
+    seen_blocks: set[str] = set()
+    for block in re.split(r"\n\s*\n", text.strip()):
+        cleaned = block.strip()
+        if not cleaned:
+            continue
+        normalized = re.sub(r"\s+", " ", cleaned).strip().casefold()
+        if normalized in seen_blocks:
+            continue
+        seen_blocks.add(normalized)
+        paragraphs.append(cleaned)
+
+    compacted = "\n\n".join(paragraphs).strip()
+    if not compacted:
+        return compacted
+
+    if len(compacted) <= _POST_UPLOAD_REPORT_MAX_CHARS and len(compacted.splitlines()) <= _POST_UPLOAD_REPORT_MAX_LINES:
+        return compacted
+
+    lines = [line.rstrip() for line in compacted.splitlines() if line.strip()]
+    clipped = [line[:_POST_UPLOAD_REPORT_MAX_LINE_CHARS].rstrip() for line in lines[:_POST_UPLOAD_REPORT_MAX_LINES]]
+    if len(lines) > _POST_UPLOAD_REPORT_MAX_LINES:
+        clipped.append(f"... ({len(lines) - _POST_UPLOAD_REPORT_MAX_LINES} lines omitted)")
+    return "\n".join(clipped)
+
 
 def _platform_name(platform) -> str:
     """Normalize a Platform enum / raw string into a lowercase name."""
@@ -4060,6 +4112,8 @@ class BasePlatformAdapter(ABC):
                 if artifact_reports:
                     artifact_section = "\n\n".join(artifact_reports)
                     text_content = f"{text_content}\n\n{artifact_section}".strip() if text_content else artifact_section
+
+                text_content = _compact_post_upload_reporting(text_content)
 
                 # Auto-TTS: if voice message, generate audio FIRST (before sending text)
                 # Gated via ``_should_auto_tts_for_chat``: fires when the chat has

@@ -284,11 +284,41 @@ def _strip_explicit_worker_directives(message: Any) -> Any:
     return cleaned or cleaned_message.strip() or message
 
 
+def _build_explicit_worker_provenance(
+    *,
+    requested_worker_label: str,
+    requested_worker_profile: Optional[str],
+    delegate_task_used: bool,
+    child_worker_created: bool,
+    actual_worker_label: Optional[str] = None,
+    actual_worker_profile: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return provenance fields for explicit worker delegation results."""
+    actual_label = str(actual_worker_label or requested_worker_label or "").strip()
+    actual_profile = str(actual_worker_profile or requested_worker_profile or "").strip()
+    requested_profile = str(requested_worker_profile or "").strip()
+    return {
+        "provenance_requested_worker_label": str(requested_worker_label or "").strip(),
+        "provenance_requested_worker_profile": requested_profile,
+        "provenance_actual_worker_label": actual_label,
+        "provenance_actual_worker_profile": actual_profile,
+        "provenance_execution_owner": "explicit_worker",
+        "provenance_result_owner": "explicit_worker",
+        "provenance_delegate_task_used": bool(delegate_task_used),
+        "provenance_child_worker_created": bool(child_worker_created),
+    }
+
+
 def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[str, Any]]:
     sanitized_message = _strip_routing_context_prefixes(message)
     worker_labels = _extract_explicit_worker_labels(sanitized_message)
-    if not worker_labels or _explicit_worker_direct_handling_allowed(message):
+    if not worker_labels:
         return None
+    if _explicit_worker_direct_handling_allowed(message):
+        logger.warning(
+            "Explicit worker directive overrides direct-handling escape; forcing delegation for worker_labels=%s",
+            worker_labels,
+        )
     if len(worker_labels) > 1:
         final = (
             "[WORKER RESULT: MULTI_WORKER_UNSUPPORTED]\n\n"
@@ -305,6 +335,14 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "owner_kind": "explicit_worker",
             "worker_label": ",".join(worker_labels),
             "tools": [],
+            **_build_explicit_worker_provenance(
+                requested_worker_label=",".join(worker_labels),
+                requested_worker_profile="",
+                delegate_task_used=False,
+                child_worker_created=False,
+                actual_worker_label=",".join(worker_labels),
+                actual_worker_profile="",
+            ),
         }
 
     worker_label = worker_labels[0]
@@ -325,6 +363,14 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "worker_label": worker_label,
             "delegated_target_profile": None,
             "tools": [],
+            **_build_explicit_worker_provenance(
+                requested_worker_label=worker_label,
+                requested_worker_profile="",
+                delegate_task_used=False,
+                child_worker_created=False,
+                actual_worker_label=worker_label,
+                actual_worker_profile="",
+            ),
         }
 
     delegated_goal = _strip_explicit_worker_directives(sanitized_message)
@@ -344,6 +390,14 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "worker_label": worker_label,
             "delegated_target_profile": mapped_profile,
             "tools": [],
+            **_build_explicit_worker_provenance(
+                requested_worker_label=worker_label,
+                requested_worker_profile=mapped_profile,
+                delegate_task_used=True,
+                child_worker_created=True,
+                actual_worker_label=worker_label,
+                actual_worker_profile=mapped_profile,
+            ),
         }
 
     if isinstance(payload, dict) and payload.get("error"):
@@ -359,6 +413,14 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "worker_label": worker_label,
             "delegated_target_profile": mapped_profile,
             "tools": [],
+            **_build_explicit_worker_provenance(
+                requested_worker_label=worker_label,
+                requested_worker_profile=mapped_profile,
+                delegate_task_used=True,
+                child_worker_created=True,
+                actual_worker_label=worker_label,
+                actual_worker_profile=mapped_profile,
+            ),
         }
 
     first = None
@@ -379,6 +441,14 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
             "worker_label": worker_label,
             "delegated_target_profile": mapped_profile,
             "tools": [],
+            **_build_explicit_worker_provenance(
+                requested_worker_label=worker_label,
+                requested_worker_profile=mapped_profile,
+                delegate_task_used=True,
+                child_worker_created=True,
+                actual_worker_label=worker_label,
+                actual_worker_profile=mapped_profile,
+            ),
         }
 
     summary = first.get("summary") or payload.get("summary") or ""
@@ -422,6 +492,14 @@ def _run_explicit_worker_delegation(agent: Any, message: Any) -> Optional[Dict[s
         "worker_label": worker_label,
         "fresh_execution_evidence": fresh_execution_evidence,
         "tools": [],
+        **_build_explicit_worker_provenance(
+            requested_worker_label=worker_label,
+            requested_worker_profile=mapped_profile,
+            delegate_task_used=True,
+            child_worker_created=True,
+            actual_worker_label=worker_label,
+            actual_worker_profile=mapped_profile,
+        ),
     }
 
 
@@ -459,19 +537,54 @@ def _resolve_delegated_target_profile(
     if kind != "explicit_worker":
         return ""
 
-    worker_label = str(agent_result.get("worker_label") or "").strip()
-    if not worker_label and isinstance(message_text, str):
-        worker_label = _extract_explicit_worker_label(message_text) or ""
+    current_worker_label = ""
+    if isinstance(message_text, str):
+        current_worker_label = _extract_explicit_worker_label(message_text) or ""
+    if current_worker_label:
+        inferred = _GATEWAY_WORKER_PROFILE_MAP.get(current_worker_label)
+        if inferred:
+            agent_result["delegated_target_profile"] = inferred
+            agent_result["worker_label"] = current_worker_label
+            return inferred
+        return ""
 
+    worker_label = str(agent_result.get("worker_label") or "").strip()
     if worker_label:
         inferred = _GATEWAY_WORKER_PROFILE_MAP.get(worker_label)
         if inferred:
             agent_result["delegated_target_profile"] = inferred
-            if not agent_result.get("worker_label"):
-                agent_result["worker_label"] = worker_label
             return inferred
 
     return ""
+
+
+_PREFORMATTED_SUBAGENT_PROGRESS_RE = re.compile(
+    r"^\s*(?:\[WORKER:\s*[^\]]+\]|\[WORKER RESULT:\s*[^\]]+\]|\[RELAY:\s*[^\]]+\]|\[작업\s*결과:\s*[^\]]+\])",
+    re.IGNORECASE,
+)
+
+
+def _render_subagent_start_progress_message(
+    preview: Optional[str],
+    *,
+    tool_name: Optional[str] = None,
+    worker_label: Optional[str] = None,
+) -> str:
+    """Render a delegated-worker start bubble without leaking raw task text.
+
+    Preformatted worker/relay/result frames are preserved as-is so upstream
+    relay/controller messages can remain explicit.  Otherwise, prefer the real
+    child worker label over the relay/controller label and do not echo the raw
+    preview body into the user-facing progress stream.
+    """
+    preview_text = str(preview or "").strip()
+    if preview_text and _PREFORMATTED_SUBAGENT_PROGRESS_RE.match(preview_text):
+        return preview_text
+
+    resolved_worker_label = str(worker_label or tool_name or "").strip()
+    if resolved_worker_label:
+        return f"[WORKER: {resolved_worker_label}]\n\n{resolved_worker_label}가 해당 작업을 수행합니다."
+    return preview_text or "작업을 시작합니다."
 
 
 def _resolve_active_profile_for_attribution() -> str:
@@ -650,6 +763,62 @@ def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
     if _looks_like_gateway_provider_error(redacted):
         return _gateway_provider_error_reply(redacted)
     return redacted
+
+
+_GATEWAY_DELIVERY_SUMMARY_MARKERS = (
+    "[worker result:",
+    "slack 전달 완료",
+    "slack upload",
+    "nas hook",
+    "artifact summary",
+    "provenance",
+    "delivery complete",
+    "delivery partial",
+    "delivery failed",
+)
+_GATEWAY_DELIVERY_SUMMARY_MAX_LINES = 20
+_GATEWAY_DELIVERY_SUMMARY_MAX_LINE_CHARS = 240
+_GATEWAY_DELIVERY_SUMMARY_MAX_CHARS = 2000
+
+
+def _looks_like_gateway_delivery_summary(text: str) -> bool:
+    body = str(text or "").casefold()
+    return any(marker in body for marker in _GATEWAY_DELIVERY_SUMMARY_MARKERS)
+
+
+def _compact_gateway_final_response(text: str) -> tuple[str, bool]:
+    """Collapse repeated summary/delivery blocks and keep a small response budget."""
+    if not text:
+        return text, False
+
+    original = str(text)
+    blocks: list[str] = []
+    seen: set[str] = set()
+    for block in re.split(r"\n\s*\n", original.strip()):
+        cleaned = block.strip()
+        if not cleaned:
+            continue
+        normalized = re.sub(r"\s+", " ", cleaned).casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        blocks.append(cleaned)
+
+    compacted = "\n\n".join(blocks).strip()
+    if not compacted:
+        return compacted, compacted != original
+
+    lines = [line.rstrip() for line in compacted.splitlines() if line.strip()]
+    if len(compacted) <= _GATEWAY_DELIVERY_SUMMARY_MAX_CHARS and len(lines) <= _GATEWAY_DELIVERY_SUMMARY_MAX_LINES:
+        return compacted, compacted != original
+
+    clipped = [line[:_GATEWAY_DELIVERY_SUMMARY_MAX_LINE_CHARS].rstrip() for line in lines[:_GATEWAY_DELIVERY_SUMMARY_MAX_LINES]]
+    if len(lines) > _GATEWAY_DELIVERY_SUMMARY_MAX_LINES:
+        clipped.append(f"... ({len(lines) - _GATEWAY_DELIVERY_SUMMARY_MAX_LINES} lines omitted)")
+    result = "\n".join(clipped).strip()
+    if len(result) > _GATEWAY_DELIVERY_SUMMARY_MAX_CHARS:
+        result = result[:_GATEWAY_DELIVERY_SUMMARY_MAX_CHARS].rstrip() + "\n... [truncated]"
+    return result, result != original
 
 
 def _prepare_gateway_status_message(platform: Any, event_type: str, message: str) -> Optional[str]:
@@ -9801,6 +9970,7 @@ class GatewayRunner:
                 agent_result, response, history_len=len(history),
             )
             response = _sanitize_gateway_final_response(source.platform, response)
+            response, _truncated_guard_applied = _compact_gateway_final_response(response)
             _history_len_for_turn = agent_result.get("history_offset", len(history))
             try:
                 _structured_attachment_paths, _structured_attachment_debug = (
@@ -9883,6 +10053,26 @@ class GatewayRunner:
                 _footer_line = ""
             if _footer_line and response and not agent_result.get("already_sent"):
                 response = f"{response}\n\n{_footer_line}"
+
+            _tool_output_chars = 0
+            for _msg in agent_messages:
+                if not isinstance(_msg, dict) or _msg.get("role") != "tool":
+                    continue
+                _content = _msg.get("content", "")
+                _tool_output_chars += len(_content) if isinstance(_content, str) else len(str(_content))
+            _resp_len = len(response)
+            _delivery_summary_chars = _resp_len if _looks_like_gateway_delivery_summary(response) else 0
+            _attachment_count = len(_structured_attachment_paths)
+            logger.info(
+                "turn budget: session_id=%s run_generation=%s tool_output_chars=%d final_response_chars=%d delivery_summary_chars=%d attachment_count=%d truncated_guard_applied=%s",
+                session_entry.session_id,
+                run_generation,
+                _tool_output_chars,
+                _resp_len,
+                _delivery_summary_chars,
+                _attachment_count,
+                _truncated_guard_applied,
+            )
 
             # Emit agent:end hook
             await self.hooks.emit("agent:end", {
@@ -17120,13 +17310,11 @@ class GatewayRunner:
             last_tool[0] = tool_name
             
             if event_type == "subagent.start":
-                worker_label = str(
-                    kwargs.get("worker_label") or tool_name or ""
-                ).strip()
-                if worker_label:
-                    msg = f"[WORKER: {worker_label}]\n\n{worker_label}가 해당 작업을 수행합니다."
-                else:
-                    msg = "작업을 시작합니다."
+                msg = _render_subagent_start_progress_message(
+                    preview,
+                    tool_name=tool_name,
+                    worker_label=kwargs.get("worker_label"),
+                )
                 progress_queue.put(msg)
                 return
 

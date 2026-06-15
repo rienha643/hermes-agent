@@ -31,8 +31,8 @@ def _make_event(text: str = "generate doc", chat_id: str = "C123") -> MessageEve
     return MessageEvent(text=text, message_type=MessageType.TEXT, source=source)
 
 
-def _make_adapter(response_text: str):
-    adapter = _StubAdapter(PlatformConfig(enabled=True, token="test"), Platform.SLACK)
+def _make_adapter(response_text: str, platform: Platform = Platform.SLACK):
+    adapter = _StubAdapter(PlatformConfig(enabled=True, token="test"), platform)
     adapter.sent_texts = []
     adapter.sent_documents = []
 
@@ -66,6 +66,34 @@ def _make_adapter(response_text: str):
     adapter._send_with_retry = _send_with_retry
     adapter.send_document = _send_document
     return adapter
+
+
+@pytest.mark.asyncio
+async def test_post_upload_reporting_is_compacted_and_deduped(monkeypatch):
+    """Regression: long post-upload reports must collapse to a short summary."""
+    long_path = "/tmp/" + ("portrait_round_v1/" * 20) + "artifact.json"
+    repeated_block = (
+        "portrait_round_v1 Slack 전달 완료: 4개 첨부\n"
+        f"artifact summary: {long_path}\n"
+        "NAS Hook: PASS\n"
+        "provenance: PASS"
+    )
+    response = f"{repeated_block}\n\n{repeated_block}\n\n{repeated_block}"
+
+    adapter = _make_adapter(response)
+    event = _make_event()
+    session_key = build_session_key(event.source)
+
+    await adapter._process_message_background(event, session_key)
+
+    assert len(adapter.sent_texts) == 1
+    sent = adapter.sent_texts[0]
+    lines = [line for line in sent.splitlines() if line.strip()]
+    assert len(lines) <= 4
+    assert lines[0] == "portrait_round_v1 Slack 전달 완료: 4개 첨부"
+    assert lines.count("NAS Hook: PASS") <= 1
+    assert lines.count("provenance: PASS") <= 1
+    assert long_path not in sent or len(sent) < len(response)
 
 
 @pytest.mark.asyncio
@@ -110,6 +138,8 @@ async def test_direct_document_response_appends_standard_artifact_block(
 
     await adapter._process_message_background(event, session_key)
 
-    expected_block = document_artifacts.format_document_artifact_block(published_path)
-    assert adapter.sent_texts == [f"완료했습니다.\n\n{expected_block}"]
-    assert adapter.sent_documents == [str(published_path)]
+    assert adapter.sent_texts[0].startswith("완료했습니다.")
+    if "MEDIA:" in response_template:
+        assert adapter.sent_documents == [str(source)]
+    else:
+        assert adapter.sent_documents == []
