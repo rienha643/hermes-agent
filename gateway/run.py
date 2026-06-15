@@ -758,31 +758,71 @@ def _looks_like_gateway_provider_error(text: str) -> bool:
     return bool(_GATEWAY_PROVIDER_ERROR_SHAPE_RE.search(body))
 
 
-def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
-    """Sanitize final gateway replies before sending them to high-noise chats.
+def _sanitize_gemma4_channel_artifacts(text: str) -> str:
+    """Remove Gemma4 PEG channel/thought wrappers while preserving visible text."""
+    if not text:
+        return text
+    body = str(text)
+    if "channel" not in body.casefold():
+        return body
 
-    Telegram is Bob's mobile inbox, so it should receive concise, safe provider
-    failure categories instead of raw HTTP bodies, request IDs, or policy text.
-    Other platforms keep the existing behaviour for now.
+    # Gemma4 local checkpoints can emit a PEG-style private channel before the
+    # answer, for example:
+    #   <|channel>thought\n...private reasoning...\n<channel|>PONG
+    # The answer begins after the closing channel marker.  Keep only the last
+    # post-marker span so repeated/partial thought wrappers do not leak.
+    close_marker = re.compile(r"<\s*channel\|\s*>", re.IGNORECASE)
+    close_matches = list(close_marker.finditer(body))
+    if close_matches:
+        body = body[close_matches[-1].end():]
+
+    # If an unterminated thought-channel prefix remains, treat it like an
+    # unterminated think block and drop it.  This is safer than exposing model
+    # reasoning/channel tokens as user-facing prose.
+    body = re.sub(
+        r"(?is)(?:^|\n)[ \t]*<\s*\|channel\|?\s*>\s*thought\b.*$",
+        "",
+        body,
+    )
+
+    # Remove stray channel tokens / labels that can be left around the visible
+    # answer.  Preserve ordinary content around them.
+    body = re.sub(
+        r"(?is)<\s*\|channel\|?\s*>\s*(?:thought|analysis|commentary|final)?\s*",
+        "",
+        body,
+    )
+    body = close_marker.sub("", body)
+    return body.strip()
+
+
+def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
+    """Sanitize final gateway replies before sending them to chats.
+
+    Gateway final responses are user-facing.  Strip known model-private channel
+    wrappers globally, then keep Telegram's existing provider-error redaction.
     """
     if not text:
         return text
+    redacted = _sanitize_gemma4_channel_artifacts(str(text))
     if _gateway_platform_value(platform) != "telegram":
-        return text
+        return redacted
 
-    redacted = _redact_gateway_user_facing_secrets(str(text))
+    redacted = _redact_gateway_user_facing_secrets(redacted)
     if _looks_like_gateway_provider_error(redacted):
         return _gateway_provider_error_reply(redacted)
     return redacted
 
 
 _GATEWAY_DELIVERY_SUMMARY_MARKERS = (
-    "[worker result:",
     "slack 전달 완료",
     "slack upload",
+    "post-upload",
+    "post upload",
     "nas hook",
     "artifact summary",
     "provenance",
+    "status summary",
     "delivery complete",
     "delivery partial",
     "delivery failed",
@@ -854,10 +894,18 @@ def _split_gateway_evaluation_report_parts(
 
 
 def _compact_gateway_final_response(text: str) -> tuple[str, bool]:
-    """Collapse repeated summary/delivery blocks and keep a small response budget."""
+    """Compact operational delivery summaries only.
+
+    Ordinary assistant final responses must never receive ``... (N lines
+    omitted)`` just because they are long.  The compacting budget is reserved
+    for delivery/provenance/post-upload/status summaries, where repeated blocks
+    are operational noise rather than authored user-facing content.
+    """
     if not text:
         return text, False
     if _looks_like_gateway_evaluation_report(text):
+        return text, False
+    if not _looks_like_gateway_delivery_summary(text):
         return text, False
 
     original = str(text)

@@ -1,9 +1,11 @@
 import pytest
 
 from gateway.platforms.base import _compact_post_upload_reporting
+from gateway.config import Platform
 from gateway.run import (
     _compact_gateway_final_response,
     _looks_like_gateway_delivery_summary,
+    _sanitize_gateway_final_response,
     _split_gateway_evaluation_report_parts,
 )
 
@@ -35,6 +37,42 @@ class TestGatewayTruncationRegression:
         compacted, applied = _compact_gateway_final_response(text)
         assert compacted == text
         assert applied is False
+
+    def test_long_general_final_response_is_not_compacted(self):
+        text = "\n".join(f"general final line {idx:02d}" for idx in range(1, 31))
+
+        compacted, applied = _compact_gateway_final_response(text)
+
+        assert applied is False
+        assert compacted == text
+        assert "lines omitted" not in compacted
+        assert "general final line 30" in compacted
+
+    def test_angelica_style_trace_response_preserves_25_lines(self):
+        text = "\n".join(
+            ["[PROGRESS_STREAM_TRACE]"]
+            + [f"line {idx:02d}" for idx in range(1, 26)]
+            + ["[/PROGRESS_STREAM_TRACE]"]
+        )
+
+        compacted, applied = _compact_gateway_final_response(text)
+
+        assert applied is False
+        assert compacted == text
+        assert "lines omitted" not in compacted
+        assert "line 25" in compacted
+
+    def test_compact_gateway_final_response_preserves_worker_body_without_delivery_markers(self):
+        text = "[WORKER RESULT: Angelica]\n" + "\n".join(
+            f"validation line {idx:02d}" for idx in range(1, 31)
+        )
+
+        compacted, applied = _compact_gateway_final_response(text)
+
+        assert applied is False
+        assert compacted == text
+        assert "lines omitted" not in compacted
+        assert "validation line 30" in compacted
 
     def test_long_portrait_review_is_not_compacted(self):
         sections = [
@@ -95,3 +133,29 @@ class TestGatewayTruncationRegression:
         assert compacted == text
         assert "lines omitted" not in compacted
         assert "점수 근거 39" in compacted
+
+    def test_gemma4_channel_marker_prefix_is_removed_from_final_response(self):
+        text = "<channel|>PONG"
+
+        sanitized = _sanitize_gateway_final_response(Platform.SLACK, text)
+
+        assert sanitized == "PONG"
+
+    def test_gemma4_thought_channel_wrapper_keeps_final_answer_only(self):
+        text = "<|channel>thought\nThe user wants PONG.\n<channel|>ANSWER"
+
+        sanitized = _sanitize_gateway_final_response(Platform.SLACK, text)
+
+        assert sanitized == "ANSWER"
+        assert "The user wants" not in sanitized
+        assert "<|channel" not in sanitized
+        assert "<channel|>" not in sanitized
+
+    def test_gemma4_pipe_channel_thought_artifact_is_removed(self):
+        text = "<|channel|>thought\ninternal reasoning\n<channel|>VISIBLE"
+
+        sanitized = _sanitize_gateway_final_response(Platform.SLACK, text)
+
+        assert sanitized == "VISIBLE"
+        assert "internal reasoning" not in sanitized
+        assert "channel" not in sanitized
