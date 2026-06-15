@@ -38,6 +38,24 @@ _TELEGRAM_VOICE_EXTS = frozenset({'.ogg', '.opus'})
 _POST_UPLOAD_REPORT_MAX_LINES = 12
 _POST_UPLOAD_REPORT_MAX_LINE_CHARS = 240
 _POST_UPLOAD_REPORT_MAX_CHARS = 2000
+_EVALUATION_REPORT_MARKERS = (
+    "checkpoint review",
+    "portrait review",
+    "nsfw-lite review",
+    "nsfw lite review",
+    "full body review",
+    "key visual review",
+    "evaluation report",
+    "scoring report",
+    "main / reserve review",
+    "main/reserve review",
+    "main reserve review",
+)
+
+
+def _looks_like_evaluation_report(text: str) -> bool:
+    body = str(text or "").casefold()
+    return any(marker in body for marker in _EVALUATION_REPORT_MARKERS)
 _POST_UPLOAD_REPORT_MARKERS = (
     "slack upload",
     "slack 전달 완료",
@@ -60,6 +78,8 @@ def _compact_post_upload_reporting(text: str) -> str:
     stable summary.
     """
     if not text:
+        return text
+    if _looks_like_evaluation_report(text):
         return text
 
     paragraphs: list[str] = []

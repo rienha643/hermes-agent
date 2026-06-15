@@ -3883,6 +3883,26 @@ class TestSpecialistWorkerFrames(unittest.TestCase):
         self.assertLessEqual(frame.count("provenance: PASS"), 2)
         self.assertNotIn(repeated_path * 2, frame)
 
+    def test_specialist_result_frame_does_not_compact_evaluation_reports(self):
+        summary = "\n".join(
+            ["Portrait Review", "Evaluation Report"]
+            + [f"평가 항목 {idx}: 점수 근거를 생략하지 않습니다." for idx in range(1, 60)]
+        )
+
+        frame = _format_specialist_result_frame(
+            "Eclipse",
+            status="completed",
+            task_type="Portrait Review",
+            preview=summary,
+            summary=summary,
+            exit_reason="completed",
+        )
+
+        self.assertIn("[WORKER RESULT: Eclipse]", frame)
+        self.assertIn("평가 항목 59", frame)
+        self.assertNotIn("lines omitted", frame)
+        self.assertNotIn("[truncated]", frame)
+
     def test_specialist_result_frame_uses_standard_document_block_for_planning_and_story_docs(self):
         from gateway.document_artifacts import format_document_artifact_block
 

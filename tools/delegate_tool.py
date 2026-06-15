@@ -1418,6 +1418,24 @@ def _normalize_delegate_follow_up(follow_up: Any) -> Optional[str]:
 _SPECIALIST_RESULT_MAX_LINES = 20
 _SPECIALIST_RESULT_MAX_LINE_CHARS = 240
 _SPECIALIST_RESULT_MAX_CHARS = 2000
+_EVALUATION_REPORT_MARKERS = (
+    "checkpoint review",
+    "portrait review",
+    "nsfw-lite review",
+    "nsfw lite review",
+    "full body review",
+    "key visual review",
+    "evaluation report",
+    "scoring report",
+    "main / reserve review",
+    "main/reserve review",
+    "main reserve review",
+)
+
+
+def _looks_like_evaluation_report_text(*texts: Optional[str]) -> bool:
+    body = "\n".join(str(text or "") for text in texts).casefold()
+    return any(marker in body for marker in _EVALUATION_REPORT_MARKERS)
 
 
 def _compact_specialist_result_frame_text(text: str) -> str:
@@ -1429,6 +1447,8 @@ def _compact_specialist_result_frame_text(text: str) -> str:
     delivery summary.
     """
     if not text:
+        return text
+    if _looks_like_evaluation_report_text(text):
         return text
 
     blocks: List[str] = []
@@ -1571,7 +1591,10 @@ def _format_specialist_result_frame(
     parts = [f"[WORKER RESULT: {label}]", "", intro]
     if sections:
         parts.extend(["", "\n\n".join(sections)])
-    return _compact_specialist_result_frame_text("\n".join(parts))
+    frame_text = "\n".join(parts)
+    if _looks_like_evaluation_report_text(task_type, summary, preview, frame_text):
+        return frame_text
+    return _compact_specialist_result_frame_text(frame_text)
 
 
 def _infer_specialist_profile(*texts: Optional[str]) -> Optional[str]:

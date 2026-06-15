@@ -790,6 +790,21 @@ _GATEWAY_DELIVERY_SUMMARY_MARKERS = (
 _GATEWAY_DELIVERY_SUMMARY_MAX_LINES = 20
 _GATEWAY_DELIVERY_SUMMARY_MAX_LINE_CHARS = 240
 _GATEWAY_DELIVERY_SUMMARY_MAX_CHARS = 2000
+_GATEWAY_EVALUATION_REPORT_PART_MAX_CHARS = 3500
+
+_GATEWAY_EVALUATION_REPORT_MARKERS = (
+    "checkpoint review",
+    "portrait review",
+    "nsfw-lite review",
+    "nsfw lite review",
+    "full body review",
+    "key visual review",
+    "evaluation report",
+    "scoring report",
+    "main / reserve review",
+    "main/reserve review",
+    "main reserve review",
+)
 
 
 def _looks_like_gateway_delivery_summary(text: str) -> bool:
@@ -797,9 +812,52 @@ def _looks_like_gateway_delivery_summary(text: str) -> bool:
     return any(marker in body for marker in _GATEWAY_DELIVERY_SUMMARY_MARKERS)
 
 
+def _looks_like_gateway_evaluation_report(text: str) -> bool:
+    body = str(text or "").casefold()
+    return any(marker in body for marker in _GATEWAY_EVALUATION_REPORT_MARKERS)
+
+
+def _split_gateway_evaluation_report_parts(
+    text: str,
+    *,
+    max_chars: int = _GATEWAY_EVALUATION_REPORT_PART_MAX_CHARS,
+) -> list[str]:
+    """Split long evaluation reports for delivery without deleting content."""
+    body = str(text or "")
+    if not body:
+        return []
+    max_chars = max(200, int(max_chars or _GATEWAY_EVALUATION_REPORT_PART_MAX_CHARS))
+    if len(body) <= max_chars:
+        return [body]
+
+    # Reserve space for the generated [PART i/N] header so each delivered
+    # message stays inside the requested platform-safe budget.
+    body_limit = max(100, max_chars - 32)
+    chunks: list[str] = []
+    current = ""
+    for line in body.splitlines(keepends=True):
+        if current and len(current) + len(line) > body_limit:
+            chunks.append(current)
+            current = ""
+        while len(line) > body_limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:body_limit])
+            line = line[body_limit:]
+        current += line
+    if current:
+        chunks.append(current)
+
+    total = len(chunks)
+    return [f"[PART {idx}/{total}]\n{chunk}" for idx, chunk in enumerate(chunks, start=1)]
+
+
 def _compact_gateway_final_response(text: str) -> tuple[str, bool]:
     """Collapse repeated summary/delivery blocks and keep a small response budget."""
     if not text:
+        return text, False
+    if _looks_like_gateway_evaluation_report(text):
         return text, False
 
     original = str(text)
@@ -10318,8 +10376,45 @@ class GatewayRunner:
                     "fresh_execution_evidence": _fresh_execution_evidence,
                 }
 
-            # Auto voice reply: send TTS audio before the text response
+            # Long evaluation/review reports must be delivered losslessly.  Do
+            # this after transcript persistence so the canonical assistant turn
+            # remains the full report, then suppress the normal single-message
+            # send by returning None after successful multipart delivery.
             _already_sent = bool(agent_result.get("already_sent"))
+            if (
+                response
+                and not _already_sent
+                and _looks_like_gateway_evaluation_report(response)
+            ):
+                _eval_parts = _split_gateway_evaluation_report_parts(response)
+                if len(_eval_parts) > 1:
+                    _eval_adapter = self.adapters.get(source.platform)
+                    if _eval_adapter:
+                        try:
+                            _eval_meta = self._thread_metadata_for_source(
+                                source,
+                                self._reply_anchor_for_event(event),
+                            )
+                            for _part in _eval_parts:
+                                await _eval_adapter.send(
+                                    source.chat_id,
+                                    _part,
+                                    metadata=_eval_meta,
+                                )
+                            logger.info(
+                                "evaluation report multipart delivery: session_id=%s parts=%d chars=%d",
+                                session_entry.session_id,
+                                len(_eval_parts),
+                                len(response),
+                            )
+                            return None
+                        except Exception as _eval_send_err:
+                            logger.warning(
+                                "evaluation report multipart delivery failed; falling back to normal send: %s",
+                                _eval_send_err,
+                            )
+
+            # Auto voice reply: send TTS audio before the text response
             if self._should_send_voice_reply(event, response, agent_messages, already_sent=_already_sent):
                 await self._send_voice_reply(event, response)
 

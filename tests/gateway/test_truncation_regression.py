@@ -1,6 +1,11 @@
 import pytest
 
-from gateway.run import _compact_gateway_final_response, _looks_like_gateway_delivery_summary
+from gateway.platforms.base import _compact_post_upload_reporting
+from gateway.run import (
+    _compact_gateway_final_response,
+    _looks_like_gateway_delivery_summary,
+    _split_gateway_evaluation_report_parts,
+)
 
 
 class TestGatewayTruncationRegression:
@@ -30,3 +35,63 @@ class TestGatewayTruncationRegression:
         compacted, applied = _compact_gateway_final_response(text)
         assert compacted == text
         assert applied is False
+
+    def test_long_portrait_review_is_not_compacted(self):
+        sections = [
+            "Portrait Review",
+            "Checkpoint Review",
+            "NSFW-lite Review",
+            "Full Body Review",
+            "Key Visual Review",
+            "Evaluation Report",
+            "Scoring Report",
+            "Main / Reserve Review",
+        ]
+        text = "\n".join(
+            sections
+            + [f"평가 항목 {idx}: 점수 근거와 관찰 내용을 생략 없이 기록합니다." for idx in range(1, 45)]
+        )
+
+        compacted, applied = _compact_gateway_final_response(text)
+
+        assert applied is False
+        assert compacted == text
+        assert "lines omitted" not in compacted
+        assert "[truncated]" not in compacted
+        assert "평가 항목 44" in compacted
+
+    def test_long_evaluation_report_splits_without_deleting_content(self):
+        body_lines = [
+            "Evaluation Report",
+            "Portrait Review",
+        ] + [f"원문 평가 라인 {idx}: 보존 대상 내용입니다." for idx in range(1, 90)]
+        text = "\n".join(body_lines)
+
+        parts = _split_gateway_evaluation_report_parts(text, max_chars=900)
+
+        assert len(parts) >= 2
+        assert parts[0].startswith("[PART 1/")
+        assert parts[1].startswith("[PART 2/")
+        assert all("lines omitted" not in part for part in parts)
+        assert all("[truncated]" not in part for part in parts)
+        assert all(len(part) <= 900 for part in parts)
+        reconstructed = "".join(part.split("\n", 1)[1] for part in parts)
+        assert reconstructed == text
+        assert "원문 평가 라인 89" in reconstructed
+
+    def test_post_upload_reporting_still_compacts_non_evaluation_summaries(self):
+        block = "Slack 전달 완료\nartifact summary: /tmp/file.png\nNAS Hook: PASS\nprovenance: PASS"
+        compacted = _compact_post_upload_reporting((block + "\n\n") * 12)
+
+        assert "lines omitted" in compacted or len(compacted.splitlines()) <= 12
+
+    def test_post_upload_reporting_does_not_compact_evaluation_reports(self):
+        text = "Evaluation Report\n" + "\n".join(
+            f"점수 근거 {idx}: 평가 보고서 본문" for idx in range(1, 40)
+        )
+
+        compacted = _compact_post_upload_reporting(text)
+
+        assert compacted == text
+        assert "lines omitted" not in compacted
+        assert "점수 근거 39" in compacted
