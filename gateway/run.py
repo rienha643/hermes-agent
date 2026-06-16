@@ -840,6 +840,14 @@ _GATEWAY_DELIVERY_SUMMARY_MAX_LINE_CHARS = 240
 _GATEWAY_DELIVERY_SUMMARY_MAX_CHARS = 2000
 _GATEWAY_EVALUATION_REPORT_PART_MAX_CHARS = 3500
 
+_GATEWAY_VALIDATION_REPORT_MARKERS = (
+    "[e2e validation round v1]",
+    "[e2e validation result]",
+    "[comfyui restart checkpoint verify]",
+    "[checkpoint migration finalization]",
+    "[checkpoint selection finalization v2]",
+)
+
 _GATEWAY_EVALUATION_REPORT_MARKERS = (
     "checkpoint review",
     "portrait review",
@@ -852,6 +860,7 @@ _GATEWAY_EVALUATION_REPORT_MARKERS = (
     "main / reserve review",
     "main/reserve review",
     "main reserve review",
+    *_GATEWAY_VALIDATION_REPORT_MARKERS,
 )
 
 _GATEWAY_GENERATION_REPORT_MARKERS = (
@@ -867,6 +876,7 @@ _GATEWAY_USER_REPORT_MARKERS = (
     "[angelica final response]",
     "[worker result: angelica]",
     *_GATEWAY_GENERATION_REPORT_MARKERS,
+    *_GATEWAY_VALIDATION_REPORT_MARKERS,
     "integrity rca",
     "integrity report",
     "validation report",

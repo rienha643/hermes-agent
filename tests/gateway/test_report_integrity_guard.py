@@ -354,6 +354,55 @@ FAIL"""
     assert len(compacted.splitlines()) >= 170
 
 
+@pytest.mark.parametrize(
+    "header",
+    [
+        "[COMFYUI RESTART CHECKPOINT VERIFY]",
+        "[E2E VALIDATION RESULT]",
+        "[E2E VALIDATION ROUND V1]",
+        "[CHECKPOINT MIGRATION FINALIZATION]",
+        "[CHECKPOINT SELECTION FINALIZATION V2]",
+    ],
+)
+def test_validation_and_migration_reports_are_not_post_upload_compacted(header: str):
+    from gateway.platforms.base import _compact_post_upload_reporting
+
+    text = header + "\n" + "\n".join(
+        f"validation line {idx:02d}: Slack Upload: PASS provenance checkpoint detail"
+        for idx in range(1, 56)
+    )
+
+    compacted = _compact_post_upload_reporting(text)
+
+    assert compacted == text
+    assert "lines omitted" not in compacted
+    assert "validation line 55" in compacted
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "[COMFYUI RESTART CHECKPOINT VERIFY]",
+        "[E2E VALIDATION RESULT]",
+        "[E2E VALIDATION ROUND V1]",
+        "[CHECKPOINT MIGRATION FINALIZATION]",
+        "[CHECKPOINT SELECTION FINALIZATION V2]",
+    ],
+)
+def test_validation_and_migration_reports_are_not_gateway_final_compacted(header: str):
+    text = header + "\n" + "\n".join(
+        f"validation line {idx:02d}: delivery complete artifact summary detail"
+        for idx in range(1, 56)
+    )
+
+    compacted, applied = _compact_gateway_final_response(text)
+
+    assert applied is False
+    assert compacted == text
+    assert "lines omitted" not in compacted
+    assert "validation line 55" in compacted
+
+
 def test_full_body_report_with_valid_hashes_but_missing_nas_mirror_is_invalid(tmp_path: Path):
     image_dir = tmp_path / "fullbody_challenger_round_v1" / "valid"
     image_dir.mkdir(parents=True)

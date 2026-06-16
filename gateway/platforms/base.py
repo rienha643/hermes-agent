@@ -38,6 +38,14 @@ _TELEGRAM_VOICE_EXTS = frozenset({'.ogg', '.opus'})
 _POST_UPLOAD_REPORT_MAX_LINES = 12
 _POST_UPLOAD_REPORT_MAX_LINE_CHARS = 240
 _POST_UPLOAD_REPORT_MAX_CHARS = 2000
+_VALIDATION_REPORT_MARKERS = (
+    "[e2e validation round v1]",
+    "[e2e validation result]",
+    "[comfyui restart checkpoint verify]",
+    "[checkpoint migration finalization]",
+    "[checkpoint selection finalization v2]",
+)
+
 _EVALUATION_REPORT_MARKERS = (
     "[full body challenger round v1 results]",
     "[key visual challenger round v1 results]",
@@ -54,6 +62,7 @@ _EVALUATION_REPORT_MARKERS = (
     "main / reserve review",
     "main/reserve review",
     "main reserve review",
+    *_VALIDATION_REPORT_MARKERS,
 )
 
 
