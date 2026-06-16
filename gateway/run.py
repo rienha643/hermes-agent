@@ -763,6 +763,14 @@ def _sanitize_gemma4_channel_artifacts(text: str) -> str:
     if not text:
         return text
     body = str(text)
+    # Some malformed Gemma PEG outputs have been observed with a corrupted
+    # prefix such as ``thपैकीthought`` before private reasoning.  Treat it as a
+    # thought-channel wrapper even when the literal channel token is absent.
+    body = re.sub(
+        r"(?is)^\s*th\S*thought\b.*?(?=\n\s*\[|\n\s*[A-Z][A-Z _-]{3,}:|$)",
+        "",
+        body,
+    ).lstrip()
     if "channel" not in body.casefold():
         return body
 
@@ -846,6 +854,159 @@ _GATEWAY_EVALUATION_REPORT_MARKERS = (
     "main reserve review",
 )
 
+_GATEWAY_USER_REPORT_MARKERS = (
+    "[nsfw stability round results]",
+    "[nsfw stability result integrity rca]",
+    "[angelica final response]",
+    "[worker result: angelica]",
+    "integrity rca",
+    "integrity report",
+    "validation report",
+    "generation result",
+    "generated result",
+    "생성 결과",
+    "검증 보고",
+    "무결성 보고",
+)
+
+_GATEWAY_REPORT_INTEGRITY_MARKERS = (
+    "[nsfw stability round results]",
+    "[worker result: angelica]",
+    "file_sha256",
+    "prompt_hash",
+    "workflow_hash",
+    "slack upload:",
+    "nas hook:",
+    "output_path:",
+)
+
+_PLACEHOLDER_SHA_RE = re.compile(r"\b(?:a1b2c3d4|b2c3d4e5|c3d4e5f6|d4e5f6g7|e5f6g7h8|f6g7h8i9|g7h8i9j0|h8i9j0k1)\b", re.IGNORECASE)
+_FULL_SHA256_RE = re.compile(r"\b[a-f0-9]{64}\b", re.IGNORECASE)
+_OUTPUT_PATH_RE = re.compile(r"(?im)^\s*output_path\s*:\s*(?P<path>\S.*?)(?:\s*)$")
+_FILE_SHA_RE = re.compile(r"(?im)^\s*file_sha256\s*:\s*(?P<sha>\S+)")
+
+
+@dataclasses.dataclass(frozen=True)
+class GatewayReportIntegrityResult:
+    valid: bool
+    text: str
+    reasons: list[str]
+
+
+def _looks_like_gateway_user_report(text: str) -> bool:
+    body = str(text or "").casefold()
+    return any(marker in body for marker in _GATEWAY_USER_REPORT_MARKERS)
+
+
+def _looks_like_gateway_report_requiring_integrity(text: str) -> bool:
+    body = str(text or "").casefold()
+    marker_count = sum(1 for marker in _GATEWAY_REPORT_INTEGRITY_MARKERS if marker in body)
+    return marker_count >= 2 or "[nsfw stability round results]" in body
+
+
+def _extract_gateway_output_paths(text: str) -> list[Path]:
+    paths: list[Path] = []
+    for match in _OUTPUT_PATH_RE.finditer(str(text or "")):
+        raw = match.group("path").strip().strip("`'\"")
+        if raw:
+            paths.append(Path(raw))
+    return paths
+
+
+def _candidate_nas_mirror_paths(path: Path) -> list[Path]:
+    raw = str(path)
+    candidates: list[Path] = []
+    for prefix in ("/Users/hermes/HermesWork/Image", "/Volumes/SSD_Hermes/HermesWork/Image"):
+        if raw.startswith(prefix + "/"):
+            rel = raw[len(prefix):].lstrip("/")
+            candidates.append(Path("/Volumes/Hermes/HermesWork/Image") / rel)
+    return candidates
+
+
+def _render_invalid_gateway_report(reasons: list[str]) -> str:
+    reason_lines = "\n".join(f"- {reason}" for reason in reasons)
+    return (
+        "[REPORT INTEGRITY GUARD]\n"
+        "Final Verdict: INVALID_RESULT\n"
+        "Reason: report contained unverified artifact success claims or missing evidence.\n"
+        "Success reporting was blocked.\n"
+        "\nIntegrity Failures:\n"
+        f"{reason_lines}"
+    ).strip()
+
+
+def _validate_gateway_report_integrity(
+    text: str,
+    *,
+    attachment_count: int = 0,
+) -> GatewayReportIntegrityResult:
+    """Block generated-artifact reports that lack verifiable evidence.
+
+    This guard is intentionally conservative and only applies to result/report
+    shaped messages.  It prevents model-only placeholder reports from claiming
+    image generation, Slack upload, NAS sync, or hashes without files/tool
+    evidence.
+    """
+    body = str(text or "")
+    if not body or not _looks_like_gateway_report_requiring_integrity(body):
+        return GatewayReportIntegrityResult(True, body, [])
+
+    folded = body.casefold()
+    reasons: list[str] = []
+
+    if _PLACEHOLDER_SHA_RE.search(body) or "(calculated)" in folded:
+        reasons.append("placeholder_or_uncomputed_hash")
+    if re.search(r"(?im)^\s*output_path\s*:\s*.*(?:^|/)image\.png\s*$", body):
+        reasons.append("generic_placeholder_output_path")
+
+    output_paths = _extract_gateway_output_paths(body)
+    if not output_paths and "output_path" in folded:
+        reasons.append("output_path_unparseable")
+    for output_path in output_paths:
+        if not output_path.exists():
+            reasons.append("output_path_missing")
+            continue
+        if output_path.suffix.casefold() != ".png":
+            reasons.append("output_path_not_png")
+        sidecar = output_path.parent / "sidecar"
+        for sidecar_name in ("prompt.json", "metadata.json", "workflow.json", "manifest.json"):
+            if not (sidecar / sidecar_name).exists():
+                reasons.append(f"sidecar_missing:{sidecar_name}")
+
+    sha_matches = [match.group("sha").strip() for match in _FILE_SHA_RE.finditer(body)]
+    if "file_sha256" in folded and not sha_matches:
+        reasons.append("file_sha256_unparseable")
+    if output_paths and sha_matches:
+        for output_path, claimed_sha in zip(output_paths, sha_matches):
+            if not _FULL_SHA256_RE.fullmatch(claimed_sha):
+                reasons.append("file_sha256_not_full_sha256")
+                continue
+            if output_path.exists() and output_path.is_file():
+                try:
+                    actual_sha = hashlib.sha256(output_path.read_bytes()).hexdigest()
+                except Exception:
+                    reasons.append("file_sha256_read_failed")
+                    continue
+                if claimed_sha.casefold() != actual_sha:
+                    reasons.append("file_sha256_mismatch")
+
+    if "slack upload: pass" in folded and int(attachment_count or 0) <= 0:
+        reasons.append("slack_pass_without_attachment")
+    if "nas hook: pass" in folded:
+        mirror_exists = any(
+            candidate.exists()
+            for output_path in output_paths
+            for candidate in _candidate_nas_mirror_paths(output_path)
+        )
+        if not mirror_exists:
+            reasons.append("nas_pass_without_mirror")
+
+    # Deduplicate while preserving evidence order.
+    deduped = list(dict.fromkeys(reasons))
+    if deduped:
+        return GatewayReportIntegrityResult(False, _render_invalid_gateway_report(deduped), deduped)
+    return GatewayReportIntegrityResult(True, body, [])
+
 
 def _looks_like_gateway_delivery_summary(text: str) -> bool:
     body = str(text or "").casefold()
@@ -903,7 +1064,7 @@ def _compact_gateway_final_response(text: str) -> tuple[str, bool]:
     """
     if not text:
         return text, False
-    if _looks_like_gateway_evaluation_report(text):
+    if _looks_like_gateway_user_report(text) or _looks_like_gateway_evaluation_report(text):
         return text, False
     if not _looks_like_gateway_delivery_summary(text):
         return text, False
@@ -10087,7 +10248,7 @@ class GatewayRunner:
                 agent_result, response, history_len=len(history),
             )
             response = _sanitize_gateway_final_response(source.platform, response)
-            response, _truncated_guard_applied = _compact_gateway_final_response(response)
+            _truncated_guard_applied = False
             _history_len_for_turn = agent_result.get("history_offset", len(history))
             try:
                 _structured_attachment_paths, _structured_attachment_debug = (
@@ -10120,6 +10281,17 @@ class GatewayRunner:
                 "structured attachments event count=%d",
                 len(_structured_attachment_paths),
             )
+            _report_integrity = _validate_gateway_report_integrity(
+                response,
+                attachment_count=len(_structured_attachment_paths),
+            )
+            if not _report_integrity.valid:
+                logger.warning(
+                    "gateway report integrity guard blocked success report: reasons=%s",
+                    _report_integrity.reasons,
+                )
+                response = _report_integrity.text
+            response, _truncated_guard_applied = _compact_gateway_final_response(response)
 
             # If the agent's session_id changed during compression, update
             # session_entry so transcript writes below go to the right session.
