@@ -39,6 +39,10 @@ _POST_UPLOAD_REPORT_MAX_LINES = 12
 _POST_UPLOAD_REPORT_MAX_LINE_CHARS = 240
 _POST_UPLOAD_REPORT_MAX_CHARS = 2000
 _EVALUATION_REPORT_MARKERS = (
+    "[full body challenger round v1 results]",
+    "[key visual challenger round v1 results]",
+    "full body challenger round",
+    "key visual challenger round",
     "checkpoint review",
     "portrait review",
     "nsfw-lite review",
@@ -1084,6 +1088,8 @@ _SENSITIVE_DELIVERY_NAME_TOKENS = (
     "credential",
     "token",
     "secret",
+    "api_key",
+    "secret_key",
     "refresh_token",
     "private_key",
     "host_secret",
@@ -1092,7 +1098,6 @@ _SENSITIVE_DELIVERY_NAME_TOKENS = (
     "config",
     "state",
     "cache",
-    "key",
     "pem",
     "p12",
     "sqlite",

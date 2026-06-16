@@ -305,6 +305,55 @@ def test_multi_checkpoint_generation_reports_are_not_delivery_compacted(header: 
     assert "checkpoint line 39" in compacted
 
 
+def test_key_visual_challenger_report_is_not_post_upload_compacted():
+    from gateway.platforms.base import _compact_post_upload_reporting
+
+    checkpoints = [
+        "hdaRainbowIllusMixV1_v13.safetensors",
+        "cottonillustrious_v20.safetensors",
+        "catCarrier_v90.safetensors",
+        "pornmasterAnime_ilV5.safetensors",
+        "hakushiMix_v141.safetensors",
+        "illumiyumeXL_v35VPred.safetensors",
+        "waiIllustriousSDXL_v170.safetensors",
+        "animagine-xl-4.0-opt.safetensors",
+    ]
+    blocks = []
+    for idx, checkpoint in enumerate(checkpoints, start=1):
+        blocks.append(
+            f"""checkpoint:
+{checkpoint}
+prompt_id:
+6f724fbb-2160-4846-bd5a-ebd6e95724ad
+history_status:
+success
+output_path:
+/Users/hermes/HermesWork/Image/key_visual_challenger_round_v1/{checkpoint.removesuffix('.safetensors')}/{checkpoint.removesuffix('.safetensors')}_00001_.png
+prompt_hash:
+{'a' * 64}
+workflow_hash:
+{'b' * 64}
+file_sha256:
+{idx:064x}
+artifact_index:
+{idx}
+sidecar:
+PASS
+Slack Upload:
+PASS
+NAS Hook:
+FAIL"""
+        )
+    text = "[KEY VISUAL CHALLENGER ROUND V1 RESULTS]\n\n" + "\n\n".join(blocks)
+
+    compacted = _compact_post_upload_reporting(text)
+
+    assert compacted == text
+    assert "lines omitted" not in compacted
+    assert "animagine-xl-4.0-opt.safetensors" in compacted
+    assert len(compacted.splitlines()) >= 170
+
+
 def test_full_body_report_with_valid_hashes_but_missing_nas_mirror_is_invalid(tmp_path: Path):
     image_dir = tmp_path / "fullbody_challenger_round_v1" / "valid"
     image_dir.mkdir(parents=True)
