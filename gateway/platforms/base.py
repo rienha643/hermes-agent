@@ -13,6 +13,10 @@ import logging
 import os
 import random
 import re
+from gateway.report_preservation import (
+    looks_like_operational_delivery_summary,
+    should_preserve_report_body,
+)
 import socket as _socket
 import subprocess
 import sys
@@ -67,8 +71,7 @@ _EVALUATION_REPORT_MARKERS = (
 
 
 def _looks_like_evaluation_report(text: str) -> bool:
-    body = str(text or "").casefold()
-    return any(marker in body for marker in _EVALUATION_REPORT_MARKERS)
+    return should_preserve_report_body(text)
 _POST_UPLOAD_REPORT_MARKERS = (
     "slack upload",
     "slack 전달 완료",
@@ -109,6 +112,8 @@ def _compact_post_upload_reporting(text: str) -> str:
 
     compacted = "\n\n".join(paragraphs).strip()
     if not compacted:
+        return compacted
+    if not looks_like_operational_delivery_summary(compacted):
         return compacted
 
     if len(compacted) <= _POST_UPLOAD_REPORT_MAX_CHARS and len(compacted.splitlines()) <= _POST_UPLOAD_REPORT_MAX_LINES:

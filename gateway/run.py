@@ -1119,13 +1119,11 @@ def _validate_gateway_report_integrity(
 
 
 def _looks_like_gateway_delivery_summary(text: str) -> bool:
-    body = str(text or "").casefold()
-    return any(marker in body for marker in _GATEWAY_DELIVERY_SUMMARY_MARKERS)
+    return looks_like_operational_delivery_summary(text)
 
 
 def _looks_like_gateway_evaluation_report(text: str) -> bool:
-    body = str(text or "").casefold()
-    return any(marker in body for marker in _GATEWAY_EVALUATION_REPORT_MARKERS)
+    return should_preserve_report_body(text)
 
 
 def _split_gateway_evaluation_report_parts(
@@ -1931,6 +1929,10 @@ from gateway.config import (
     HomeChannel,
     PlatformConfig,
     load_gateway_config,
+)
+from gateway.report_preservation import (
+    looks_like_operational_delivery_summary,
+    should_preserve_report_body,
 )
 from gateway.session import (
     SessionStore,

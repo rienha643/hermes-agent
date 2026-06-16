@@ -39,6 +39,7 @@ from gateway.document_artifacts import (
     is_document_artifact_intermediate_path,
     is_document_artifact_path,
 )
+from gateway.report_preservation import should_preserve_report_body
 from toolsets import TOOLSETS
 
 _SINGLE_OUTPUT_IMAGE_RESULT_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -1434,8 +1435,8 @@ _EVALUATION_REPORT_MARKERS = (
 
 
 def _looks_like_evaluation_report_text(*texts: Optional[str]) -> bool:
-    body = "\n".join(str(text or "") for text in texts).casefold()
-    return any(marker in body for marker in _EVALUATION_REPORT_MARKERS)
+    body = "\n".join(str(text or "") for text in texts)
+    return should_preserve_report_body(body)
 
 
 def _compact_specialist_result_frame_text(text: str) -> str:
