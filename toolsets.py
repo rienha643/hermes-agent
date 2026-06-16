@@ -336,6 +336,22 @@ TOOLSETS = {
         "tools": [],
         "includes": ["web", "vision", "image_gen"]
     },
+
+    "seir-tool-profile": {
+        "description": (
+            "Seir NSFW/NAI prompt review and image-evaluation boundary. "
+            "Explicit allowlist only; intentionally independent of "
+            "_HERMES_CORE_TOOLS so future core/plugin tools do not inflate "
+            "Seir's prompt schema."
+        ),
+        "tools": [
+            "clarify",
+            "web_search", "web_extract",
+            "vision_analyze",
+            "read_file", "search_files", "write_file",
+        ],
+        "includes": []
+    },
     
     # ==========================================================================
     # Full Hermes toolsets (CLI + messaging platforms)
