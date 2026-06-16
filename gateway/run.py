@@ -872,7 +872,11 @@ _GATEWAY_USER_REPORT_MARKERS = (
 _GATEWAY_REPORT_INTEGRITY_MARKERS = (
     "[nsfw stability round results]",
     "[worker result: angelica]",
+    "[single png verify]",
+    "[single png safe verify]",
+    "generation smoke",
     "file_sha256",
+    "prompt_id:",
     "prompt_hash",
     "workflow_hash",
     "slack upload:",
@@ -884,6 +888,25 @@ _PLACEHOLDER_SHA_RE = re.compile(r"\b(?:a1b2c3d4|b2c3d4e5|c3d4e5f6|d4e5f6g7|e5f6
 _FULL_SHA256_RE = re.compile(r"\b[a-f0-9]{64}\b", re.IGNORECASE)
 _OUTPUT_PATH_RE = re.compile(r"(?im)^\s*output_path\s*:\s*(?P<path>\S.*?)(?:\s*)$")
 _FILE_SHA_RE = re.compile(r"(?im)^\s*file_sha256\s*:\s*(?P<sha>\S+)")
+_PROMPT_ID_RE = re.compile(r"(?im)^\s*prompt_id\s*:\s*(?P<prompt_id>\S+)")
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+_GATEWAY_SINGLE_PNG_REPORT_MARKERS = (
+    "[single png verify]",
+    "[single png safe verify]",
+    "single png verify",
+    "single png safe verify",
+    "generation smoke",
+)
+
+_GATEWAY_FULL_ROUND_REPORT_MARKERS = (
+    "[nsfw stability round results]",
+    "full round",
+    "production delivery",
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -901,7 +924,30 @@ def _looks_like_gateway_user_report(text: str) -> bool:
 def _looks_like_gateway_report_requiring_integrity(text: str) -> bool:
     body = str(text or "").casefold()
     marker_count = sum(1 for marker in _GATEWAY_REPORT_INTEGRITY_MARKERS if marker in body)
-    return marker_count >= 2 or "[nsfw stability round results]" in body
+    return marker_count >= 2 or _looks_like_gateway_single_png_report(body) or _looks_like_gateway_full_round_report(body)
+
+
+def _looks_like_gateway_single_png_report(text: str) -> bool:
+    body = str(text or "").casefold()
+    return any(marker in body for marker in _GATEWAY_SINGLE_PNG_REPORT_MARKERS)
+
+
+def _looks_like_gateway_full_round_report(text: str) -> bool:
+    body = str(text or "").casefold()
+    return any(marker in body for marker in _GATEWAY_FULL_ROUND_REPORT_MARKERS)
+
+
+def _extract_gateway_prompt_ids(text: str) -> list[str]:
+    return [match.group("prompt_id").strip().strip("`'\"") for match in _PROMPT_ID_RE.finditer(str(text or ""))]
+
+
+def _gateway_report_declares_history_completed(text: str) -> bool:
+    body = str(text or "")
+    return bool(
+        re.search(r"(?im)^\s*history(?:\s+status)?\s*:\s*completed\s*$", body)
+        or re.search(r"(?im)^\s*completed\s*:\s*true\s*$", body)
+        or re.search(r"(?im)^\s*history\s+completed\s*:\s*(?:yes|true)\s*$", body)
+    )
 
 
 def _extract_gateway_output_paths(text: str) -> list[Path]:
@@ -953,13 +999,28 @@ def _validate_gateway_report_integrity(
 
     folded = body.casefold()
     reasons: list[str] = []
+    is_single_png_report = _looks_like_gateway_single_png_report(body)
+    requires_sidecar = _looks_like_gateway_full_round_report(body) and not is_single_png_report
+    requires_delivery_evidence = not is_single_png_report
 
     if _PLACEHOLDER_SHA_RE.search(body) or "(calculated)" in folded:
         reasons.append("placeholder_or_uncomputed_hash")
     if re.search(r"(?im)^\s*output_path\s*:\s*.*(?:^|/)image\.png\s*$", body):
         reasons.append("generic_placeholder_output_path")
 
+    prompt_ids = _extract_gateway_prompt_ids(body)
+    if is_single_png_report and not prompt_ids:
+        reasons.append("prompt_id_missing")
+    for prompt_id in prompt_ids:
+        if not _UUID_RE.fullmatch(prompt_id):
+            reasons.append("prompt_id_invalid")
+
+    if is_single_png_report and not _gateway_report_declares_history_completed(body):
+        reasons.append("history_not_completed")
+
     output_paths = _extract_gateway_output_paths(body)
+    if is_single_png_report and not output_paths:
+        reasons.append("output_path_missing")
     if not output_paths and "output_path" in folded:
         reasons.append("output_path_unparseable")
     for output_path in output_paths:
@@ -968,10 +1029,11 @@ def _validate_gateway_report_integrity(
             continue
         if output_path.suffix.casefold() != ".png":
             reasons.append("output_path_not_png")
-        sidecar = output_path.parent / "sidecar"
-        for sidecar_name in ("prompt.json", "metadata.json", "workflow.json", "manifest.json"):
-            if not (sidecar / sidecar_name).exists():
-                reasons.append(f"sidecar_missing:{sidecar_name}")
+        if requires_sidecar:
+            sidecar = output_path.parent / "sidecar"
+            for sidecar_name in ("prompt.json", "metadata.json", "workflow.json", "manifest.json"):
+                if not (sidecar / sidecar_name).exists():
+                    reasons.append(f"sidecar_missing:{sidecar_name}")
 
     sha_matches = [match.group("sha").strip() for match in _FILE_SHA_RE.finditer(body)]
     if "file_sha256" in folded and not sha_matches:
@@ -990,9 +1052,9 @@ def _validate_gateway_report_integrity(
                 if claimed_sha.casefold() != actual_sha:
                     reasons.append("file_sha256_mismatch")
 
-    if "slack upload: pass" in folded and int(attachment_count or 0) <= 0:
+    if requires_delivery_evidence and "slack upload: pass" in folded and int(attachment_count or 0) <= 0:
         reasons.append("slack_pass_without_attachment")
-    if "nas hook: pass" in folded:
+    if requires_delivery_evidence and "nas hook: pass" in folded:
         mirror_exists = any(
             candidate.exists()
             for output_path in output_paths

@@ -83,6 +83,78 @@ file_sha256: {"0" * 64}
     assert "nas_pass_without_mirror" in result.reasons
 
 
+def test_single_png_safe_verify_allows_missing_sidecar_when_png_completed(tmp_path: Path):
+    image = tmp_path / "single.png"
+    image.write_bytes(b"real image bytes")
+    text = f"""[SINGLE PNG SAFE VERIFY]
+ComfyUI Submit: YES
+prompt_id: 6f724fbb-2160-4846-bd5a-ebd6e95724ad
+History Status: COMPLETED
+PNG Created: YES
+output_path: {image}
+Final Verdict: PNG_GENERATION_PASS
+"""
+
+    result = _validate_gateway_report_integrity(text, attachment_count=0)
+
+    assert result.valid is True
+    assert result.text == text
+    assert not any(reason.startswith("sidecar_missing:") for reason in result.reasons)
+
+
+def test_single_png_safe_verify_rejects_fake_prompt_id(tmp_path: Path):
+    image = tmp_path / "single.png"
+    image.write_bytes(b"real image bytes")
+    text = f"""[SINGLE PNG SAFE VERIFY]
+ComfyUI Submit: YES
+prompt_id: fake-prompt-id
+History Status: COMPLETED
+PNG Created: YES
+output_path: {image}
+Final Verdict: PNG_GENERATION_PASS
+"""
+
+    result = _validate_gateway_report_integrity(text, attachment_count=0)
+
+    assert result.valid is False
+    assert "prompt_id_invalid" in result.reasons
+
+
+def test_single_png_safe_verify_still_rejects_missing_output_path(tmp_path: Path):
+    missing = tmp_path / "missing.png"
+    text = f"""[SINGLE PNG SAFE VERIFY]
+ComfyUI Submit: YES
+prompt_id: 6f724fbb-2160-4846-bd5a-ebd6e95724ad
+History Status: COMPLETED
+PNG Created: YES
+output_path: {missing}
+Final Verdict: PNG_GENERATION_PASS
+"""
+
+    result = _validate_gateway_report_integrity(text, attachment_count=0)
+
+    assert result.valid is False
+    assert "output_path_missing" in result.reasons
+
+
+def test_nsfw_result_still_requires_sidecar(tmp_path: Path):
+    image = tmp_path / "result.png"
+    image.write_bytes(b"real image bytes")
+    text = f"""[NSFW STABILITY ROUND RESULTS]
+prompt_id: 6f724fbb-2160-4846-bd5a-ebd6e95724ad
+History Status: COMPLETED
+output_path: {image}
+file_sha256: {"0" * 64}
+Slack Upload: FAIL
+NAS Hook: FAIL
+"""
+
+    result = _validate_gateway_report_integrity(text, attachment_count=0)
+
+    assert result.valid is False
+    assert "sidecar_missing:prompt.json" in result.reasons
+
+
 def test_nsfw_result_report_is_not_compacted():
     text = "[NSFW STABILITY ROUND RESULTS]\n" + "\n".join(
         f"checkpoint line {idx:02d}: NAS Hook: PASS Slack Upload: PASS provenance detail"
