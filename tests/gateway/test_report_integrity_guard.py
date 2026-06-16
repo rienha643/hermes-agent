@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from gateway.config import Platform
 from gateway.run import (
     _compact_gateway_final_response,
@@ -100,6 +102,65 @@ Final Verdict: PNG_GENERATION_PASS
     assert result.valid is True
     assert result.text == text
     assert not any(reason.startswith("sidecar_missing:") for reason in result.reasons)
+
+
+@pytest.mark.parametrize(
+    "history_line",
+    [
+        "history_status: success",
+        "status_str: success",
+        "history status: success",
+        "history_status: completed",
+        "history status: completed",
+        "completed: true",
+        "history completed: true",
+    ],
+)
+def test_single_png_safe_verify_accepts_completed_equivalent_history_statuses(
+    tmp_path: Path,
+    history_line: str,
+):
+    image = tmp_path / "single.png"
+    image.write_bytes(b"real image bytes")
+    text = f"""[SINGLE PNG SAFE VERIFY]
+ComfyUI Submit: YES
+prompt_id: 6f724fbb-2160-4846-bd5a-ebd6e95724ad
+{history_line}
+PNG Created: YES
+output_path: {image}
+Final Verdict: PNG_GENERATION_PASS
+"""
+
+    result = _validate_gateway_report_integrity(text, attachment_count=0)
+
+    assert result.valid is True
+    assert result.reasons == []
+
+
+@pytest.mark.parametrize(
+    "history_line",
+    [
+        "history_status: error",
+        "history_status: interrupted",
+        "history_status: running",
+    ],
+)
+def test_single_png_safe_verify_rejects_incomplete_history_statuses(tmp_path: Path, history_line: str):
+    image = tmp_path / "single.png"
+    image.write_bytes(b"real image bytes")
+    text = f"""[SINGLE PNG SAFE VERIFY]
+ComfyUI Submit: YES
+prompt_id: 6f724fbb-2160-4846-bd5a-ebd6e95724ad
+{history_line}
+PNG Created: YES
+output_path: {image}
+Final Verdict: PNG_GENERATION_PASS
+"""
+
+    result = _validate_gateway_report_integrity(text, attachment_count=0)
+
+    assert result.valid is False
+    assert "history_not_completed" in result.reasons
 
 
 def test_single_png_safe_verify_rejects_fake_prompt_id(tmp_path: Path):

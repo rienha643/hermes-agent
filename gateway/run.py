@@ -944,9 +944,12 @@ def _extract_gateway_prompt_ids(text: str) -> list[str]:
 def _gateway_report_declares_history_completed(text: str) -> bool:
     body = str(text or "")
     return bool(
-        re.search(r"(?im)^\s*history(?:\s+status)?\s*:\s*completed\s*$", body)
+        re.search(
+            r"(?im)^\s*(?:history[ _]+status|history_status|status_str)\s*:\s*(?:completed|success)\s*$",
+            body,
+        )
         or re.search(r"(?im)^\s*completed\s*:\s*true\s*$", body)
-        or re.search(r"(?im)^\s*history\s+completed\s*:\s*(?:yes|true)\s*$", body)
+        or re.search(r"(?im)^\s*history[ _]+completed\s*:\s*(?:yes|true)\s*$", body)
     )
 
 
