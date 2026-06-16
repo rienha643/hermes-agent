@@ -177,36 +177,27 @@ def _dedupe_media_files_by_sha256(media_files: list[tuple[str, bool]]) -> list[t
     return deduped
 
 
-_SLACK_ALLOWED_PUBLISH_ROOTS = (
-    "/Volumes/SSD_Hermes/HermesWork/Image",
-    "/Users/hermes/HermesWork/Image",
-)
-_SLACK_BLOCKED_SOURCE_ROOTS = (
-    "/Volumes/SSD_Hermes/ComfyUI/output",
-)
-
-
-def _is_path_within_root(path: str, root: str) -> bool:
-    try:
-        return Path(path).resolve(strict=False).is_relative_to(Path(root).resolve(strict=False))
-    except Exception:
-        return False
-
-
 def _slack_media_block_reason(path: str) -> str | None:
-    suffix = Path(path).suffix.lower()
-    lower_path = path.lower()
+    from gateway.platforms import base as platform_base
+
+    candidate = str(path or "").strip()
+    suffix = Path(candidate).suffix.lower()
     if not suffix:
         return "missing_extension"
     if suffix != ".png":
         return f"forbidden_extension:{suffix}"
-    if any(_is_path_within_root(path, root) for root in _SLACK_BLOCKED_SOURCE_ROOTS):
-        return "blocked_source_root:/Volumes/SSD_Hermes/ComfyUI/output"
-    if not any(_is_path_within_root(path, root) for root in _SLACK_ALLOWED_PUBLISH_ROOTS):
-        return "outside_allowed_publish_roots"
-    if any(token in lower_path for token in ("auth.json", "credentials", "token", "secret", ".env", "config", "state", "cache", "key", "pem", "p12", "sqlite", "db", "log", "workflow.json", "prompt.json", "metadata.json", "manifest.json", "_sidecars", "sidecar", "tmp", "intermediate")):
-        return "blocked_sensitive_or_sidecar"
-    return None
+
+    expanded = Path(os.path.expanduser(candidate))
+    if not expanded.is_absolute():
+        return "invalid_path"
+    try:
+        resolved = expanded.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return "invalid_path"
+    if not resolved.is_file():
+        return "invalid_path"
+
+    return platform_base._slack_delivery_path_block_reason(resolved, image_only=True)
 
 
 def _validate_slack_media_candidates(media_files: list[tuple[str, bool]], *, expected_count: int | None = None) -> tuple[list[tuple[str, bool]], list[dict[str, str]]]:
