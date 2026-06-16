@@ -854,11 +854,19 @@ _GATEWAY_EVALUATION_REPORT_MARKERS = (
     "main reserve review",
 )
 
+_GATEWAY_GENERATION_REPORT_MARKERS = (
+    "[full body challenger round v1 results]",
+    "[key visual challenger round v1 results]",
+    "full body challenger round",
+    "key visual challenger round",
+)
+
 _GATEWAY_USER_REPORT_MARKERS = (
     "[nsfw stability round results]",
     "[nsfw stability result integrity rca]",
     "[angelica final response]",
     "[worker result: angelica]",
+    *_GATEWAY_GENERATION_REPORT_MARKERS,
     "integrity rca",
     "integrity report",
     "validation report",
@@ -889,6 +897,8 @@ _FULL_SHA256_RE = re.compile(r"\b[a-f0-9]{64}\b", re.IGNORECASE)
 _OUTPUT_PATH_RE = re.compile(r"(?im)^\s*output_path\s*:\s*(?P<path>\S.*?)(?:\s*)$")
 _FILE_SHA_RE = re.compile(r"(?im)^\s*file_sha256\s*:\s*(?P<sha>\S+)")
 _PROMPT_ID_RE = re.compile(r"(?im)^\s*prompt_id\s*:\s*(?P<prompt_id>\S+)")
+_SLACK_UPLOAD_PASS_RE = re.compile(r"(?im)^\s*slack upload\s*:\s*(?:\n\s*)?pass\s*$")
+_NAS_HOOK_PASS_RE = re.compile(r"(?im)^\s*nas hook\s*:\s*(?:\n\s*)?pass\s*$")
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -904,6 +914,7 @@ _GATEWAY_SINGLE_PNG_REPORT_MARKERS = (
 
 _GATEWAY_FULL_ROUND_REPORT_MARKERS = (
     "[nsfw stability round results]",
+    *_GATEWAY_GENERATION_REPORT_MARKERS,
     "full round",
     "production delivery",
 )
@@ -937,6 +948,26 @@ def _looks_like_gateway_full_round_report(text: str) -> bool:
     return any(marker in body for marker in _GATEWAY_FULL_ROUND_REPORT_MARKERS)
 
 
+def _looks_like_generation_report_body(text: str) -> bool:
+    """Return True only for artifact reports with row-level evidence.
+
+    Short operational summaries and background-process notifications can contain
+    phrases such as ``file_sha256 / prompt_hash / workflow_hash computed``. Those
+    labels are useful status text, but they are not a generation report and must
+    not be rejected as ``file_sha256_unparseable``. A real report has at least an
+    output path or prompt id, or an explicit round-result marker.
+    """
+    body = str(text or "")
+    folded = body.casefold()
+    return (
+        _looks_like_gateway_single_png_report(body)
+        or _looks_like_gateway_full_round_report(body)
+        or bool(_OUTPUT_PATH_RE.search(body))
+        or bool(_PROMPT_ID_RE.search(body))
+        or "checkpoint:" in folded
+    )
+
+
 def _extract_gateway_prompt_ids(text: str) -> list[str]:
     return [match.group("prompt_id").strip().strip("`'\"") for match in _PROMPT_ID_RE.finditer(str(text or ""))]
 
@@ -965,6 +996,8 @@ def _extract_gateway_output_paths(text: str) -> list[Path]:
 def _candidate_nas_mirror_paths(path: Path) -> list[Path]:
     raw = str(path)
     candidates: list[Path] = []
+    if raw.startswith("/Volumes/Hermes/"):
+        candidates.append(path)
     for prefix in ("/Users/hermes/HermesWork/Image", "/Volumes/SSD_Hermes/HermesWork/Image"):
         if raw.startswith(prefix + "/"):
             rel = raw[len(prefix):].lstrip("/")
@@ -998,6 +1031,8 @@ def _validate_gateway_report_integrity(
     """
     body = str(text or "")
     if not body or not _looks_like_gateway_report_requiring_integrity(body):
+        return GatewayReportIntegrityResult(True, body, [])
+    if not _looks_like_generation_report_body(body):
         return GatewayReportIntegrityResult(True, body, [])
 
     folded = body.casefold()
@@ -1055,9 +1090,9 @@ def _validate_gateway_report_integrity(
                 if claimed_sha.casefold() != actual_sha:
                     reasons.append("file_sha256_mismatch")
 
-    if requires_delivery_evidence and "slack upload: pass" in folded and int(attachment_count or 0) <= 0:
+    if requires_delivery_evidence and _SLACK_UPLOAD_PASS_RE.search(body) and int(attachment_count or 0) <= 0:
         reasons.append("slack_pass_without_attachment")
-    if requires_delivery_evidence and "nas hook: pass" in folded:
+    if requires_delivery_evidence and _NAS_HOOK_PASS_RE.search(body):
         mirror_exists = any(
             candidate.exists()
             for output_path in output_paths
