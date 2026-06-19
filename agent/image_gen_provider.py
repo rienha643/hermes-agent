@@ -31,9 +31,11 @@ from __future__ import annotations
 import abc
 import base64
 import datetime
+import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 import uuid
@@ -41,6 +43,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gateway.project_registry import next_versioned_child_path, resolve_project_artifact_dir
+from hermes_constants import get_default_hermes_root, get_hermes_home
 from nas_sync_hooks import queue_nas_sync_hook
 
 logger = logging.getLogger(__name__)
@@ -266,6 +269,81 @@ def _read_json_if_exists(path: Path) -> dict | None:
         return None
 
 
+def _build_nas_evidence(*, hook_requested: bool, mirror_path: Optional[Path] = None, mirror_sha256: Optional[str] = None) -> dict[str, Any]:
+    """Return separated NAS evidence fields for image publish results.
+
+    Hook launch/request, hook log/state, and verified mirror proof are distinct
+    evidence layers.  Publishing may request a hook before the async NAS runner
+    mirrors files, so mirror verification remains false until a caller proves the
+    mirror path/hash separately.
+    """
+    home = get_hermes_home()
+    return {
+        "hook_requested": bool(hook_requested),
+        "hook_log_path": str(home / "logs" / "nas_sync_hook.log"),
+        "hook_state_dir": str(get_default_hermes_root() / "profiles" / "cron-fast" / "state" / "nas-sync"),
+        "mirror_verified": bool(mirror_path and mirror_sha256),
+        "mirror_path": str(mirror_path) if mirror_path else None,
+        "mirror_sha256": str(mirror_sha256) if mirror_sha256 else None,
+    }
+
+
+def _safe_path_component(value: object, fallback: str = "run") -> str:
+    raw = str(value or "").strip() or fallback
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._-")
+    return safe[:96] or fallback
+
+
+def _is_transient_delivery_artifact(*, project_key: str, artifact_key: str, category: str) -> bool:
+    """Return True for E2E/smoke/delivery artifacts that must not share a flat publish dir."""
+    haystack = " ".join([project_key, artifact_key, category]).casefold()
+    tokens = re.split(r"[^a-z0-9]+", haystack)
+    token_set = {token for token in tokens if token}
+    return (
+        "e2e" in token_set
+        or "delivery" in token_set
+        or "fresh_e2e" in haystack
+    )
+
+
+def _resolve_run_publish_dir(
+    base_dir: Path,
+    *,
+    project_key: str,
+    artifact_key: str,
+    category: str,
+    metadata: Dict[str, Any],
+) -> Path:
+    """Choose the final publish directory.
+
+    Stable project/qualification bundles keep the historical shared directory.
+    Transient E2E/smoke/delivery runs get an isolated child directory so NAS
+    hooks sync only that run's canonical primary + sidecars instead of stale
+    PNGs accumulated in the project root.
+    """
+    if not _is_transient_delivery_artifact(project_key=project_key, artifact_key=artifact_key, category=category):
+        return base_dir
+    run_id = (
+        metadata.get("run_id")
+        or metadata.get("prompt_id")
+        or metadata.get("created_at")
+        or uuid.uuid4().hex
+    )
+    return base_dir / _safe_path_component(run_id)
+
+
+def _read_png_dimensions(path: Path) -> tuple[int | None, int | None]:
+    """Read PNG dimensions without importing image libraries."""
+    try:
+        with Path(path).open("rb") as fh:
+            header = fh.read(24)
+        if len(header) >= 24 and header[:8] == b"\x89PNG\r\n\x1a\n" and header[12:16] == b"IHDR":
+            return int.from_bytes(header[16:20], "big"), int.from_bytes(header[20:24], "big")
+    except Exception:
+        return None, None
+    return None, None
+
+
 def _iter_image_bundle_manifests(image_root: Path):
     """Yield tuples of publish manifest + metadata payloads under HermesWork/Image."""
     if not image_root.exists():
@@ -359,13 +437,20 @@ def _load_existing_bundle(
     prompt_name = str(sidecars.get("prompt") or "")
     metadata_name = str(sidecars.get("metadata") or "")
     manifest_name = str(sidecars.get("manifest") or "manifest.json")
+    integrity_name = str(sidecars.get("integrity") or "integrity.json")
 
     workflow_path = sidecar_dir / workflow_name
     prompt_path = sidecar_dir / prompt_name
     metadata_path = sidecar_dir / metadata_name
     manifest_path = sidecar_dir / manifest_name
+    integrity_path = sidecar_dir / integrity_name
 
     primary_image = str(manifest_payload.get("primary_image") or "")
+    nas_evidence = metadata_payload.get("nas_evidence")
+    if not isinstance(nas_evidence, dict):
+        nas_evidence = _build_nas_evidence(
+            hook_requested=bool(metadata_payload.get("nas_hook_requested", False))
+        )
 
     return {
         "project_id": str(manifest_payload.get("project_id") or published_dir.name),
@@ -375,17 +460,21 @@ def _load_existing_bundle(
         "prompt_path": prompt_path,
         "metadata_path": metadata_path,
         "manifest_path": manifest_path,
+        "integrity_path": integrity_path,
         "primary_image": primary_image,
         "sidecars": {
             "workflow": workflow_name,
             "prompt": prompt_name,
             "metadata": metadata_name,
             "manifest": manifest_name,
+            "integrity": integrity_name,
             "dir": str(sidecar_dir),
         },
+        "file_sha256": str((manifest_payload.get("integrity") or {}).get("primary_image_sha256") or metadata_payload.get("file_sha256") or ""),
         "storage_verification": _verify_image_storage_root(published_dir),
         "sidecar_dir": sidecar_dir,
         "nas_hook_requested": bool(metadata_payload.get("nas_hook_requested", False)),
+        "nas_evidence": nas_evidence,
     }
 
 
@@ -421,12 +510,20 @@ def publish_filesystem_image_bundle(
         duplicate_dir, duplicate_manifest, duplicate_metadata = duplicate_bundle
         return _load_existing_bundle(duplicate_dir, duplicate_manifest, duplicate_metadata)
 
-    project_record, published_dir = resolve_project_artifact_dir("Image", project_key, work_root=image_root)
+    project_record, base_published_dir = resolve_project_artifact_dir("Image", project_key, work_root=image_root)
+    published_dir = _resolve_run_publish_dir(
+        base_published_dir,
+        project_key=project_key,
+        artifact_key=artifact_key,
+        category=category,
+        metadata=metadata,
+    )
     published_dir.mkdir(parents=True, exist_ok=True)
     storage_verification = _verify_image_storage_root(published_dir)
     primary_image_path = next_versioned_child_path(published_dir, f"{artifact_key}{source.suffix}")
     shutil.copyfile(source, primary_image_path)
 
+    actual_width, actual_height = _read_png_dimensions(primary_image_path)
     versioned_stem = primary_image_path.stem
     sidecar_dir = published_dir / "sidecar"
     sidecar_dir.mkdir(parents=True, exist_ok=True)
@@ -434,6 +531,8 @@ def publish_filesystem_image_bundle(
     prompt_path = sidecar_dir / "prompt.json"
     metadata_path = sidecar_dir / "metadata.json"
     manifest_path = sidecar_dir / "manifest.json"
+    integrity_path = sidecar_dir / "integrity.json"
+    primary_image_sha256 = _sha256_file(primary_image_path)
 
     metadata_payload = dict(metadata)
     metadata_payload.update(
@@ -448,6 +547,12 @@ def publish_filesystem_image_bundle(
             "prompt_path": str(prompt_path),
             "metadata_sidecar_path": str(metadata_path),
             "manifest_path": str(manifest_path),
+            "integrity_path": str(integrity_path),
+            "file_sha256": primary_image_sha256,
+            "requested_width": prompt_payload.get("width"),
+            "requested_height": prompt_payload.get("height"),
+            "actual_width": actual_width,
+            "actual_height": actual_height,
             "storage_verification": storage_verification,
         }
     )
@@ -461,7 +566,9 @@ def publish_filesystem_image_bundle(
         artifact_path=primary_image_path,
         source_root=published_dir,
     )
+    nas_evidence = _build_nas_evidence(hook_requested=nas_hook_requested)
     metadata_payload["nas_hook_requested"] = nas_hook_requested
+    metadata_payload["nas_evidence"] = nas_evidence
     metadata_path.write_text(json.dumps(metadata_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     manifest_payload = {
@@ -476,25 +583,53 @@ def publish_filesystem_image_bundle(
             f"{sidecar_dir.name}/{prompt_path.name}",
             f"{sidecar_dir.name}/{metadata_path.name}",
             f"{sidecar_dir.name}/{manifest_path.name}",
+            f"{sidecar_dir.name}/{integrity_path.name}",
         ],
         "sidecars": {
             "workflow": workflow_path.name,
             "prompt": prompt_path.name,
             "metadata": metadata_path.name,
             "manifest": manifest_path.name,
+            "integrity": integrity_path.name,
             "dir": str(sidecar_dir),
+        },
+        "integrity": {
+            "primary_image_sha256": primary_image_sha256,
+            "algorithm": "sha256",
+            "status": "Pass",
         },
         "prompt_id": metadata_payload.get("prompt_id", ""),
         "engine": metadata_payload.get("provider", ""),
         "created_at": metadata_payload.get("created_at", ""),
+        "dimensions": {
+            "requested_width": prompt_payload.get("width"),
+            "requested_height": prompt_payload.get("height"),
+            "actual_width": actual_width,
+            "actual_height": actual_height,
+        },
         "status": {
             "local_status": metadata_payload.get("local_status", "생성 완료"),
             "publish_status": metadata_payload.get("publish_status", "HermesWork publish 완료"),
             "nas_status": "동기화 요청됨" if nas_hook_requested else "동기화 요청 실패",
+            "nas_hook_requested": nas_hook_requested,
+            "nas_hook_log_path": nas_evidence["hook_log_path"],
+            "nas_mirror_verified": nas_evidence["mirror_verified"],
             "slack_status": metadata_payload.get("slack_status", "primary image 준비됨"),
         },
+        "nas_evidence": nas_evidence,
     }
     manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    integrity_payload = {
+        "artifact_name": artifact_key,
+        "primary_image": primary_image_path.name,
+        "primary_image_sha256": primary_image_sha256,
+        "files": {
+            primary_image_path.name: {"sha256": primary_image_sha256, "bytes": primary_image_path.stat().st_size},
+        },
+        "manifest_path": str(manifest_path),
+        "status": "Pass",
+    }
+    integrity_path.write_text(json.dumps(integrity_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     return {
         "project_id": project_record.project_id,
@@ -504,12 +639,76 @@ def publish_filesystem_image_bundle(
         "prompt_path": prompt_path,
         "metadata_path": metadata_path,
         "manifest_path": manifest_path,
+        "integrity_path": integrity_path,
         "primary_image": primary_image_path.name,
         "sidecars": manifest_payload["sidecars"],
+        "file_sha256": primary_image_sha256,
         "storage_verification": storage_verification,
         "sidecar_dir": sidecar_dir,
         "nas_hook_requested": nas_hook_requested,
+        "nas_evidence": nas_evidence,
     }
+
+
+def record_slack_upload_evidence(
+    source_path: Path | str,
+    *,
+    message_id: str | None,
+    thread_ts: str | None,
+    files_count: int,
+    raw_response: Any = None,
+) -> Path | None:
+    """Persist Slack upload evidence beside an image bundle when sidecars exist."""
+    source_path = Path(source_path)
+    published_dir = source_path.parent
+    sidecar_dir = published_dir / "sidecar"
+    manifest_path = sidecar_dir / "manifest.json"
+    integrity_path = sidecar_dir / "integrity.json"
+    metadata_path = sidecar_dir / "metadata.json"
+    if not manifest_path.exists() or not integrity_path.exists():
+        return None
+
+    local_sha256 = _sha256_file(source_path)
+    evidence = {
+        "message_id": str(message_id or thread_ts or ""),
+        "thread_ts": str(thread_ts or ""),
+        "filename": source_path.name,
+        "source_path": str(source_path),
+        "local_sha256": local_sha256,
+        "files_count": int(files_count),
+    }
+    if raw_response is not None:
+        try:
+            evidence["raw_response_keys"] = sorted(list(raw_response.keys())) if isinstance(raw_response, dict) else []
+        except Exception:
+            evidence["raw_response_keys"] = []
+
+    evidence_path = sidecar_dir / "slack_evidence.json"
+    evidence_path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    for path in (manifest_path, integrity_path, metadata_path):
+        if not path.exists():
+            continue
+        payload = _load_json_file(path)
+        payload["slack_upload_evidence"] = evidence
+        if path == manifest_path:
+            sidecars = dict(payload.get("sidecars") or {})
+            sidecars["slack_evidence"] = evidence_path.name
+            payload["sidecars"] = sidecars
+            files = list(payload.get("files") or [])
+            slack_rel = f"{sidecar_dir.name}/{evidence_path.name}"
+            if slack_rel not in files:
+                files.append(slack_rel)
+            payload["files"] = files
+            status = dict(payload.get("status") or {})
+            status["slack_status"] = "Pass" if evidence.get("message_id") and files_count > 0 else "Pending"
+            payload["status"] = status
+        elif path == integrity_path:
+            files = dict(payload.get("files") or {})
+            files[evidence_path.name] = {"sha256": _sha256_file(evidence_path), "bytes": evidence_path.stat().st_size}
+            payload["files"] = files
+        _write_json_file(path, payload)
+    return evidence_path
 
 
 def write_run_manifest(
@@ -612,6 +811,14 @@ def _write_json_file(path: Path, payload: Dict[str, Any]) -> Path:
     path = Path(path)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _normalize_delivery_status(value: Any) -> str:

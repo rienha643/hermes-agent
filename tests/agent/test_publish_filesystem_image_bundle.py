@@ -101,6 +101,9 @@ def test_publish_filesystem_image_bundle_creates_versioned_bundle_and_manifest(m
     assert metadata["storage_verification"]["logical_path"] == str(expected_dir.parent)
     assert metadata["storage_verification"]["is_ssd_root"] in (True, False)
     assert metadata["nas_hook_requested"] is True
+    assert metadata["nas_evidence"]["hook_requested"] is True
+    assert metadata["nas_evidence"]["mirror_verified"] is False
+    assert metadata["nas_evidence"]["mirror_path"] is None
     assert manifest["primary_image"] == "angelica_smoke_v1.png"
     assert "sidecar/workflow.json" in manifest["files"]
     assert "sidecar/prompt.json" in manifest["files"]
@@ -111,6 +114,10 @@ def test_publish_filesystem_image_bundle_creates_versioned_bundle_and_manifest(m
     assert manifest["sidecars"]["metadata"] == "metadata.json"
     assert manifest["sidecars"]["manifest"] == "manifest.json"
     assert manifest["sidecars"]["dir"] == str(expected_dir / "sidecar")
+    assert manifest["nas_evidence"]["hook_requested"] is True
+    assert manifest["nas_evidence"]["mirror_verified"] is False
+    assert manifest["status"]["nas_hook_requested"] is True
+    assert manifest["status"]["nas_mirror_verified"] is False
 
     assert hook_calls == [
         {
@@ -372,6 +379,98 @@ def test_publish_filesystem_image_bundle_skips_duplicate_publish_for_same_prompt
     assert sidecars.is_dir()
     assert any(path.suffix == ".json" for path in sidecars.iterdir())
     assert len(hook_calls) == 1
+
+
+def test_e2e_publish_uses_per_run_directory_and_nas_hook_source_root(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+
+    from agent import image_gen_provider as provider_mod
+
+    source = tmp_path / "output" / "fresh_e2e_00001_.png"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(PNG_1PX)
+
+    hook_calls = []
+    monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: hook_calls.append(kwargs) or True)
+
+    bundle = provider_mod.publish_filesystem_image_bundle(
+        source,
+        prefix="angelica_windows_remote_comfyui_fresh_e2e_v6",
+        project_name="angelica_windows_remote_comfyui_fresh_e2e_v6",
+        artifact_name="image",
+        category="e2e",
+        workflow_json={},
+        prompt_payload={"width": 512, "height": 512, "raw_prompt_payload": {}},
+        metadata={"provider": "comfy-local", "prompt_id": "pid-run-123", "created_at": "2026-06-17T00:00:00Z"},
+    )
+
+    assert bundle["published_dir"].name == "pid-run-123"
+    assert bundle["published_dir"].parent.name.endswith("angelica_windows_remote_comfyui_fresh_e2e_v6")
+    assert bundle["primary_image_path"].parent == bundle["published_dir"]
+    assert hook_calls == [
+        {
+            "category": "image",
+            "scope": "pid-run-123",
+            "artifact_path": bundle["primary_image_path"],
+            "source_root": bundle["published_dir"],
+        }
+    ]
+    metadata = _read_json(bundle["metadata_path"])
+    manifest = _read_json(bundle["manifest_path"])
+    assert metadata["requested_width"] == 512
+    assert metadata["requested_height"] == 512
+    assert metadata["actual_width"] == 1
+    assert metadata["actual_height"] == 1
+    assert manifest["dimensions"]["requested_width"] == 512
+    assert manifest["primary_image"] == bundle["primary_image_path"].name
+
+
+def test_slack_upload_evidence_is_persisted_to_sidecars(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+
+    from agent import image_gen_provider as provider_mod
+
+    source = tmp_path / "output" / "fresh_e2e_00001_.png"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(PNG_1PX)
+    monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
+
+    bundle = provider_mod.publish_filesystem_image_bundle(
+        source,
+        prefix="angelica_windows_remote_comfyui_fresh_e2e_v6",
+        project_name="angelica_windows_remote_comfyui_fresh_e2e_v6",
+        artifact_name="image",
+        category="e2e",
+        workflow_json={},
+        prompt_payload={"width": 512, "height": 512, "raw_prompt_payload": {}},
+        metadata={"provider": "comfy-local", "prompt_id": "pid-slack", "created_at": "2026-06-17T00:00:00Z"},
+    )
+
+    evidence_path = provider_mod.record_slack_upload_evidence(
+        bundle["primary_image_path"],
+        message_id="1781687569.697899",
+        thread_ts="1781687569.000000",
+        files_count=1,
+        raw_response={"ok": True, "files": []},
+    )
+
+    assert evidence_path == bundle["sidecar_dir"] / "slack_evidence.json"
+    assert evidence_path is not None
+    evidence = _read_json(evidence_path)
+    assert evidence["message_id"] == "1781687569.697899"
+    assert evidence["thread_ts"] == "1781687569.000000"
+    assert evidence["filename"] == bundle["primary_image_path"].name
+    assert evidence["source_path"] == str(bundle["primary_image_path"])
+    assert evidence["local_sha256"] == bundle["file_sha256"]
+    assert evidence["files_count"] == 1
+    manifest = _read_json(bundle["manifest_path"])
+    integrity = _read_json(bundle["integrity_path"])
+    assert manifest["slack_upload_evidence"]["message_id"] == "1781687569.697899"
+    assert manifest["status"]["slack_status"] == "Pass"
+    assert "sidecar/slack_evidence.json" in manifest["files"]
+    assert "slack_evidence.json" in integrity["files"]
 
 
 def test_publish_filesystem_image_bundle_groups_multiple_artifacts_under_same_project(monkeypatch, tmp_path):
