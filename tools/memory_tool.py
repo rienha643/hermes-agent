@@ -479,6 +479,14 @@ class MemoryStore:
 
         limit = self._char_limit(target)
         content = ENTRY_DELIMITER.join(entries)
+        if limit > 0 and len(content) > limit:
+            marker = "\n[TRUNCATED]"
+            keep = max(0, limit - len(marker))
+            content = content[:keep].rstrip()
+            if keep:
+                content = f"{content}{marker}"
+            else:
+                content = content[:limit]
         current = len(content)
         pct = min(100, int((current / limit) * 100)) if limit > 0 else 0
 
@@ -717,7 +725,3 @@ registry.register(
     check_fn=check_memory_requirements,
     emoji="🧠",
 )
-
-
-
-

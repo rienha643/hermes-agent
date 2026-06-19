@@ -393,6 +393,19 @@ class TestMemoryStoreSnapshot:
     def test_empty_snapshot_returns_none(self, store):
         assert store.format_for_system_prompt("memory") is None
 
+    def test_snapshot_clamps_oversized_disk_user_profile(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tools.memory_tool.get_memory_dir", lambda: tmp_path)
+        (tmp_path / "USER.md").write_text("x" * 120, encoding="utf-8")
+
+        store = MemoryStore(memory_char_limit=50, user_char_limit=50)
+        store.load_from_disk()
+
+        snapshot = store.format_for_system_prompt("user")
+        assert snapshot is not None
+        content = snapshot.split("═" * 46, 2)[-1].strip()
+        assert len(content) <= 50
+        assert "[TRUNCATED]" in content
+
 
 # =========================================================================
 # memory_tool() dispatcher
