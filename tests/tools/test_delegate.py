@@ -40,11 +40,13 @@ from tools.delegate_tool import (
     _format_specialist_frame,
     _format_specialist_result_frame,
     _infer_delegate_image_metadata,
+    _is_comfy_image_fast_path_task,
     _is_single_output_image_task,
     _resolve_specialist_profile,
     _resolve_specialist_worker_label,
     _strip_blocked_tools,
     _strip_delegate_routing_context_prefixes,
+    _effective_delegate_max_iterations,
     _resolve_child_credential_pool,
     _resolve_delegation_credentials,
 )
@@ -292,6 +294,19 @@ class TestChildSystemPrompt(unittest.TestCase):
         self.assertIn("Call image_generate at most once", prompt)
         self.assertIn("MUST NOT return or upload an older file", prompt)
 
+    def test_comfy_image_fast_path_rules_included(self):
+        prompt = _build_child_system_prompt(
+            "Remote ComfyUI smoke 이미지 1장 생성",
+            single_output_image=True,
+            comfy_image_fast_path=True,
+        )
+        self.assertIn("COMFY IMAGE FAST PATH", prompt)
+        self.assertIn("no search_files", prompt)
+        self.assertIn("Generate at most once", prompt)
+        self.assertIn("structured result fields", prompt)
+        self.assertIn("file_sha256: <64hex>", prompt)
+        self.assertIn("Never use inline `file_sha256=<hash>`", prompt)
+
     def test_image_metadata_hints_included_for_delegated_worker(self):
         prompt = _build_child_system_prompt(
             "망각구역 주인공 컨셉 이미지 1장 생성",
@@ -321,6 +336,27 @@ class TestChildSystemPrompt(unittest.TestCase):
                 toolsets=["terminal", "file", "skills"],
             )
         )
+
+    def test_comfy_image_fast_path_detection_and_iteration_cap(self):
+        task = {
+            "goal": "WINDOWS REMOTE COMFYUI DELIVERY E2E V1 이미지 1장 생성",
+            "context": "artifact publish verification with structured result evidence",
+            "profile": "comfy",
+            "toolsets": ["image_gen"],
+            "_single_output_image": True,
+        }
+        self.assertTrue(_is_comfy_image_fast_path_task(task))
+        self.assertEqual(_effective_delegate_max_iterations([task], requested_default=50), 12)
+
+    def test_comfy_image_fast_path_e2e_iteration_cap(self):
+        task = {
+            "goal": "remote ComfyUI delivery verification",
+            "context": "image artifact publish verification",
+            "profile": "angelica",
+            "toolsets": ["image_gen"],
+        }
+        self.assertTrue(_is_comfy_image_fast_path_task(task))
+        self.assertEqual(_effective_delegate_max_iterations([task], requested_default=50), 18)
 
 
 class TestStripBlockedTools(unittest.TestCase):

@@ -57,7 +57,13 @@ _NEGATED_MULTI_OUTPUT_RE = re.compile(
     re.IGNORECASE,
 )
 _IMAGE_TASK_RE = re.compile(r"(?:이미지|image|img|그림|render|렌더)", re.IGNORECASE)
-_IMAGE_SPECIALIST_PROFILES = {"artist", "forge", "comfy"}
+_IMAGE_SPECIALIST_PROFILES = {"artist", "forge", "comfy", "angelica"}
+_COMFY_IMAGE_FAST_PATH_PROFILES = {"comfy", "angelica"}
+_COMFY_IMAGE_FAST_PATH_TASK_RE = re.compile(
+    r"(?:smoke|e2e|delivery\s+verification|single\s+image|remote\s+comfyui|artifact\s+publish\s+verification|"
+    r"스모크|전달\s*검증|딜리버리\s*검증|단일\s*이미지|이미지\s*1장|한\s*장|원격\s*ComfyUI|remote\s+ComfyUI|아티팩트\s*게시\s*검증)",
+    re.IGNORECASE,
+)
 
 # Sentinel value used by the runtime provider system for providers that are
 # not natively known (named custom providers, third-party aggregators, etc.).
@@ -578,6 +584,20 @@ def _is_single_output_image_task(
     if _has_positive_multi_output_request(haystack):
         return False
     return bool(_SINGLE_OUTPUT_REQUEST_RE.search(haystack))
+
+
+def _is_comfy_image_fast_path_task(task: Dict[str, Any]) -> bool:
+    """Return True for delegated Comfy/Angelica image tasks that should not explore broadly."""
+    profile_name = str(task.get("profile") or "").strip().lower()
+    if profile_name not in _COMFY_IMAGE_FAST_PATH_PROFILES:
+        return False
+    goal = str(task.get("goal") or "")
+    context = str(task.get("context") or "")
+    toolsets = task.get("toolsets") if isinstance(task.get("toolsets"), list) else None
+    if not _is_image_generation_task(goal, context, profile=profile_name, toolsets=toolsets):
+        return False
+    haystack = "\n".join(part for part in [goal, context] if part)
+    return bool(_COMFY_IMAGE_FAST_PATH_TASK_RE.search(haystack))
 
 
 def _requires_image_gen_toolset(
@@ -1280,13 +1300,22 @@ def _is_designer_document_delegate_task(task: Dict[str, Any]) -> bool:
 
 
 def _effective_delegate_max_iterations(task_list: List[Dict[str, Any]], *, requested_default: int) -> int:
-    """Return per-call iteration budget, raising only Sylvia/designer document work."""
+    """Return per-call iteration budget, raising only Sylvia/designer document work.
+
+    Comfy/Angelica fast-path image tasks are intentionally capped below the
+    general delegation default so successful image results short-circuit instead
+    of spending dozens of LLM/tool loops on repository exploration.
+    """
     try:
         configured = int(requested_default or DEFAULT_MAX_ITERATIONS)
     except (TypeError, ValueError):
         configured = DEFAULT_MAX_ITERATIONS
     if any(_is_designer_document_delegate_task(task) for task in task_list):
         return max(configured, 90)
+    if any(_is_comfy_image_fast_path_task(task) for task in task_list):
+        if any(str(task.get("_single_output_image") or "").lower() == "true" for task in task_list):
+            return min(configured, 12)
+        return min(configured, 18)
     return configured
 
 
@@ -1666,6 +1695,7 @@ def _build_child_system_prompt(
     max_spawn_depth: int = 1,
     child_depth: int = 1,
     single_output_image: bool = False,
+    comfy_image_fast_path: bool = False,
     image_project_name: Optional[str] = None,
     image_artifact_name: Optional[str] = None,
 ) -> str:
@@ -1711,6 +1741,18 @@ def _build_child_system_prompt(
             "- Do not use terminal to call image APIs directly or to create derivative image files.\n"
             "- vision_analyze may be used only for QA on the current task's generated image.\n"
             "- You may inspect older files for reference, but you MUST NOT return or upload an older file as the final result.\n"
+        )
+    if comfy_image_fast_path:
+        parts.append(
+            "\nCOMFY IMAGE FAST PATH:\n"
+            "Applies to smoke, e2e, delivery verification, single-image generation, remote ComfyUI generation, and artifact publish verification.\n"
+            "- Do not perform repo-wide exploration: no search_files, no repository browsing with read_file, no skill resolving, and no Hermes CLI re-entry.\n"
+            "- Generate at most once: call image_generate or the designated provider path one time only. If that attempt fails under the same conditions, report FAIL instead of retrying.\n"
+            "- Verify only the structured result fields returned by the tool/provider: prompt_id, output_source_origin, artifact_path, file_sha256, manifest_path, integrity_path, media_files, nas_hook_requested, and Slack/delivery_report evidence.\n"
+            "- Missing evidence is not a reason to explore. Report the specific status as FAIL or UNKNOWN: Slack, NAS, Sidecar, Hash.\n"
+            "- Stop immediately and write the final report once artifact_path is under HermesWork/Image, file_sha256 is 64-char hex, media_files exists, sidecar manifest/integrity exists, and NAS/Slack evidence is confirmed or explicitly UNKNOWN.\n"
+            "- Report time separately as ComfyUI server time, tool/image_generate wall time, child delegation wall time, and total parent wall time when those values are available.\n"
+            "- Hash lines must be standalone colon-form lines: `file_sha256: <64hex>` and `nas_sha256: <64hex>`. Never use inline `file_sha256=<hash>` format.\n"
         )
     if image_project_name or image_artifact_name:
         routing_lines = ["\nIMAGE PROJECT METADATA:\n"]
@@ -2188,6 +2230,13 @@ def _build_child_agent(
         max_spawn_depth=max_spawn,
         child_depth=child_depth,
         single_output_image=single_output_image,
+        comfy_image_fast_path=_is_comfy_image_fast_path_task({
+            "goal": goal,
+            "context": context,
+            "profile": profile,
+            "toolsets": toolsets,
+            "_single_output_image": single_output_image,
+        }),
         image_project_name=image_project_name,
         image_artifact_name=image_artifact_name,
     )

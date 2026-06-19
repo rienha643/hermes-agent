@@ -347,7 +347,7 @@ TOOLSETS = {
         "tools": [
             "clarify",
             "web_search", "web_extract",
-            "vision_analyze",
+            "vision_analyze", "image_generate",
             "read_file", "search_files", "write_file",
         ],
         "includes": []
