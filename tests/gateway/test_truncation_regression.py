@@ -27,10 +27,12 @@ class TestGatewayTruncationRegression:
         assert applied is True
         assert _looks_like_gateway_delivery_summary(compacted) is True
         lines = [line for line in compacted.splitlines() if line.strip()]
-        assert len(lines) <= 8
+        assert "lines omitted" not in compacted
+        assert "[truncated]" not in compacted
+        assert len(lines) == len([line for line in block.splitlines() if line.strip()])
         assert compacted.count("NAS Hook: PASS") <= 1
         assert compacted.count("provenance: PASS") <= 1
-        assert repeated_path * 2 not in compacted
+        assert repeated_path in compacted
 
     def test_compact_gateway_final_response_leaves_short_messages_alone(self):
         text = "짧은 완료 메시지"
@@ -121,7 +123,9 @@ class TestGatewayTruncationRegression:
         block = "Slack 전달 완료\nartifact summary: /tmp/file.png\nNAS Hook: PASS\nprovenance: PASS"
         compacted = _compact_post_upload_reporting((block + "\n\n") * 12)
 
-        assert "lines omitted" in compacted or len(compacted.splitlines()) <= 12
+        assert compacted == block
+        assert "lines omitted" not in compacted
+        assert "[truncated]" not in compacted
 
     def test_post_upload_reporting_does_not_compact_evaluation_reports(self):
         text = "Evaluation Report\n" + "\n".join(

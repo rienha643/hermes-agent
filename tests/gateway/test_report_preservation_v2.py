@@ -188,7 +188,7 @@ def test_production_report_preserved_but_not_trusted():
     _assert_preserved_everywhere(text)
 
 
-def test_operational_summary_compact_still_allowed():
+def test_operational_summary_preserves_all_lines_without_omission():
     text = "\n".join(
         f"Slack Upload: PASS artifact summary: /tmp/file_{idx}.png NAS Hook: PASS provenance: PASS"
         for idx in range(1, 40)
@@ -198,11 +198,16 @@ def test_operational_summary_compact_still_allowed():
     assert should_preserve_report_body(text) is False
 
     gateway_text, applied = _compact_gateway_final_response(text)
-    assert applied is True
-    assert "lines omitted" in gateway_text or len(gateway_text.splitlines()) <= 20
+    assert applied is False
+    assert gateway_text == text
+    assert "lines omitted" not in gateway_text
+    assert "[truncated]" not in gateway_text
+    assert "file_39.png" in gateway_text
 
     post_text = _compact_post_upload_reporting(text)
-    assert "lines omitted" in post_text or len(post_text.splitlines()) <= 12
+    assert "lines omitted" not in post_text
+    assert "[truncated]" not in post_text
+    assert "file_39.png" in post_text
 
 
 def test_delegate_worker_result_frame_preserves_structured_report_body():

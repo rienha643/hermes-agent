@@ -1671,12 +1671,12 @@ def _split_gateway_evaluation_report_parts(
 
 
 def _compact_gateway_final_response(text: str) -> tuple[str, bool]:
-    """Compact operational delivery summaries only.
+    """Deduplicate operational delivery summaries without deleting lines.
 
     Ordinary assistant final responses must never receive ``... (N lines
-    omitted)`` just because they are long.  The compacting budget is reserved
-    for delivery/provenance/post-upload/status summaries, where repeated blocks
-    are operational noise rather than authored user-facing content.
+    omitted)`` just because they are long.  Delivery/provenance/post-upload
+    summaries are also user-facing worker reports, so this helper may remove
+    exact duplicate blocks but must not clip or omit report body lines.
     """
     if not text:
         return text, False
@@ -1701,18 +1701,7 @@ def _compact_gateway_final_response(text: str) -> tuple[str, bool]:
     compacted = "\n\n".join(blocks).strip()
     if not compacted:
         return compacted, compacted != original
-
-    lines = [line.rstrip() for line in compacted.splitlines() if line.strip()]
-    if len(compacted) <= _GATEWAY_DELIVERY_SUMMARY_MAX_CHARS and len(lines) <= _GATEWAY_DELIVERY_SUMMARY_MAX_LINES:
-        return compacted, compacted != original
-
-    clipped = [line[:_GATEWAY_DELIVERY_SUMMARY_MAX_LINE_CHARS].rstrip() for line in lines[:_GATEWAY_DELIVERY_SUMMARY_MAX_LINES]]
-    if len(lines) > _GATEWAY_DELIVERY_SUMMARY_MAX_LINES:
-        clipped.append(f"... ({len(lines) - _GATEWAY_DELIVERY_SUMMARY_MAX_LINES} lines omitted)")
-    result = "\n".join(clipped).strip()
-    if len(result) > _GATEWAY_DELIVERY_SUMMARY_MAX_CHARS:
-        result = result[:_GATEWAY_DELIVERY_SUMMARY_MAX_CHARS].rstrip() + "\n... [truncated]"
-    return result, result != original
+    return compacted, compacted != original
 
 
 def _prepare_gateway_status_message(platform: Any, event_type: str, message: str) -> Optional[str]:

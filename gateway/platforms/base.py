@@ -85,13 +85,14 @@ _POST_UPLOAD_REPORT_MARKERS = (
 
 
 def _compact_post_upload_reporting(text: str) -> str:
-    """Keep post-upload completion reporting short and deduplicated.
+    """Deduplicate post-upload completion reporting without deleting lines.
 
     The delivery pipeline sometimes accumulates a final completion summary plus
-    artifact/provenance/NAS sub-sections into one response body. That can push
-    the message past platform output budgets and cause truncation. This helper
-    trims repeated blocks and collapses completion-style reports to a small,
-    stable summary.
+    artifact/provenance/NAS sub-sections into one response body.  Keep the
+    authored report intact for Slack delivery: remove exact duplicate blocks,
+    but never replace middle content with ``... (N lines omitted)``.  Platform
+    adapters can still split messages at transport limits; the report body
+    itself must remain complete.
     """
     if not text:
         return text
@@ -113,17 +114,7 @@ def _compact_post_upload_reporting(text: str) -> str:
     compacted = "\n\n".join(paragraphs).strip()
     if not compacted:
         return compacted
-    if not looks_like_operational_delivery_summary(compacted):
-        return compacted
-
-    if len(compacted) <= _POST_UPLOAD_REPORT_MAX_CHARS and len(compacted.splitlines()) <= _POST_UPLOAD_REPORT_MAX_LINES:
-        return compacted
-
-    lines = [line.rstrip() for line in compacted.splitlines() if line.strip()]
-    clipped = [line[:_POST_UPLOAD_REPORT_MAX_LINE_CHARS].rstrip() for line in lines[:_POST_UPLOAD_REPORT_MAX_LINES]]
-    if len(lines) > _POST_UPLOAD_REPORT_MAX_LINES:
-        clipped.append(f"... ({len(lines) - _POST_UPLOAD_REPORT_MAX_LINES} lines omitted)")
-    return "\n".join(clipped)
+    return compacted
 
 
 def _platform_name(platform) -> str:
