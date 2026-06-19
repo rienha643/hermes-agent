@@ -302,17 +302,49 @@ def _slack_path_within_root(path: str, root: str) -> bool:
         return False
 
 
+def _slack_media_path_is_sensitive_or_sidecar(path: _Path) -> bool:
+    """Return True for real sensitive/sidecar path components, not UUID substrings."""
+    parts = [part.lower() for part in path.parts]
+    lower_name = path.name.lower()
+    suffix = path.suffix.lower()
+    stem = path.stem.lower()
+
+    if suffix in {".db", ".sqlite", ".sqlite3"}:
+        return True
+    if any(part in {"sidecar", "_sidecars", "credentials", "credential", "secrets", "secret", "tokens", "token"} for part in parts):
+        return True
+    if any(part in {"cache", "state", "session", "sessions", "tmp", "intermediate"} for part in parts):
+        return True
+    if lower_name in {"auth.json", "workflow.json", "prompt.json", "metadata.json", "manifest.json", "integrity.json"}:
+        return True
+    if lower_name == ".env" or lower_name.startswith(".env."):
+        return True
+    sensitive_prefixes = (
+        "auth",
+        "credential",
+        "credentials",
+        "token",
+        "secret",
+        "refresh_token",
+        "private_key",
+        "host_secret",
+        "oauth",
+        "api_key",
+        "secret_key",
+    )
+    return any(stem == token or stem.startswith(f"{token}_") or stem.startswith(f"{token}-") for token in sensitive_prefixes)
+
+
 def _slack_media_block_reason(file_path: str) -> str | None:
     path = _Path(file_path)
     suffix = path.suffix.lower()
-    lowered = str(path).lower()
-    if suffix != ".png":
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
         return f"forbidden_extension:{suffix or '<none>'}"
     if any(_slack_path_within_root(file_path, root) for root in _SLACK_BLOCKED_SOURCE_ROOTS):
         return "blocked_source_root:/Volumes/SSD_Hermes/ComfyUI/output"
     if not any(_slack_path_within_root(file_path, root) for root in _SLACK_ALLOWED_PUBLISH_ROOTS):
         return "outside_allowed_publish_roots"
-    if any(token in lowered for token in ("auth.json", "credentials", "credential", "token", "secret", "refresh_token", "private_key", "host_secret", "oauth", ".env", "config", "state", "cache", "key", "pem", "p12", "sqlite", "db", "log", "workflow.json", "prompt.json", "metadata.json", "manifest.json", "_sidecars", "sidecar", "tmp", "intermediate", "session")):
+    if _slack_media_path_is_sensitive_or_sidecar(path):
         return "blocked_sensitive_or_sidecar"
     return None
 
@@ -1107,7 +1139,7 @@ class SlackAdapter(BasePlatformAdapter):
         images: List[Tuple[str, str]],
         metadata: Optional[Dict[str, Any]] = None,
         human_delay: float = 0.0,
-    ) -> None:
+    ) -> Optional[SendResult]:
         """Send a batch of images as a single Slack message with multiple file uploads.
 
         Uses ``files_upload_v2`` with its ``file_uploads`` parameter so all
@@ -1136,6 +1168,7 @@ class SlackAdapter(BasePlatformAdapter):
         CHUNK = 10
         chunks = [images[i:i + CHUNK] for i in range(0, len(images), CHUNK)]
 
+        last_upload_result: Optional[SendResult] = None
         for chunk_idx, chunk in enumerate(chunks):
             if human_delay > 0 and chunk_idx > 0:
                 await asyncio.sleep(human_delay)
@@ -1201,11 +1234,28 @@ class SlackAdapter(BasePlatformAdapter):
                     thread_ts=thread_ts,
                 )
                 self._record_uploaded_file_thread(chat_id, thread_ts)
-                _ = result
+                message_id = None
+                if isinstance(result, dict):
+                    message_id = str(result.get("ts") or result.get("message_ts") or "") or None
+                    files_payload = result.get("files")
+                    if not message_id and isinstance(files_payload, list) and files_payload:
+                        first_file = files_payload[0] if isinstance(files_payload[0], dict) else {}
+                        shares = first_file.get("shares") if isinstance(first_file, dict) else None
+                        if isinstance(shares, dict):
+                            for scope in ("public", "private"):
+                                by_channel = shares.get(scope)
+                                if isinstance(by_channel, dict):
+                                    entries = by_channel.get(chat_id)
+                                    if isinstance(entries, list) and entries and isinstance(entries[0], dict):
+                                        message_id = str(entries[0].get("ts") or "") or None
+                                        break
+                last_upload_result = SendResult(success=True, message_id=message_id, raw_response=result)
             except Exception as e:
                 if _is_slack_not_in_channel_error(e):
                     raise RuntimeError("Slack upload failed: not_in_channel") from e
                 raise
+
+        return last_upload_result
 
     def _record_uploaded_file_thread(self, chat_id: str, thread_ts: Optional[str]) -> None:
         """Treat successful file uploads as bot participation in a thread."""
@@ -1457,7 +1507,23 @@ class SlackAdapter(BasePlatformAdapter):
     ) -> SendResult:
         """Send a local image file to Slack by uploading it."""
         try:
-            return await self._upload_file(chat_id, image_path, caption, reply_to, metadata)
+            result = await self._upload_file(chat_id, image_path, caption, reply_to, metadata)
+            if result.success:
+                return result
+            if result.error and (
+                "blocked_sensitive_or_sidecar" in result.error
+                or "blocked_source_root" in result.error
+                or "forbidden_extension" in result.error
+                or "not_in_channel" in result.error
+            ):
+                return result
+            return await super().send_image_file(
+                chat_id=chat_id,
+                image_path=image_path,
+                caption=caption,
+                reply_to=reply_to,
+                metadata=metadata,
+            )
         except FileNotFoundError:
             return SendResult(success=False, error=f"Image file not found: {image_path}")
         except Exception as e:  # pragma: no cover - defensive logging
@@ -1468,7 +1534,13 @@ class SlackAdapter(BasePlatformAdapter):
                 e,
                 exc_info=True,
             )
-            return SendResult(success=False, error=str(e))
+            return await super().send_image_file(
+                chat_id=chat_id,
+                image_path=image_path,
+                caption=caption,
+                reply_to=reply_to,
+                metadata=metadata,
+            )
 
     async def send_image(
         self,
@@ -1525,7 +1597,13 @@ class SlackAdapter(BasePlatformAdapter):
                 e,
                 exc_info=True,
             )
-            return SendResult(success=False, error=str(e))
+            return await super().send_image(
+                chat_id=chat_id,
+                image_url=image_url,
+                caption=caption,
+                reply_to=reply_to,
+                metadata=metadata,
+            )
 
     async def send_voice(
         self,
@@ -1601,7 +1679,13 @@ class SlackAdapter(BasePlatformAdapter):
                 e,
                 exc_info=True,
             )
-            return SendResult(success=False, error=str(e))
+            return await super().send_video(
+                chat_id=chat_id,
+                video_path=video_path,
+                caption=caption,
+                reply_to=reply_to,
+                metadata=metadata,
+            )
 
     async def send_document(
         self,
@@ -1662,7 +1746,14 @@ class SlackAdapter(BasePlatformAdapter):
                 e,
                 exc_info=True,
             )
-            return SendResult(success=False, error=str(e))
+            return await super().send_document(
+                chat_id=chat_id,
+                file_path=file_path,
+                caption=caption,
+                file_name=file_name,
+                reply_to=reply_to,
+                metadata=metadata,
+            )
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         """Get information about a Slack channel."""
@@ -2061,9 +2152,18 @@ class SlackAdapter(BasePlatformAdapter):
                     for t in to_remove:
                         self._mentioned_threads.discard(t)
 
+        # Determine message type before optional context injection. Command
+        # messages must keep the slash command at the start of ``text`` so
+        # MessageEvent.get_command() can dispatch them. In Slack threads this
+        # matters for the ``!cmd`` workaround, which has already rewritten
+        # known commands to ``/cmd`` above.
+        msg_type = MessageType.TEXT
+        if (original_text or "").startswith("/"):
+            msg_type = MessageType.COMMAND
+
         # When entering a thread for the first time (no existing session),
         # fetch thread context so the agent understands the conversation.
-        if is_thread_reply and not self._has_active_session_for_thread(
+        if msg_type != MessageType.COMMAND and is_thread_reply and not self._has_active_session_for_thread(
             channel_id=channel_id,
             thread_ts=event_thread_ts,
             user_id=user_id,
@@ -2076,11 +2176,6 @@ class SlackAdapter(BasePlatformAdapter):
             )
             if thread_context:
                 text = thread_context + text
-
-        # Determine message type
-        msg_type = MessageType.TEXT
-        if (original_text or "").startswith("/"):
-            msg_type = MessageType.COMMAND
 
         # Handle file attachments
         media_urls = []

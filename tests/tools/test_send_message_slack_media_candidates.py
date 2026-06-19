@@ -75,3 +75,32 @@ def test_expected_count_mismatch_still_raises(tmp_path: Path, monkeypatch):
 
     with pytest.raises(ValueError, match="expected 2, got 1"):
         _validate([image], expected_count=2)
+
+
+def test_uuid_segment_containing_db_does_not_block_publish_root_png(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(platform_base, "_SLACK_ALLOWED_PUBLISH_ROOTS", (str(tmp_path),))
+    image = _write_png(
+        tmp_path
+        / "HermesWork"
+        / "Image"
+        / "8f461990-77d3-4b9c-a0e8-8f19362db3ef"
+        / "windows-remote-comfyui-e2e-512_v1.png"
+    )
+
+    validated, blocked = _validate([image])
+
+    assert validated == [(str(image), False)]
+    assert blocked == []
+
+
+@pytest.mark.parametrize("name", ["file.db", "state.sqlite", "cache.sqlite3"])
+def test_database_files_remain_blocked_even_under_publish_root(tmp_path: Path, monkeypatch, name: str):
+    monkeypatch.setattr(platform_base, "_SLACK_ALLOWED_PUBLISH_ROOTS", (str(tmp_path),))
+    db_file = tmp_path / "HermesWork" / "Image" / "safe_scope" / name
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    db_file.write_bytes(b"not an image")
+
+    validated, blocked = _validate([db_file])
+
+    assert validated == []
+    assert blocked

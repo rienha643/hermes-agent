@@ -3,6 +3,7 @@ from pathlib import Path
 import gateway.platforms.base as platform_base
 
 from gateway.platforms.base import validate_media_delivery_path, validate_slack_delivery_path
+from gateway.platforms.slack import _slack_media_block_reason
 
 
 def _write_png(path: Path) -> Path:
@@ -49,3 +50,18 @@ def test_sensitive_key_material_paths_remain_blocked(tmp_path: Path):
     assert validate_slack_delivery_path(str(private_key), image_only=True) is None
     assert validate_media_delivery_path(str(env_file)) is None
     assert validate_slack_delivery_path(str(env_file), image_only=True) is None
+
+
+def test_slack_adapter_allows_v6_uuid_db_publish_root_png(monkeypatch):
+    v6_path = (
+        "/Volumes/SSD_Hermes/HermesWork/Image/260617_HermesWork_Image/"
+        "8f461990-77d3-4b9c-a0e8-8f19362db3ef/windows-remote-comfyui-e2e-512_v1.png"
+    )
+
+    assert _slack_media_block_reason(v6_path) is None
+
+
+def test_slack_adapter_blocks_database_file_by_extension_under_publish_root():
+    db_path = "/Volumes/SSD_Hermes/HermesWork/Image/safe_scope/file.db"
+
+    assert _slack_media_block_reason(db_path) == "forbidden_extension:.db"

@@ -749,6 +749,28 @@ class TestBangPrefixCommands:
         assert msg_event.source.thread_id == "1111111111.000001"
 
     @pytest.mark.asyncio
+    async def test_bang_thread_command_skips_context_prepend(self, adapter):
+        """``!whoami`` in a first thread reply must stay command-dispatchable.
+
+        Without this guard, the fetched ``[Thread context ...]`` block was
+        prepended before ``/whoami``. The event was tagged COMMAND, but
+        MessageEvent.get_command() could no longer parse the command because
+        ``text`` no longer started with ``/``.
+        """
+        adapter._fetch_thread_context = AsyncMock(
+            return_value="[Thread context — prior messages in this thread]\n"
+        )
+
+        evt = self._make_event("!whoami", thread_ts="1111111111.000001")
+        await adapter._handle_slack_message(evt)
+
+        msg_event = adapter.handle_message.call_args[0][0]
+        assert msg_event.text.startswith("/whoami")
+        assert "[Thread context" not in msg_event.text
+        assert msg_event.message_type == MessageType.COMMAND
+        assert msg_event.get_command() == "whoami"
+
+    @pytest.mark.asyncio
     async def test_bang_unknown_token_passes_through_unchanged(self, adapter):
         """``!nice work`` is just a casual message — must NOT be rewritten."""
         await adapter._handle_slack_message(self._make_event("!nice work"))
