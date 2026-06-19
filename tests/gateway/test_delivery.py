@@ -1,5 +1,6 @@
 """Tests for the delivery routing module."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -292,7 +293,7 @@ async def test_local_delivery_publishes_to_hermeswork_documents(tmp_path, monkey
 
     published = Path(result["path"])
     assert published.exists()
-    assert "HermesWork/Documents/dog_character_concept_sheet" in str(published)
+    assert re.search(r"HermesWork/Documents/\d{6}_dog_character_concept_sheet/", str(published))
     source_dir = router.output_dir / "job-123"
     assert any(p.suffix == ".md" for p in source_dir.iterdir())
 

@@ -9,6 +9,10 @@ from gateway.report_preservation import (
 from tools.delegate_tool import _format_specialist_result_frame
 
 
+def _synthetic_report(title: str, *, line_count: int = 80) -> str:
+    return "\n".join([title] + [f"line {idx:02d}: detailed evidence must remain visible." for idx in range(1, line_count + 1)])
+
+
 def _assert_preserved_everywhere(text: str) -> None:
     assert should_preserve_report_body(text) is True
     gateway_text, applied = _compact_gateway_final_response(text)
@@ -19,6 +23,30 @@ def _assert_preserved_everywhere(text: str) -> None:
     post_text = _compact_post_upload_reporting(text)
     assert post_text == text
     assert "lines omitted" not in post_text
+
+
+def test_general_report_class_titles_preserved_without_marker_churn():
+    for title in (
+        "[DELEGATE ARTIFACT STRUCTURED HANDOFF FIX V1]",
+        "[ANGELICA FRESH E2E V4 DELIVERY FAILURE RCA V1]",
+        "[COMFY FAST PATH RUNTIME APPLY V1]",
+        "[SEIR NAI STRUCTURED ATTACHMENT DELIVERY VERIFY V1]",
+        "[CHECKPOINT RESOLUTION VALIDATION V1]",
+        "[ARTIFACT INTEGRITY HANDOFF V1]",
+        "[WORKER RESULT: Eclipse]",
+    ):
+        text = _synthetic_report(title)
+        _assert_preserved_everywhere(text)
+
+
+def test_delegate_specialist_report_class_frame_preserves_80_line_fix_report():
+    summary = _synthetic_report("[DELEGATE ARTIFACT STRUCTURED HANDOFF FIX V1]")
+
+    frame = _format_specialist_result_frame("Eclipse", status="completed", task_type="fix", summary=summary)
+
+    assert "lines omitted" not in frame
+    assert "line 80: detailed evidence must remain visible." in frame
+    assert should_preserve_report_body(frame) is True
 
 
 def test_nai_feasibility_study_preserved_despite_delivery_terms():

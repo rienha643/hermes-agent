@@ -2470,7 +2470,7 @@ class BasePlatformAdapter(ABC):
         images: List[Tuple[str, str]],
         metadata: Optional[Dict[str, Any]] = None,
         human_delay: float = 0.0,
-    ) -> None:
+    ) -> Optional[SendResult]:
         """Send a batch of images.
 
         Accepts ``http(s)://``, ``file://`` URIs in the first tuple
@@ -2792,9 +2792,28 @@ class BasePlatformAdapter(ABC):
         suffix = path.suffix.lower()
         name = path.name.lower()
         if suffix in _IMAGE_DELIVERY_EXTENSIONS:
-            return bool(re.search(r"(?:page[_-]?\d+|ocr|render|tmp|extracted|image|sidecar|metadata)", name))
+            image_intermediate_re = (
+                r"(?:page[_-]?\d+|ocr|render|tmp|extracted|image|sidecar|metadata|manifest|integrity)"
+            )
+            if re.search(image_intermediate_re, name):
+                parts = [part.lower() for part in path.parts]
+                is_published_image_artifact = any(
+                    parts[idx] == "hermeswork" and idx + 1 < len(parts) and parts[idx + 1] == "image"
+                    for idx in range(len(parts))
+                )
+                # NovelAI/published image artifacts use stable names such as
+                # image_000.png.  Treat generic "image" as document-intermediate
+                # only outside HermesWork/Image; keep explicit markers like
+                # page/ocr/render/tmp/extracted/sidecar/metadata suppressed.
+                if is_published_image_artifact and not re.search(
+                    r"(?:page[_-]?\d+|ocr|render|tmp|extracted|sidecar|metadata|manifest|integrity)",
+                    name,
+                ):
+                    return False
+                return True
+            return False
         if suffix in _TEXT_SIDECAR_EXTENSIONS:
-            return bool(re.search(r"(?:ocr|page[_-]?\d+|extract|render|debug|manifest|sidecar|metadata)", name))
+            return bool(re.search(r"(?:ocr|page[_-]?\d+|extract|render|debug|manifest|sidecar|metadata|integrity)", name))
         return False
 
     @staticmethod
@@ -4340,12 +4359,30 @@ class BasePlatformAdapter(ABC):
                 if _image_paths:
                     try:
                         _batch = [(f"file://{_quote(p)}", "") for p in _image_paths]
-                        await self.send_multiple_images(
+                        batch_result = await self.send_multiple_images(
                             chat_id=event.source.chat_id,
                             images=_batch,
                             metadata=_thread_metadata,
                             human_delay=human_delay,
                         )
+                        if self.platform == Platform.SLACK and getattr(batch_result, "success", False):
+                            try:
+                                from urllib.parse import unquote as _unquote
+                                from agent.image_gen_provider import record_slack_upload_evidence
+
+                                thread_ts = ""
+                                if _thread_metadata:
+                                    thread_ts = str(_thread_metadata.get("thread_ts") or _thread_metadata.get("thread_id") or "")
+                                for image_path in _image_paths:
+                                    record_slack_upload_evidence(
+                                        _unquote(str(image_path)),
+                                        message_id=getattr(batch_result, "message_id", None),
+                                        thread_ts=thread_ts,
+                                        files_count=len(_image_paths),
+                                        raw_response=getattr(batch_result, "raw_response", None),
+                                    )
+                            except Exception as evidence_err:
+                                logger.warning("[%s] Could not persist Slack upload evidence: %s", self.name, evidence_err)
                     except Exception as batch_err:
                         logger.warning("[%s] Error batching images: %s", self.name, batch_err, exc_info=True)
 

@@ -66,6 +66,12 @@ _STRUCTURED_TITLE_RE = re.compile(
 
 _WORKER_RESULT_RE = re.compile(r"(?im)^\s*\[WORKER RESULT:\s*[^\]]+\]\s*$")
 
+_GENERAL_REPORT_CLASS_TITLE_RE = re.compile(
+    r"(?im)^\s*\[[^\]\n]*(?:"
+    r"RCA|FIX|VERIFY|APPLY|E2E|DELIVERY|VALIDATION|INTEGRITY|HANDOFF|CHECKPOINT"
+    r")[^\]\n]*\]\s*$"
+)
+
 _SECTION_HEADING_RE = re.compile(
     r"(?im)^\s*(?:"
     r"Goal|Scope|API|Cost|Commercial Use|Automation|Risk|Risks|Evidence|Result|Results|"
@@ -96,7 +102,20 @@ def _non_empty_lines(text: str) -> list[str]:
 
 def _has_explicit_report_marker(text: str) -> bool:
     body = str(text or "").casefold()
-    return any(marker in body for marker in _EXPLICIT_REPORT_MARKERS)
+    if any(marker in body for marker in _EXPLICIT_REPORT_MARKERS):
+        return True
+    # General report classes should not require per-marker churn.  Preserve
+    # bracketed RCA/FIX/VERIFY/APPLY/E2E/DELIVERY/etc. report frames even when
+    # their bodies are plain evidence lines rather than colon-labelled fields.
+    raw_body = str(text or "")
+    if _GENERAL_REPORT_CLASS_TITLE_RE.search(raw_body):
+        return True
+    # A bare worker-result frame can be an authored report, but gateway/post-upload
+    # delivery summaries also use this wrapper.  Keep those operational summaries
+    # compactable; preserve other long worker-result bodies.
+    if _WORKER_RESULT_RE.search(raw_body):
+        return not any(marker in body for marker in _OPERATIONAL_DELIVERY_MARKERS)
+    return False
 
 
 def looks_like_worker_result_report(text: str) -> bool:

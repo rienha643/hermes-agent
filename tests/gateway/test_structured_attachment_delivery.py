@@ -8,9 +8,11 @@ from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
 from gateway.run import (
     GatewayRunner,
+    _collect_current_turn_media_tags_from_tool_results,
     _collect_structured_attachment_paths,
     _collect_turn_scoped_structured_attachments,
     _slice_turn_messages,
+    _validate_gateway_delivery_candidates,
 )
 from gateway.session import SessionSource, build_session_key
 
@@ -283,6 +285,77 @@ async def test_explicit_media_files_png_allows_image_attachment(allow_tmp_delive
 
 
 @pytest.mark.asyncio
+async def test_structured_nai_published_image_000_is_not_treated_as_document_intermediate(allow_tmp_delivery):
+    image_path = (
+        allow_tmp_delivery
+        / "HermesWork"
+        / "Image"
+        / "NAI"
+        / "20260617_121900_a72428d7"
+        / "image_000.png"
+    )
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"png")
+
+    adapter = _make_adapter("이미지 전달합니다.")
+    event = _make_event(thread_id="1779980356.888399")
+    event._structured_attachment_paths = [str(image_path)]
+
+    await adapter._process_message_background(event, build_session_key(event.source))
+
+    assert adapter.sent_texts == ["이미지 전달합니다."]
+    assert len(adapter.sent_images) == 1
+    assert adapter.sent_documents == []
+    batch_urls = [item[0] for item in adapter.sent_images[0]["images"]]
+    assert len(batch_urls) == 1
+    assert "image_000.png" in batch_urls[0]
+
+
+def test_published_image_artifact_survives_document_delivery_prioritization(allow_tmp_delivery):
+    image_path = (
+        allow_tmp_delivery
+        / "HermesWork"
+        / "Image"
+        / "NAI"
+        / "20260617_121900_a72428d7"
+        / "image_000.png"
+    )
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"png")
+
+    filtered = BasePlatformAdapter.filter_local_delivery_paths([str(image_path)])
+
+    assert len(filtered) == 1
+    assert BasePlatformAdapter.looks_like_document_intermediate_path(filtered[0]) is False
+    assert BasePlatformAdapter.prioritize_document_delivery_paths(filtered) == filtered
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "HermesWork/Documents/run/page_001.png",
+        "HermesWork/Documents/run/ocr_page.png",
+        "HermesWork/Documents/run/render_page.png",
+        "HermesWork/Documents/run/tmp_image.png",
+        "HermesWork/Documents/run/extracted_page.png",
+        "HermesWork/Image/NAI/20260617_121900_a72428d7/metadata_image.png",
+        "HermesWork/Image/NAI/20260617_121900_a72428d7/manifest_image.png",
+        "HermesWork/Image/NAI/20260617_121900_a72428d7/integrity_image.png",
+        "HermesWork/Image/NAI/20260617_121900_a72428d7/sidecar/image_000.png",
+    ],
+)
+def test_document_and_sidecar_intermediate_images_remain_suppressed(allow_tmp_delivery, relative_path):
+    image_path = allow_tmp_delivery / relative_path
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"png")
+
+    filtered = BasePlatformAdapter.filter_local_delivery_paths([str(image_path)])
+
+    assert BasePlatformAdapter.looks_like_document_intermediate_path(str(image_path)) is True
+    assert BasePlatformAdapter.prioritize_document_delivery_paths(filtered) == []
+
+
+@pytest.mark.asyncio
 async def test_sensitive_json_document_files_are_always_blocked(allow_tmp_delivery):
     sensitive = allow_tmp_delivery / "token.json"
     sensitive.write_text("{}")
@@ -385,6 +458,88 @@ def test_worker_result_artifact_paths_without_delivery_intent_are_not_collected(
                         }
                     ]
                 },
+            }
+        ]
+    }
+
+    assert _collect_structured_attachment_paths(agent_result) == []
+
+
+def test_delegate_result_hermeswork_image_artifact_is_collected_without_artifact_files(tmp_path):
+    image_path = tmp_path / "HermesWork" / "Image" / "260617_HermesWork_Image" / "angelica_windows_remote_comfyui_fresh_e2e_v4.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"png")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "delegate_task",
+                "content": {
+                    "results": [
+                        {
+                            "summary": "Angelica result",
+                            "artifacts": [str(image_path)],
+                            "artifact_files": [],
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+
+    assert _collect_structured_attachment_paths(agent_result) == [str(image_path)]
+
+
+def test_delegate_result_hermeswork_image_artifact_becomes_slack_candidate(allow_tmp_delivery):
+    image_path = allow_tmp_delivery / "HermesWork" / "Image" / "260617_HermesWork_Image" / "angelica_windows_remote_comfyui_fresh_e2e_v4.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"png")
+    adapter = _make_adapter("이미지 전달합니다.")
+
+    allowed, blocked = _validate_gateway_delivery_candidates(adapter, [str(image_path)])
+
+    assert allowed == [str(image_path)]
+    assert blocked == []
+
+
+def test_delegate_result_repo_tmp_png_artifact_without_delivery_intent_is_not_collected(tmp_path):
+    image_path = tmp_path / "tmp" / "windows_remote_smoke" / "sdxl_00001_.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"png")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "delegate_task",
+                "content": {
+                    "results": [
+                        {
+                            "summary": "ad-hoc smoke only",
+                            "artifacts": [str(image_path)],
+                            "artifact_files": [],
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+
+    assert _collect_structured_attachment_paths(agent_result) == []
+
+
+def test_delegate_result_user_requested_delivery_false_blocks_hermeswork_image_artifact(tmp_path):
+    image_path = tmp_path / "HermesWork" / "Image" / "blocked" / "blocked.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"png")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "delegate_task",
+                "content": {"results": [{"user_requested_delivery": False, "artifacts": [str(image_path)]}]},
             }
         ]
     }
@@ -604,3 +759,51 @@ def test_turn_scoped_structured_attachments_ignore_user_and_assistant_textual_pa
     assert collected == []
     assert debug["turn_messages_count"] == 2
     assert debug["turn_tool_messages_count"] == 0
+
+
+def test_media_tag_fallback_ignores_session_search_history(tmp_path):
+    old_image = tmp_path / "old.png"
+    old_image.write_bytes(b"old")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "session_search",
+                "content": f"historical result MEDIA:{old_image}",
+            }
+        ]
+    }
+
+    media_tags, has_voice = _collect_current_turn_media_tags_from_tool_results(
+        agent_result,
+        history_len=0,
+        history_media_paths=set(),
+    )
+
+    assert media_tags == []
+    assert has_voice is False
+
+
+def test_media_tag_fallback_collects_trusted_current_tool_media(tmp_path):
+    current_audio = tmp_path / "voice.mp3"
+    current_audio.write_bytes(b"audio")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "text_to_speech",
+                "content": f"[[audio_as_voice]]\nMEDIA:{current_audio}",
+            }
+        ]
+    }
+
+    media_tags, has_voice = _collect_current_turn_media_tags_from_tool_results(
+        agent_result,
+        history_len=0,
+        history_media_paths=set(),
+    )
+
+    assert media_tags == [f"MEDIA:{current_audio}"]
+    assert has_voice is True

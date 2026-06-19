@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 from datetime import date
 from pathlib import Path
 
@@ -184,3 +185,36 @@ def test_format_project_id_preserves_comfy_retry_project_name():
         project_registry.format_project_id("260610_angelica_smoke_retry", "2026-06-12")
         == "260610_angelica_smoke_retry"
     )
+
+
+def test_universal_artifact_categories_receive_date_prefixed_project_dirs(tmp_path):
+    registry_path = tmp_path / "state" / "project_registry.json"
+    categories = ["Documents", "Image", "Sound", "Animation", "Asset", "Video", "Data", "Report", "FutureCategory"]
+
+    for category in categories:
+        project_name = f"{category}_production_pack"
+        record, artifact_dir = project_registry.resolve_project_artifact_dir(
+            category,
+            project_name,
+            created_on=date(2026, 6, 17),
+            work_root=tmp_path / "HermesWork" / category,
+            registry_path=registry_path,
+        )
+
+        assert record.project_id == f"260617_{project_name}"
+        assert artifact_dir == tmp_path / "HermesWork" / category / f"260617_{project_name}"
+
+
+def test_universal_artifact_categories_do_not_duplicate_existing_date_prefix(tmp_path):
+    registry_path = tmp_path / "state" / "project_registry.json"
+
+    record, artifact_dir = project_registry.resolve_project_artifact_dir(
+        "Image",
+        "260617_character_db",
+        created_on=date(2026, 6, 18),
+        work_root=tmp_path / "HermesWork" / "Image",
+        registry_path=registry_path,
+    )
+
+    assert record.project_id == "260617_character_db"
+    assert artifact_dir == tmp_path / "HermesWork" / "Image" / "260617_character_db"

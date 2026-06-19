@@ -904,7 +904,7 @@ _GATEWAY_REPORT_INTEGRITY_MARKERS = (
 
 _PLACEHOLDER_SHA_RE = re.compile(r"\b(?:a1b2c3d4|b2c3d4e5|c3d4e5f6|d4e5f6g7|e5f6g7h8|f6g7h8i9|g7h8i9j0|h8i9j0k1)\b", re.IGNORECASE)
 _FULL_SHA256_RE = re.compile(r"\b[a-f0-9]{64}\b", re.IGNORECASE)
-_OUTPUT_PATH_RE = re.compile(r"(?im)^\s*output_path\s*:\s*(?P<path>\S.*?)(?:\s*)$")
+_OUTPUT_PATH_RE = re.compile(r"(?im)^\s*(?:output_path|artifact[ _]+path)\s*:\s*(?P<path>\S.*?)(?:\s*)$")
 _FILE_SHA_RE = re.compile(r"(?im)^\s*file_sha256\s*:\s*(?P<sha>\S+)")
 _PROMPT_ID_RE = re.compile(r"(?im)^\s*prompt_id\s*:\s*(?P<prompt_id>\S+)")
 _SLACK_UPLOAD_PASS_RE = re.compile(r"(?im)^\s*slack upload\s*:\s*(?:\n\s*)?pass\s*$")
@@ -1013,6 +1013,514 @@ def _candidate_nas_mirror_paths(path: Path) -> list[Path]:
             rel = raw[len(prefix):].lstrip("/")
             candidates.append(Path("/Volumes/Hermes/HermesWork/Image") / rel)
     return candidates
+
+
+@dataclasses.dataclass(frozen=True)
+class GatewayNasMirrorEvidence:
+    source_path: Path
+    source_sha256: str | None = None
+    mirror_exists: bool = False
+    mirror_path: Path | None = None
+    mirror_sha256: str | None = None
+    hash_match: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class GatewayDeliveryGovernanceResult:
+    decision: Any
+    ping_text: str
+    nas_status: str
+    sync_evidence: Any
+    delivery_evidence: Any
+
+
+@dataclasses.dataclass(frozen=True)
+class GatewayPostDeliveryOverlayResult:
+    text: str
+    overlay_applied: bool
+    slack_overlay: bool
+    nas_overlay: bool
+    governance_overlay: bool
+    final_state: str
+    delivery_evidence: Any | None = None
+    sync_evidence: Any | None = None
+    decision: Any | None = None
+
+
+def _sha256_file(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except Exception:
+        return None
+
+
+def _default_gateway_nas_mirror_roots() -> list[Path]:
+    roots = [Path("/Volumes/Hermes/HermesWork/Image"), Path("/Volumes/Hermes/Image")]
+    try:
+        roots.extend(Path(tempfile.gettempdir()).glob("hermes_nas_mount_*/Image"))
+    except Exception:
+        pass
+    return roots
+
+
+def _gateway_nas_relative_candidates(source_path: Path) -> list[Path]:
+    candidates: list[Path] = []
+    raw = str(source_path)
+    for prefix in ("/Users/hermes/HermesWork/Image", "/Volumes/SSD_Hermes/HermesWork/Image"):
+        if raw.startswith(prefix + "/"):
+            rel = Path(raw[len(prefix):].lstrip("/"))
+            candidates.append(rel)
+    if source_path.parent.name:
+        candidates.append(Path(source_path.parent.name) / source_path.name)
+    return list(dict.fromkeys(candidates))
+
+
+def _collect_gateway_nas_mirror_evidence(source_path: Path, *, mirror_roots: list[Path] | None = None) -> GatewayNasMirrorEvidence:
+    source_path = Path(source_path)
+    source_sha = _sha256_file(source_path) if source_path.exists() and source_path.is_file() else None
+    mirror_roots = mirror_roots if mirror_roots is not None else _default_gateway_nas_mirror_roots()
+    for root in mirror_roots:
+        for rel in _gateway_nas_relative_candidates(source_path):
+            candidate = Path(root) / rel
+            if not candidate.exists() or not candidate.is_file():
+                continue
+            mirror_sha = _sha256_file(candidate)
+            return GatewayNasMirrorEvidence(
+                source_path=source_path,
+                source_sha256=source_sha,
+                mirror_exists=True,
+                mirror_path=candidate,
+                mirror_sha256=mirror_sha,
+                hash_match=bool(source_sha and mirror_sha and source_sha == mirror_sha),
+            )
+    return GatewayNasMirrorEvidence(source_path=source_path, source_sha256=source_sha)
+
+
+def _load_gateway_slack_upload_evidence(source_path: Path) -> dict[str, Any] | None:
+    """Read post-delivery Slack evidence persisted beside a published image."""
+    evidence_path = Path(source_path).parent / "sidecar" / "slack_evidence.json"
+    try:
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    message_id = str(payload.get("message_id") or payload.get("thread_ts") or "").strip()
+    thread_ts = str(payload.get("thread_ts") or "").strip()
+    filename = str(payload.get("filename") or "").strip()
+    try:
+        files_count = int(payload.get("files_count") or 0)
+    except (TypeError, ValueError):
+        files_count = 0
+    local_sha = str(payload.get("local_sha256") or "").strip()
+    source_sha = _sha256_file(Path(source_path))
+    if not message_id or not thread_ts or not filename or files_count <= 0:
+        return None
+    if source_sha and local_sha and source_sha != local_sha:
+        return None
+    payload["message_id"] = message_id
+    payload["delivery_evidence_path"] = str(evidence_path)
+    payload["files_count"] = files_count
+    payload["source_sha256"] = source_sha
+    return payload
+
+
+def _report_declares_missing_slack_evidence(text: str) -> bool:
+    body = str(text or "")
+    folded = body.casefold()
+    return (
+        bool(re.search(r"(?im)^\s*slack\s*:\s*(?:\n\s*)?(?:fail|unknown|no)\s*$", body))
+        or bool(re.search(r"(?im)^\s*(?:message_id|thread_ts|file_id)\s*:\s*unknown\s*$", body))
+        or "slack evidence" in folded and "unknown" in folded
+    )
+
+
+def _report_declares_missing_nas_evidence(text: str) -> bool:
+    body = str(text or "")
+    folded = body.casefold()
+    return (
+        bool(re.search(r"(?im)^\s*nas\s*:\s*(?:\n\s*)?(?:fail|unknown|no)\s*$", body))
+        or bool(re.search(r"(?im)^\s*nas_sha256\s*:\s*unknown\s*$", body))
+        or "nas_mirror_verified" in folded and "false" in folded
+    )
+
+
+def _looks_like_governance_delivery_report(text: str) -> bool:
+    body = str(text or "").casefold()
+    return "govlawlivewip" in body or "governance ping" in body or "governance fresh e2e" in body
+
+
+_HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
+_LATIN_WORD_RE = re.compile(r"\b[a-z][a-z]{2,}\b", re.IGNORECASE)
+_GATEWAY_OMISSION_MARKERS = (
+    "lines omitted",
+    "chars omitted",
+    "[truncated]",
+    "output truncated",
+    "detail truncated",
+    "command truncated",
+    "description truncated",
+)
+_ENGLISH_REPORT_MARKERS = (
+    "status:",
+    "summary:",
+    "result:",
+    "final verdict:",
+    "next action:",
+    "completed",
+    "complete",
+    "ready",
+    "done",
+    "blocked",
+)
+_KOREAN_REPORT_MARKERS = (
+    "상태:",
+    "요약:",
+    "결과:",
+    "결론:",
+    "다음",
+    "완료",
+    "보류",
+    "차단",
+    "검증",
+)
+
+
+def _gateway_report_omitted_present(text: str) -> bool:
+    body = str(text or "").casefold()
+    return any(marker in body for marker in _GATEWAY_OMISSION_MARKERS)
+
+
+def _gateway_report_language(text: str) -> str:
+    """Classify the user-facing report language for GOVLAWLIVEWIP checks."""
+    body = str(text or "")
+    if _HANGUL_RE.search(body):
+        return "ko"
+    folded = body.casefold()
+    if any(marker in folded for marker in _ENGLISH_REPORT_MARKERS) and _LATIN_WORD_RE.search(body):
+        return "en"
+    return "ko"
+
+
+def _looks_like_governed_user_report(text: str) -> bool:
+    body = str(text or "")
+    folded = body.casefold()
+    return (
+        _looks_like_governance_delivery_report(body)
+        or _looks_like_gateway_user_report(body)
+        or any(marker in folded for marker in _ENGLISH_REPORT_MARKERS)
+        or any(marker in body for marker in _KOREAN_REPORT_MARKERS)
+        or _gateway_report_omitted_present(body)
+    )
+
+
+def _evaluate_gateway_user_report_governance(text: str) -> str:
+    """Return a GOVLAWLIVEWIP PING for final-report language/omission drift."""
+    if not _looks_like_governed_user_report(text):
+        return ""
+    if "GOVERNANCE PING" in str(text or ""):
+        return ""
+
+    from govlawlivewip_governance.taskrun import (
+        ExecutionEvidence,
+        ReportEvidence,
+        RoutingEvidence,
+        TaskIntent,
+        evaluate_task_run,
+        format_governance_ping,
+    )
+
+    intent = TaskIntent(
+        task_id="gateway-user-report-governance",
+        user_request_summary="gateway user-facing report governance evaluation",
+        task_mode="report_only",
+        required_evidence=["report"],
+        language_required="ko",
+        governance_phase="LIVE_PING_VALIDATION",
+    )
+    report = ReportEvidence(
+        report_language=_gateway_report_language(text),
+        omitted_present=_gateway_report_omitted_present(text),
+        protected_report=True,
+        required_fields_present=True,
+        unsupported_pass_claims=[],
+        report_matches_evidence=True,
+    )
+    decision = evaluate_task_run(
+        intent,
+        RoutingEvidence(requested_role="gateway", delegated_role="gateway", actual_executor="gateway"),
+        ExecutionEvidence(boundary_reached=True, tool_called=True, execution_id="gateway-user-report"),
+        None,
+        None,
+        None,
+        None,
+        None,
+        report,
+    )
+    return format_governance_ping(intent, decision) if decision.final_state == "GOVERNANCE_PING" else ""
+
+
+def _evaluate_gateway_delivery_governance(text: str, *, attachment_count: int = 0) -> GatewayDeliveryGovernanceResult:
+    """Calculate GOVLAWLIVEWIP delivery state from gateway-visible evidence."""
+    from govlawlivewip_governance.taskrun import (
+        ArtifactEvidence,
+        DeliveryEvidence,
+        ExecutionEvidence,
+        ReportEvidence,
+        RoutingEvidence,
+        SyncEvidence,
+        TaskIntent,
+        evaluate_task_run,
+        format_governance_ping,
+    )
+
+    body = str(text or "")
+    output_paths = _extract_gateway_output_paths(body)
+    sync_required = "nas" in body.casefold() or "sync" in body.casefold()
+    delivery_required = "slack" in body.casefold() or "delivery" in body.casefold()
+    missing_slack = _report_declares_missing_slack_evidence(body)
+    missing_nas = _report_declares_missing_nas_evidence(body)
+
+    nas_evidences = [_collect_gateway_nas_mirror_evidence(path) for path in output_paths]
+    matching_nas = [evidence for evidence in nas_evidences if evidence.mirror_exists and evidence.hash_match]
+    slack_evidences = [evidence for path in output_paths if (evidence := _load_gateway_slack_upload_evidence(path))]
+    nas_status = "PASS" if matching_nas else ("UNKNOWN" if missing_nas or sync_required else "NOT_REQUIRED")
+    persisted_slack_upload = bool(slack_evidences)
+
+    delivery_evidence = DeliveryEvidence(
+        text_message_sent=True,
+        file_upload_attempted=bool(attachment_count) or persisted_slack_upload,
+        file_upload_succeeded=persisted_slack_upload or bool(attachment_count and not missing_slack),
+        file_count=(sum(int(evidence.get("files_count") or 0) for evidence in slack_evidences) if persisted_slack_upload else (int(attachment_count or 0) if not missing_slack else 0)),
+        message_id=str(slack_evidences[0].get("message_id")) if slack_evidences else None,
+        thread_id=str(slack_evidences[0].get("thread_ts")) if slack_evidences else None,
+        uploaded_filenames=[str(evidence.get("filename")) for evidence in slack_evidences if evidence.get("filename")],
+        source_paths=[str(path) for path in output_paths],
+        delivery_evidence_path=str(slack_evidences[0].get("delivery_evidence_path")) if slack_evidences else None,
+    )
+    sync_evidence = SyncEvidence(
+        sync_requested=sync_required,
+        sync_started=sync_required,
+        sync_finished=bool(matching_nas),
+        mirror_exists=bool(matching_nas),
+        mirror_paths=[str(evidence.mirror_path) for evidence in matching_nas if evidence.mirror_path],
+        mirror_hashes={str(evidence.mirror_path): str(evidence.mirror_sha256) for evidence in matching_nas if evidence.mirror_path and evidence.mirror_sha256},
+        source_hashes={str(evidence.source_path): str(evidence.source_sha256) for evidence in nas_evidences if evidence.source_sha256},
+        hash_match=bool(matching_nas),
+    )
+    intent = TaskIntent(
+        task_id="gateway-delivery-governance",
+        user_request_summary="gateway delivery evidence evaluation",
+        task_mode="fresh_e2e",
+        required_evidence=[item for item, required in (("delivery", delivery_required), ("sync", sync_required), ("fresh_e2e", True)) if required],
+        fresh_required=True,
+        upload_allowed=True,
+        sync_allowed=True,
+        language_required="ko",
+        governance_phase="LIVE_PING_VALIDATION",
+    )
+    execution = ExecutionEvidence(
+        boundary_reached=True,
+        tool_called=True,
+        provider_called=True,
+        external_service_called=True,
+        execution_id=(prompt_ids[0] if (prompt_ids := _extract_gateway_prompt_ids(body)) else None),
+        fresh_output_created=bool(output_paths),
+        reused_artifact=False,
+        output_paths=[str(path) for path in output_paths],
+        fresh_e2e_done=bool(output_paths),
+    )
+    artifacts = ArtifactEvidence(
+        artifacts_exist=bool(output_paths),
+        canonical_primary=str(output_paths[0]) if output_paths else None,
+        artifact_paths=[str(path) for path in output_paths],
+        hash_values={str(path): str(_sha256_file(path) or "") for path in output_paths},
+        schema_valid=True,
+        root_allowed=True,
+    )
+    report = ReportEvidence(
+        report_language=_gateway_report_language(body),
+        omitted_present=_gateway_report_omitted_present(body),
+        protected_report=True,
+        required_fields_present=True,
+        unsupported_pass_claims=[],
+        report_matches_evidence=True,
+    )
+    decision = evaluate_task_run(
+        intent,
+        RoutingEvidence(requested_role="gateway", delegated_role="gateway", actual_executor="gateway"),
+        execution,
+        artifacts,
+        delivery_evidence,
+        sync_evidence,
+        None,
+        None,
+        report,
+    )
+    ping_text = format_governance_ping(intent, decision) if decision.final_state == "GOVERNANCE_PING" else ""
+    return GatewayDeliveryGovernanceResult(decision, ping_text, nas_status, sync_evidence, delivery_evidence)
+
+
+def _apply_post_delivery_evidence_overlay(
+    text: str,
+    *,
+    mirror_roots: list[Path] | None = None,
+) -> GatewayPostDeliveryOverlayResult:
+    """Overlay worker text with persisted post-delivery evidence.
+
+    Worker reports are created before the platform adapter finishes Slack file
+    uploads and before NAS mirror hash verification may be visible. This helper
+    keeps the worker text intact but appends a gateway-calculated source of
+    truth whenever persisted Slack/NAS evidence exists.
+    """
+    from govlawlivewip_governance.taskrun import (
+        ArtifactEvidence,
+        DeliveryEvidence,
+        ExecutionEvidence,
+        ReportEvidence,
+        RoutingEvidence,
+        SyncEvidence,
+        TaskIntent,
+        evaluate_task_run,
+    )
+
+    body = str(text or "")
+    output_paths = _extract_gateway_output_paths(body)
+    slack_evidences = [evidence for path in output_paths if (evidence := _load_gateway_slack_upload_evidence(path))]
+    nas_evidences = [_collect_gateway_nas_mirror_evidence(path, mirror_roots=mirror_roots) for path in output_paths]
+    matching_nas = [evidence for evidence in nas_evidences if evidence.mirror_exists and evidence.hash_match]
+
+    slack_overlay = bool(slack_evidences)
+    nas_overlay = bool(matching_nas)
+    delivery_required = "slack" in body.casefold() or "delivery" in body.casefold()
+    sync_required = "nas" in body.casefold() or "sync" in body.casefold()
+
+    delivery_evidence = DeliveryEvidence(
+        text_message_sent=True,
+        file_upload_attempted=slack_overlay,
+        file_upload_succeeded=slack_overlay,
+        file_count=sum(int(evidence.get("files_count") or 0) for evidence in slack_evidences),
+        message_id=str(slack_evidences[0].get("message_id")) if slack_evidences else None,
+        thread_id=str(slack_evidences[0].get("thread_ts")) if slack_evidences else None,
+        uploaded_filenames=[str(evidence.get("filename")) for evidence in slack_evidences if evidence.get("filename")],
+        source_paths=[str(path) for path in output_paths],
+        delivery_evidence_path=str(slack_evidences[0].get("delivery_evidence_path")) if slack_evidences else None,
+    )
+    sync_evidence = SyncEvidence(
+        sync_requested=sync_required,
+        sync_started=sync_required,
+        sync_finished=nas_overlay,
+        mirror_exists=nas_overlay,
+        mirror_paths=[str(evidence.mirror_path) for evidence in matching_nas if evidence.mirror_path],
+        mirror_hashes={str(evidence.mirror_path): str(evidence.mirror_sha256) for evidence in matching_nas if evidence.mirror_path and evidence.mirror_sha256},
+        source_hashes={str(evidence.source_path): str(evidence.source_sha256) for evidence in nas_evidences if evidence.source_sha256},
+        hash_match=nas_overlay,
+    )
+    intent = TaskIntent(
+        task_id="gateway-post-delivery-overlay",
+        user_request_summary="post-delivery evidence overlay",
+        task_mode="fresh_e2e",
+        required_evidence=[item for item, required in (("delivery", delivery_required), ("sync", sync_required), ("fresh_e2e", True)) if required],
+        fresh_required=True,
+        upload_allowed=True,
+        sync_allowed=True,
+        language_required="ko",
+        governance_phase="LIVE_PING_VALIDATION",
+    )
+    execution = ExecutionEvidence(
+        boundary_reached=True,
+        tool_called=True,
+        provider_called=True,
+        external_service_called=True,
+        execution_id=(prompt_ids[0] if (prompt_ids := _extract_gateway_prompt_ids(body)) else None),
+        fresh_output_created=bool(output_paths),
+        reused_artifact=False,
+        output_paths=[str(path) for path in output_paths],
+        fresh_e2e_done=bool(output_paths),
+    )
+    artifacts = ArtifactEvidence(
+        artifacts_exist=bool(output_paths),
+        canonical_primary=str(output_paths[0]) if output_paths else None,
+        artifact_paths=[str(path) for path in output_paths],
+        hash_values={str(path): str(_sha256_file(path) or "") for path in output_paths},
+        schema_valid=True,
+        root_allowed=True,
+    )
+    report = ReportEvidence(
+        report_language=_gateway_report_language(body),
+        omitted_present=_gateway_report_omitted_present(body),
+        protected_report=True,
+        required_fields_present=True,
+        unsupported_pass_claims=[],
+        report_matches_evidence=True,
+    )
+    decision = evaluate_task_run(
+        intent,
+        RoutingEvidence(requested_role="gateway", delegated_role="gateway", actual_executor="gateway"),
+        execution,
+        artifacts,
+        delivery_evidence,
+        sync_evidence,
+        None,
+        None,
+        report,
+    )
+    governance_overlay = decision.final_state not in {"BLOCKED", "GOVERNANCE_PING", "REPORT_FAIL"}
+    overlay_applied = slack_overlay or nas_overlay or governance_overlay
+    final_state = "COMPLETE" if governance_overlay and (not delivery_required or slack_overlay) and (not sync_required or nas_overlay) else decision.final_state
+    if not overlay_applied:
+        return GatewayPostDeliveryOverlayResult(
+            text=body,
+            overlay_applied=False,
+            slack_overlay=False,
+            nas_overlay=False,
+            governance_overlay=False,
+            final_state=final_state,
+            delivery_evidence=delivery_evidence,
+            sync_evidence=sync_evidence,
+            decision=decision,
+        )
+
+    overlay_lines = [
+        "[POST-DELIVERY EVIDENCE OVERLAY]",
+        f"Slack: {'PASS' if slack_overlay else 'FAIL'}",
+    ]
+    if slack_evidences:
+        first = slack_evidences[0]
+        overlay_lines.extend([
+            f"message_id: {first.get('message_id')}",
+            f"thread_ts: {first.get('thread_ts')}",
+            f"filename: {first.get('filename')}",
+            f"file_count: {delivery_evidence.file_count}",
+        ])
+    overlay_lines.append(f"NAS: {'PASS' if nas_overlay else 'FAIL'}")
+    if matching_nas:
+        first_nas = matching_nas[0]
+        overlay_lines.extend([
+            f"mirror_path: {first_nas.mirror_path}",
+            f"source_hash: {first_nas.source_sha256}",
+            f"mirror_hash: {first_nas.mirror_sha256}",
+        ])
+    overlay_lines.extend([
+        f"Governance Ping: {'PASS' if governance_overlay else 'FAIL'}",
+        f"governance_final_state: {decision.final_state}",
+        f"missing_evidence: {decision.missing_evidence}",
+        f"blocked_state: {decision.blocked_state}",
+        f"governance_phase: {decision.governance_phase}",
+        f"auto_blocking: {str(decision.auto_blocking).lower()}",
+        f"Final State: {final_state}",
+    ])
+    return GatewayPostDeliveryOverlayResult(
+        text=f"{body.rstrip()}\n\n" + "\n".join(overlay_lines),
+        overlay_applied=True,
+        slack_overlay=slack_overlay,
+        nas_overlay=nas_overlay,
+        governance_overlay=governance_overlay,
+        final_state=final_state,
+        delivery_evidence=delivery_evidence,
+        sync_evidence=sync_evidence,
+        decision=decision,
+    )
 
 
 def _render_invalid_gateway_report(reasons: list[str]) -> str:
@@ -2554,6 +3062,7 @@ _STRUCTURED_ATTACHMENT_ARTIFACT_TOOL_FIELDS = frozenset(
 _STRUCTURED_ATTACHMENT_DENIED_TOOLS = frozenset(
     {
         "search_files",
+        "session_search",
         "read_file",
         "terminal",
         "execute_code",
@@ -2598,13 +3107,52 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
     explicit delivery fields (``media_files`` / ``document_files``).  Legacy
     artifact fields are accepted only when the same payload declares delivery
     intent via ``user_requested_delivery=True``, ``expected_file_count``, or
-    ``delivery_mode``.
+    ``delivery_mode``.  A narrow exception promotes delegated HermesWork/Image
+    PNG deliverables because child image workers may return the final published
+    image under ``artifacts`` while leaving ``artifact_files`` empty; repo tmp and
+    diagnostic files remain blocked by path shape and suffix checks.
     """
     from urllib.parse import unquote, urlparse
 
     candidates: list[str] = []
     seen_paths: set[str] = set()
     seen_nodes: set[int] = set()
+
+    def _is_delegate_hermeswork_image_artifact(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        raw = value.strip().strip("`\"'")
+        if raw.startswith("file://"):
+            parsed = urlparse(raw)
+            raw = unquote(parsed.path or "")
+        if not (raw.startswith("/") or raw.startswith("~/")):
+            return False
+        candidate = Path(os.path.expanduser(raw))
+        if candidate.suffix.lower() != ".png" or not candidate.is_file():
+            return False
+        parts = [part.casefold() for part in candidate.parts]
+        for index, part in enumerate(parts[:-1]):
+            if part == "hermeswork" and index + 1 < len(parts) and parts[index + 1] == "image":
+                blocked_parts = {"sidecar", "_sidecars", "tmp", "cache", "debug"}
+                return not bool(set(parts[index + 2 : -1]) & blocked_parts)
+        return False
+
+    def _collect_delegate_hermeswork_images(value: Any) -> None:
+        value = _coerce_structured_attachment_payload(value)
+        if isinstance(value, str):
+            if _is_delegate_hermeswork_image_artifact(value):
+                _maybe_add_path(value)
+        elif isinstance(value, dict):
+            if value.get("user_requested_delivery") is False:
+                return
+            for key, child in value.items():
+                if str(key or "") in {"artifacts", "artifact_files", "media_files"}:
+                    _collect_delegate_hermeswork_images(child)
+                elif isinstance(child, (dict, list, tuple)):
+                    _collect_delegate_hermeswork_images(child)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                _collect_delegate_hermeswork_images(item)
 
     def _maybe_add_path(value: Any) -> None:
         if not isinstance(value, str):
@@ -2661,6 +3209,9 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
 
         if payload.get("user_requested_delivery") is False:
             return
+
+        if normalized_tool == "delegate_task":
+            _collect_delegate_hermeswork_images(payload)
 
         for key, value in payload.items():
             key_text = str(key or "")
@@ -2751,6 +3302,51 @@ def _collect_turn_scoped_structured_attachments(
         "collected_file_names": [Path(path).name for path in collected[:10]],
     }
     return collected, debug
+
+
+def _collect_current_turn_media_tags_from_tool_results(
+    agent_result: dict,
+    *,
+    history_len: int,
+    history_media_paths: set[str],
+) -> tuple[list[str], bool]:
+    """Collect MEDIA tags from trusted current-turn tool outputs only.
+
+    Some retrieval tools can return old transcripts or file contents that
+    contain historical ``MEDIA:`` tags. Those tags are observations, not
+    delivery intent for the current turn. Restrict this fallback to current-turn
+    tool messages and skip read/search/terminal-style tools so stale artifacts
+    are not re-uploaded.
+    """
+    media_tags: list[str] = []
+    has_voice_directive = False
+    tool_media_re = re.compile(
+        r'MEDIA:((?:/|~/)\S+\.(?:png|jpe?g|gif|webp|'
+        r'mp4|mov|avi|mkv|webm|ogg|opus|mp3|wav|m4a|'
+        r'flac|epub|pdf|zip|rar|7z|docx?|xlsx?|pptx?|'
+        r'txt|csv|apk|ipa))',
+        re.IGNORECASE,
+    )
+    for msg in _slice_turn_messages(agent_result, history_len):
+        if str(msg.get("role") or "").lower() not in {"tool", "function"}:
+            continue
+        function_payload = msg.get("function")
+        function_name = function_payload.get("name") if isinstance(function_payload, dict) else ""
+        tool_name = _normalize_structured_attachment_tool_name(
+            msg.get("tool_name") or msg.get("name") or function_name
+        )
+        if tool_name in _STRUCTURED_ATTACHMENT_DENIED_TOOLS:
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, str) or "MEDIA:" not in content:
+            continue
+        for match in tool_media_re.finditer(content):
+            path = match.group(1).strip().rstrip('",}')
+            if path and path not in history_media_paths:
+                media_tags.append(f"MEDIA:{path}")
+        if "[[audio_as_voice]]" in content:
+            has_voice_directive = True
+    return media_tags, has_voice_directive
 
 
 def _validate_gateway_delivery_candidates(
@@ -5253,6 +5849,24 @@ class GatewayRunner:
         except RuntimeError:
             self._gateway_loop = None
         logger.info("Session storage: %s", self.config.sessions_dir)
+        # GOVLAWLIVEWIP 검증 기간에는 gateway 시작 시 정책 모듈을 명시적으로 로드해 runtime evidence를 남긴다.
+        try:
+            from govlawlivewip_governance.taskrun import evaluate_task_run, format_governance_ping
+            from gateway.project_registry import format_project_id
+
+            _governance_source = Path(inspect.getsourcefile(evaluate_task_run) or "")
+            _governance_hash = hashlib.sha256(_governance_source.read_bytes()).hexdigest() if _governance_source.exists() else "unknown"
+            logger.info(
+                "GOVLAWLIVEWIP governance loaded: module=%s formatter=%s source_hash=%s phase=%s auto_blocking=%s date_prefix_sample=%s",
+                evaluate_task_run.__module__,
+                format_governance_ping.__name__,
+                _governance_hash,
+                "LIVE_PING_VALIDATION",
+                False,
+                format_project_id("runtime_apply", datetime.now()),
+            )
+        except Exception as _e:
+            logger.warning("GOVLAWLIVEWIP governance load failed: %s", _e)
 
         # Sanity-check that systemd's TimeoutStopSec covers our drain
         # window.  When the user upgraded hermes-agent without re-running
@@ -10403,6 +11017,39 @@ class GatewayRunner:
                     _report_integrity.reasons,
                 )
                 response = _report_integrity.text
+            if _looks_like_governance_delivery_report(response):
+                try:
+                    _post_delivery_overlay = _apply_post_delivery_evidence_overlay(response)
+                    if _post_delivery_overlay.overlay_applied:
+                        logger.info(
+                            "GOVLAWLIVEWIP post-delivery overlay applied: slack=%s nas=%s governance=%s final_state=%s",
+                            _post_delivery_overlay.slack_overlay,
+                            _post_delivery_overlay.nas_overlay,
+                            _post_delivery_overlay.governance_overlay,
+                            _post_delivery_overlay.final_state,
+                        )
+                        response = _post_delivery_overlay.text
+                    _governance_delivery = _evaluate_gateway_delivery_governance(
+                        response,
+                        attachment_count=len(_structured_attachment_paths),
+                    )
+                    if _governance_delivery.decision.final_state == "GOVERNANCE_PING" and _governance_delivery.ping_text:
+                        logger.warning(
+                            "GOVLAWLIVEWIP delivery governance ping: missing=%s blocked_state=%s auto_blocking=%s",
+                            _governance_delivery.decision.missing_evidence,
+                            _governance_delivery.decision.blocked_state,
+                            _governance_delivery.decision.auto_blocking,
+                        )
+                        response = f"{response}\n\n{_governance_delivery.ping_text}"
+                except Exception as _governance_delivery_exc:
+                    logger.warning("GOVLAWLIVEWIP delivery governance evaluation failed: %s", _governance_delivery_exc)
+            try:
+                _user_report_ping = _evaluate_gateway_user_report_governance(response)
+                if _user_report_ping:
+                    logger.warning("GOVLAWLIVEWIP user report governance ping appended")
+                    response = f"{response}\n\n{_user_report_ping}"
+            except Exception as _user_report_governance_exc:
+                logger.warning("GOVLAWLIVEWIP user report governance evaluation failed: %s", _user_report_governance_exc)
             response, _truncated_guard_applied = _compact_gateway_final_response(response)
 
             # If the agent's session_id changed during compression, update
@@ -18980,25 +19627,11 @@ class GatewayRunner:
             # before run_conversation) instead of index slicing. This is safe even
             # when context compression shrinks the message list. (Fixes #160)
             if "MEDIA:" not in final_response:
-                media_tags = []
-                has_voice_directive = False
-                for msg in result.get("messages", []):
-                    if msg.get("role") in {"tool", "function"}:
-                        content = msg.get("content", "")
-                        if "MEDIA:" in content:
-                            _TOOL_MEDIA_RE = re.compile(
-                                r'MEDIA:((?:/|~\/)\S+\.(?:png|jpe?g|gif|webp|'
-                                r'mp4|mov|avi|mkv|webm|ogg|opus|mp3|wav|m4a|'
-                                r'flac|epub|pdf|zip|rar|7z|docx?|xlsx?|pptx?|'
-                                r'txt|csv|apk|ipa))',
-                                re.IGNORECASE
-                            )
-                            for match in _TOOL_MEDIA_RE.finditer(content):
-                                path = match.group(1).strip().rstrip('",}')
-                                if path and path not in _history_media_paths:
-                                    media_tags.append(f"MEDIA:{path}")
-                            if "[[audio_as_voice]]" in content:
-                                has_voice_directive = True
+                media_tags, has_voice_directive = _collect_current_turn_media_tags_from_tool_results(
+                    result,
+                    history_len=len(agent_history),
+                    history_media_paths=_history_media_paths,
+                )
                 
                 if media_tags:
                     seen = set()
