@@ -10,7 +10,10 @@ import pytest
 
 from agent.file_safety import (
     _BLOCKED_PROJECT_ENV_BASENAMES,
+    build_nas_op_evidence,
     get_read_block_error,
+    is_nas_category_root_delete_denied,
+    is_nas_delete_denied,
 )
 
 
@@ -146,3 +149,38 @@ class TestCombinedGuards:
             error = get_read_block_error(str(cache))
             assert error is not None
             assert "internal Hermes cache" in error
+
+
+def test_nas_delete_root_guards_block_special_roots():
+    assert is_nas_delete_denied("/Hermes")
+    assert is_nas_delete_denied("/Hermes/#recycle")
+    assert is_nas_delete_denied("/mnt/share/_restore_staging")
+    assert not is_nas_delete_denied("/tmp/not-nas")
+
+
+def test_nas_category_root_delete_guard_blocks_top_level_roots():
+    assert is_nas_category_root_delete_denied("/work/HermesWork/Image", local_root="/work/HermesWork")
+    assert is_nas_category_root_delete_denied("/work/HermesWork/Story", local_root="/work/HermesWork")
+    assert is_nas_category_root_delete_denied("/work/HermesWork/Games", local_root="/work/HermesWork")
+    assert not is_nas_category_root_delete_denied("/work/HermesWork/Image/project", local_root="/work/HermesWork")
+
+
+def test_nas_op_evidence_captures_guard_decision():
+    evidence = build_nas_op_evidence(
+        op_type="sync",
+        delete_capable=True,
+        mirror=False,
+        source="/source",
+        dest="/dest",
+        source_count=1,
+        dest_count=2,
+        source_size=3,
+        dest_size=4,
+        decision="block",
+        reason="share root delete blocked",
+    )
+    assert evidence["op_type"] == "sync"
+    assert evidence["delete_capable"] is True
+    assert evidence["mirror"] is False
+    assert evidence["decision"] == "block"
+    assert evidence["reason"] == "share root delete blocked"

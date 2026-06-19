@@ -40,6 +40,7 @@ from agent.file_safety import (
     build_write_denied_prefixes,
     get_safe_write_root as _shared_get_safe_write_root,
     is_write_denied as _shared_is_write_denied,
+    is_nas_delete_denied as _shared_is_nas_delete_denied,
 )
 
 
@@ -1031,6 +1032,8 @@ class ShellFileOperations(FileOperations):
 
         if _is_write_denied(path):
             return WriteResult(error=f"Delete denied: {path} is a protected path")
+        if _shared_is_nas_delete_denied(path):
+            return WriteResult(error=f"Delete denied: {path} is a NAS/share root or recycle path")
         result = self._exec(f"rm -f {self._escape_shell_arg(path)}")
         if result.exit_code != 0:
             return WriteResult(error=f"Failed to delete {path}: {result.stdout}")

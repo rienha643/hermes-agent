@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import json
+import logging
 import os
 import shutil
 from pathlib import Path
 from typing import Any
 from gateway.project_registry import remove_project_registry_entry
+from agent.file_safety import (
+    build_nas_op_evidence,
+    is_nas_category_root_delete_denied,
+    is_nas_delete_denied,
+)
+
+logger = logging.getLogger(__name__)
 
 LOCAL_HERMESWORK_ROOT_ENV = "HERMESWORK_ROOT"
 NAS_ROOT_ENV = "HERMESWORK_NAS_ROOT"
@@ -16,6 +25,9 @@ CATEGORY_DIR_NAMES = {
     "story": "Story",
     "image": "Image",
     "games": "Games",
+    "archive": "Archive",
+    "forge-models": "forge-models",
+    "git": "Git",
 }
 PROTECTED_NAMES = {
     "SOUL.md",
@@ -114,9 +126,23 @@ class ArtifactDeleteOrchestrator:
         inferred = self._infer_category(resolved, request.category)
         if inferred is None:
             return None
+        if request.mirror is True:
+            return self._blocked_plan(resolved, inferred, "mirror delete/mirror is disabled by default")
         if self._is_protected_path(resolved):
-            return self._blocked_plan(resolved, inferred)
+            return self._blocked_plan(resolved, inferred, "protected asset blocked")
+        if is_nas_category_root_delete_denied(resolved, local_root=self.local_root):
+            return self._blocked_plan(resolved, inferred, "category root delete blocked")
         local_path, nas_path = self._build_paths(resolved, inferred)
+        evidence = build_nas_op_evidence(
+            op_type="artifact_delete_plan",
+            delete_capable=True,
+            mirror=False,
+            source=local_path,
+            dest=nas_path,
+            decision="allow",
+            reason="explicit file-level artifact delete",
+        )
+        logger.info("NAS op evidence: %s", json.dumps(evidence, ensure_ascii=False, sort_keys=True))
         return DeletePlan(
             category=inferred,
             local_path=str(local_path),
@@ -129,41 +155,19 @@ class ArtifactDeleteOrchestrator:
             warnings=self._warnings_for(resolved),
         )
 
-    def _infer_category(self, path: Path, requested_category: str | None) -> str | None:
-        category = _normalize_category(requested_category)
-        if category is not None:
-            category_dir = self.local_root / CATEGORY_DIR_NAMES[category]
-            try:
-                path.relative_to(category_dir)
-            except ValueError:
-                return None
-            return category
-
-        for candidate, dirname in CATEGORY_DIR_NAMES.items():
-            category_dir = self.local_root / dirname
-            try:
-                path.relative_to(category_dir)
-            except ValueError:
-                continue
-            return candidate
-        return None
-
-    def _build_paths(self, path: Path, category: str) -> tuple[Path, str]:
-        category_dir = self.local_root / CATEGORY_DIR_NAMES[category]
-        relative = path.relative_to(category_dir)
-        nas_path = self._nas_join(category, relative)
-        return path, nas_path
-
-    def _nas_join(self, category: str, relative: Path) -> str:
-        base = self.nas_root.rstrip("\\/")
-        parts = [base, CATEGORY_DIR_NAMES[category]]
-        if relative.parts:
-            parts.extend(relative.parts)
-        return "\\".join(parts)
-
-    def _blocked_plan(self, path: Path, category: str) -> DeletePlan:
-        warning = f"protected asset blocked: {path.name}"
+    def _blocked_plan(self, path: Path, category: str, reason: str) -> DeletePlan:
         local_path, nas_path = self._build_paths(path, category)
+        evidence = build_nas_op_evidence(
+            op_type="artifact_delete_plan",
+            delete_capable=True,
+            mirror=False,
+            source=local_path,
+            dest=nas_path,
+            decision="block",
+            reason=reason,
+        )
+        logger.info("NAS op evidence: %s", json.dumps(evidence, ensure_ascii=False, sort_keys=True))
+        warning = f"{reason}: {path.name}"
         return DeletePlan(
             category=category,
             local_path=str(local_path),
@@ -175,6 +179,47 @@ class ArtifactDeleteOrchestrator:
             requires_approval=False,
             warnings=(warning,),
         )
+
+    def _infer_category(self, path: Path, requested_category: str | None) -> str | None:
+        resolved = path.resolve(strict=False)
+        requested = _normalize_category(requested_category)
+        if requested is not None:
+            category_root = (self.local_root / CATEGORY_DIR_NAMES[requested]).resolve(strict=False)
+            if resolved == category_root:
+                return requested
+            try:
+                relative = resolved.relative_to(category_root)
+            except ValueError:
+                return None
+            return requested if relative.parts else None
+
+        for candidate, dir_name in CATEGORY_DIR_NAMES.items():
+            category_root = (self.local_root / dir_name).resolve(strict=False)
+            if resolved == category_root:
+                return candidate
+            try:
+                relative = resolved.relative_to(category_root)
+            except ValueError:
+                continue
+            if relative.parts:
+                return candidate
+        return None
+
+    def _build_paths(self, path: Path, category: str) -> tuple[Path, str]:
+        local_path = path.resolve(strict=False)
+        category_dir = CATEGORY_DIR_NAMES[category]
+        try:
+            relative = local_path.relative_to(self.local_root.resolve(strict=False))
+        except ValueError:
+            relative = Path(local_path.name)
+
+        if relative.parts and relative.parts[0].casefold() == category_dir.casefold():
+            nas_relative = relative
+        else:
+            nas_relative = Path(category_dir) / relative
+
+        nas_path = str(Path(self.nas_root) / nas_relative)
+        return local_path, nas_path
 
     def _warnings_for(self, path: Path) -> tuple[str, ...]:
         warnings: list[str] = []

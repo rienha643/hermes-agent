@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 def _hermes_home_path() -> Path:
@@ -146,6 +147,96 @@ def is_write_denied(path: str) -> bool:
         return True
 
     return False
+
+
+_NAS_DELETE_SPECIAL_NAMES = frozenset({"#recycle", "_restore_staging"})
+_NAS_DELETE_CATEGORY_ROOTS = frozenset({
+    "archive",
+    "story",
+    "games",
+    "image",
+    "documents",
+    "forge-models",
+    "git",
+})
+
+
+def _normalize_path_text(value: str | Path) -> tuple[str, list[str]]:
+    raw = str(value).strip().replace("\\", "/")
+    raw = re.sub(r"/+(?=/|$)", "/", raw)
+    raw = raw.rstrip("/")
+    parts = [part for part in raw.split("/") if part and part != "."]
+    return raw, [part.casefold() for part in parts]
+
+
+def is_nas_delete_denied(path: str | Path) -> bool:
+    """Return True when a delete target is an obvious NAS/share root or recycle path."""
+    raw, parts = _normalize_path_text(path)
+    lowered = raw.casefold()
+
+    if lowered in {"/hermes", "\\hermes"}:
+        return True
+    if lowered.startswith("//") and lowered.count("/") <= 3 and lowered.endswith("/hermes"):
+        return True
+
+    if any(part in _NAS_DELETE_SPECIAL_NAMES for part in parts):
+        return True
+
+    return False
+
+
+def is_nas_category_root_delete_denied(path: str | Path, *, local_root: str | Path | None = None) -> bool:
+    """Return True when a delete target is a top-level category root.
+
+    Only exact category-root deletes are blocked; file-level and nested
+    operations remain allowed.
+    """
+    if local_root is None:
+        return False
+
+    try:
+        target = Path(path).expanduser().resolve(strict=False)
+        root = Path(local_root).expanduser().resolve(strict=False)
+    except Exception:
+        return False
+
+    try:
+        relative = target.relative_to(root)
+    except ValueError:
+        return False
+
+    if len(relative.parts) != 1:
+        return False
+    return relative.parts[0].casefold() in _NAS_DELETE_CATEGORY_ROOTS
+
+
+def build_nas_op_evidence(
+    *,
+    op_type: str,
+    delete_capable: bool,
+    mirror: bool,
+    source: str | Path | None,
+    dest: str | Path | None,
+    source_count: int | None = None,
+    dest_count: int | None = None,
+    source_size: int | None = None,
+    dest_size: int | None = None,
+    decision: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "op_type": op_type,
+        "delete_capable": delete_capable,
+        "mirror": mirror,
+        "source": str(source) if source is not None else None,
+        "dest": str(dest) if dest is not None else None,
+        "source_count": source_count,
+        "dest_count": dest_count,
+        "source_size": source_size,
+        "dest_size": dest_size,
+        "decision": decision,
+        "reason": reason,
+    }
 
 
 # Common secret-bearing project-local environment file basenames.

@@ -37,7 +37,7 @@ def test_documents_dry_run_has_user_friendly_ux_and_approval_metadata(hermeswork
     assert result["deletion_executed"] is False
     assert result["category"] == "documents"
     assert result["local_path"] == str(path.resolve())
-    assert result["nas_path"] == r"\\test-nas\\Hermes\Documents\note.txt"
+    assert result["nas_path"] == str(Path(r"\\test-nas\\Hermes") / "Documents" / "note.txt")
     assert result["will_delete_local"] is True
     assert result["will_delete_nas"] is True
     assert result["local_delete_planned"] is True
@@ -116,6 +116,21 @@ def test_games_dry_run_has_user_friendly_ux_and_approval_metadata(hermeswork_roo
     assert result["registry_cleanup_error"] is None
     assert "삭제 모드: dry-run" in result["user_message"]
     assert "승인 필요: 예" in result["user_message"]
+
+
+@pytest.mark.parametrize("category, root_name", [("documents", "Documents"), ("story", "Story"), ("image", "Image"), ("games", "Games"), ("archive", "Archive")])
+def test_category_root_delete_is_blocked(hermeswork_root, category, root_name):
+    path = hermeswork_root / root_name
+    path.mkdir(parents=True, exist_ok=True)
+    result = build_delete_dry_run(path, category=category)
+    assert result is not None
+    assert result["delete_mode"] == "blocked"
+    assert result["deletion_executed"] is False
+    assert result["will_delete_local"] is False
+    assert result["will_delete_nas"] is False
+    assert result["requires_approval"] is False
+    assert result["blocked_reasons"]
+    assert any("category root delete blocked" in warning for warning in result["warnings"])
 
 
 @pytest.mark.parametrize(

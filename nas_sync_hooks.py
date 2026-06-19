@@ -16,6 +16,12 @@ DEFAULT_DEBOUNCE_SECONDS = 60.0
 _SUPPORTED_CATEGORIES = {"image", "documents", "story"}
 _IN_PROCESS_LAST_LAUNCH: dict[str, float] = {}
 _IN_PROCESS_LOCK = Lock()
+HOOK_FREEZE_ENV = "HERMES_NAS_HOOKS_FROZEN"
+
+
+def _hooks_frozen() -> bool:
+    value = os.environ.get(HOOK_FREEZE_ENV, "").strip().casefold()
+    return value in {"1", "true", "yes", "on", "frozen", "freeze"}
 _STORY_SCOPE_EMPTY_NAMES = {
     "",
     ".",
@@ -133,6 +139,9 @@ def queue_nas_sync_hook(
     """
     normalized_category = category.strip().lower()
     if normalized_category not in _SUPPORTED_CATEGORIES:
+        return False
+    if _hooks_frozen():
+        logger.info("NAS sync hook blocked by freeze state for category=%s scope=%s", normalized_category, scope)
         return False
 
     normalized_scope = _normalized_story_scope(scope) if normalized_category == "story" else scope.strip()

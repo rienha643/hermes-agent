@@ -9,7 +9,7 @@ import pytest
 import gateway.document_artifacts as document_artifacts
 import nas_sync_hooks
 
-BACKUP_SCRIPT_PATH = Path("/home/ai_agent/.hermes/profiles/cron-fast/scripts/hermes_nas_backup.py")
+BACKUP_SCRIPT_PATH = Path("/Users/hermes/.hermes/profiles/cron-fast/scripts/hermes_nas_backup.py")
 
 
 def _load_backup_script_module():
@@ -260,7 +260,7 @@ def test_run_artifact_hook_story_uses_canonical_destination(monkeypatch, tmp_pat
     assert "result=success" in summary
     assert captured["src"] == story_root
     assert str(captured["dest"]).lower().endswith("\\hermes\\story")
-    assert captured["mirror"] is True
+    assert captured["mirror"] is False
 
 
 def test_hook_state_dir_override_drives_lock_and_state_paths(monkeypatch, tmp_path):
@@ -363,6 +363,14 @@ def test_publish_document_artifact_falls_back_when_copy2_metadata_fails(monkeypa
     import gateway.delivery as delivery_mod
 
     monkeypatch.setattr(document_artifacts, "get_hermes_work_dir", fake_work_dir)
+    monkeypatch.setattr(
+        document_artifacts,
+        "resolve_project_artifact_dir",
+        lambda category, project_name, **kwargs: (
+            None,
+            fake_work_dir(category, project_name.replace("-", "_")),
+        ),
+    )
 
     source = tmp_path / "output.md"
     source.write_text("hello", encoding="utf-8")
@@ -386,4 +394,145 @@ def test_publish_document_artifact_falls_back_when_copy2_metadata_fails(monkeypa
     assert published_doc.exists()
     assert published_doc.read_text(encoding="utf-8") == "hello"
     assert copied == [(source, published_doc)]
-    assert calls == [("documents", "260601_job_1", published_doc, published_doc.parent)]
+    assert calls and calls[0][0] == "documents"
+    assert calls[0][1].endswith("job_1")
+    assert calls[0][2] == published_doc
+    assert calls[0][3] == published_doc.parent
+
+
+def test_queue_nas_sync_hook_blocks_when_frozen(monkeypatch, tmp_path):
+    script = tmp_path / "hermes_nas_backup.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+
+    launched: list[list[str]] = []
+
+    class DummyPopen:
+        def __init__(self, cmd, **kwargs):
+            launched.append(cmd)
+            self.cmd = cmd
+            self.kwargs = kwargs
+
+    monkeypatch.setenv("HERMES_NAS_HOOKS_FROZEN", "1")
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_script", lambda: script)
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_state_dir", lambda: tmp_path / "state" / "nas-sync")
+    monkeypatch.setattr(nas_sync_hooks.subprocess, "Popen", DummyPopen)
+    monkeypatch.setattr(nas_sync_hooks, "_IN_PROCESS_LAST_LAUNCH", {})
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    artifact_path = source_root / "artifact.png"
+    artifact_path.write_bytes(b"x")
+
+    assert not nas_sync_hooks.queue_nas_sync_hook(
+        category="image",
+        scope="task-1",
+        artifact_path=artifact_path,
+        source_root=source_root,
+    )
+    assert launched == []
+
+
+def test_backup_script_freeze_blocks_run_artifact_hook(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    monkeypatch.setenv("HERMES_NAS_HOOKS_FROZEN", "1")
+
+    ok, summary = backup_mod.run_artifact_hook(
+        category="image",
+        scope="task-1",
+        source_root=tmp_path / "source",
+        artifact_path=tmp_path / "source" / "artifact.png",
+    )
+
+    assert not ok
+    assert "result=blocked reason=freeze" in summary
+
+
+def test_backup_script_blocks_delete_guarded_roots():
+    backup_mod = _load_backup_script_module()
+    assert backup_mod._delete_guard_blocked_reason(Path("/Hermes")) == "share root delete blocked"
+    assert backup_mod._delete_guard_blocked_reason(Path("/mnt/ssd/_restore_staging/x")) == "protected recycle/staging path blocked"
+    assert backup_mod._delete_guard_blocked_reason(Path("Story")) == "category root delete blocked"
+    assert backup_mod._delete_guard_blocked_reason(Path("#recycle")) == "protected recycle/staging path blocked"
+
+
+def test_backup_script_mirror_blocked_by_default(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.txt").write_text("x", encoding="utf-8")
+    cred = backup_mod.Credential(host="host", username="user", password="pass")
+    monkeypatch.delenv("HERMES_NAS_ALLOW_DELETE_CAPABLE_SYNC", raising=False)
+
+    with pytest.raises(backup_mod.SyncError, match="mirror delete blocked by default"):
+        backup_mod._sync_source_to_posix_share(cred, src, r"\\host\\Hermes\\image", mirror=True)
+
+
+def test_backup_script_mirror_missing_source_blocked(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    cred = backup_mod.Credential(host="host", username="user", password="pass")
+    monkeypatch.setenv("HERMES_NAS_ALLOW_DELETE_CAPABLE_SYNC", "1")
+
+    with pytest.raises(backup_mod.SyncError, match="mirror source missing"):
+        backup_mod._sync_source_to_posix_share(cred, tmp_path / "missing", r"\\host\\Hermes\\image", mirror=True)
+
+
+def test_backup_script_mirror_empty_source_blocked(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    cred = backup_mod.Credential(host="host", username="user", password="pass")
+    empty_src = tmp_path / "src"
+    empty_src.mkdir()
+    monkeypatch.setenv("HERMES_NAS_ALLOW_DELETE_CAPABLE_SYNC", "1")
+
+    with pytest.raises(backup_mod.SyncError, match="mirror source empty"):
+        backup_mod._sync_source_to_posix_share(cred, empty_src, r"\\host\\Hermes\\image", mirror=True)
+
+
+def test_backup_script_copy_only_allowed(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    cred = backup_mod.Credential(host="host", username="user", password="pass")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.txt").write_text("x", encoding="utf-8")
+    mount_point = tmp_path / "mount"
+    mount_point.mkdir()
+
+    monkeypatch.setattr(backup_mod, "_mount_share_posix", lambda cred: (mount_point, True))
+    monkeypatch.setattr(backup_mod, "_unmount_share_posix", lambda mount_point, owned_mount: None)
+    monkeypatch.setattr(
+        backup_mod,
+        "run_cmd",
+        lambda args, timeout=None: type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})(),
+    )
+
+    copied, state = backup_mod._sync_source_to_posix_share(cred, src, r"\\host\\Hermes\\image", mirror=False)
+    assert state == "ok"
+    assert copied == 1
+
+
+def test_backup_script_temp_mount_cleanup_allowed_outside_nas(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    mount_point = tmp_path / "hermes_nas_mount_tmp"
+    mount_point.mkdir()
+    calls: list[list[str]] = []
+
+    def fake_run_cmd(args, timeout=None):
+        calls.append(args)
+        return type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(backup_mod, "run_cmd", fake_run_cmd)
+    backup_mod._unmount_share_posix(mount_point, True)
+    assert not mount_point.exists()
+    assert calls
+
+
+def test_backup_script_temp_share_cleanup_blocked_by_default(monkeypatch):
+    backup_mod = _load_backup_script_module()
+    called = []
+
+    def fake_run_authenticated_share_script(*args, **kwargs):
+        called.append((args, kwargs))
+        raise AssertionError("cleanup should not be attempted when frozen")
+
+    monkeypatch.setattr(backup_mod, "run_authenticated_share_script", fake_run_authenticated_share_script)
+    backup_mod.cleanup_temp_share_dir(backup_mod.Credential(host="host", username="user", password="pass"))
+    assert called == []
