@@ -1127,6 +1127,31 @@ class TestBuildSystemPrompt:
         assert "single DOCX/PDF/MD request must produce only that artifact" in prompt
         assert "For narrative and design-doc work, DOCX-only means DOCX only, and MD-only means MD only" in prompt
 
+    def test_document_style_guidance_can_be_disabled(self):
+        from agent.prompt_builder import DOCUMENT_STYLE_GUIDANCE
+
+        with (
+            patch("run_agent.get_tool_definitions", return_value=[]),
+            patch("run_agent.check_toolset_requirements", return_value={}),
+            patch("run_agent.OpenAI"),
+            patch(
+                "hermes_cli.config.load_config",
+                return_value={"agent": {"document_style_guidance": False}},
+            ),
+        ):
+            agent = AIAgent(
+                model="anthropic/claude-opus-4.8",
+                api_key="test-key-1234567890",
+                base_url="https://openrouter.ai/api/v1",
+                quiet_mode=True,
+                skip_context_files=True,
+                skip_memory=True,
+            )
+            agent.client = MagicMock()
+
+        prompt = agent._build_system_prompt()
+        assert DOCUMENT_STYLE_GUIDANCE not in prompt
+
     def test_memory_guidance_when_memory_tool_loaded(self, agent_with_memory_tool):
         from agent.prompt_builder import MEMORY_GUIDANCE
 

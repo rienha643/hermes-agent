@@ -1204,6 +1204,11 @@ def init_agent(
     # targets.
     agent._task_completion_guidance = bool(_agent_section.get("task_completion_guidance", True))
 
+    # Document-artifact style guidance toggle. Default True. Profiles that
+    # only handle short operational chat can disable this without changing
+    # provider/tool execution behavior.
+    agent._document_style_guidance = bool(_agent_section.get("document_style_guidance", True))
+
     # Local Python toolchain probe toggle.  Default True.  When False,
     # the probe is skipped entirely (no subprocess calls, no system-prompt
     # line).  Useful for users on exotic setups where the probe heuristics

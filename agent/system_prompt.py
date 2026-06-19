@@ -102,8 +102,10 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # Pointer to the hermes-agent skill + docs for user questions about Hermes itself.
     stable_parts.append(HERMES_AGENT_HELP_GUIDANCE)
 
-    # Keep conversational style preferences separate from document-writing style.
-    stable_parts.append(DOCUMENT_STYLE_GUIDANCE)
+    # Keep conversational style preferences separate from document-writing
+    # style. Short-chat profiles can disable this to keep prompt cost down.
+    if getattr(agent, "_document_style_guidance", True):
+        stable_parts.append(DOCUMENT_STYLE_GUIDANCE)
 
     # Universal task-completion / no-fabrication guidance.  Applied to ALL
     # models regardless of tool_use_enforcement gating — the failure modes
