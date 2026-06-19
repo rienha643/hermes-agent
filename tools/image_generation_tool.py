@@ -1020,6 +1020,22 @@ IMAGE_GENERATE_SCHEMA = {
                 "type": "string",
                 "description": "Optional artifact base name used for the published filename.",
             },
+            "negative_prompt": {
+                "type": "string",
+                "description": "Optional negative prompt. Required by the ComfyUI character_production preset and merged with its negative baseline when used.",
+            },
+            "subject_dominance": {
+                "type": "number",
+                "description": "Optional subject-dominance score (0-1 or 0-100). Required by the ComfyUI character_production preset.",
+            },
+            "width": {
+                "type": "integer",
+                "description": "Optional explicit output width in pixels. When set with height, provider defaults such as square 1024x1024 must not override it.",
+            },
+            "height": {
+                "type": "integer",
+                "description": "Optional explicit output height in pixels. When set with width, provider defaults such as square 1024x1024 must not override it.",
+            },
         },
         "required": ["prompt"],
     },
@@ -1119,6 +1135,10 @@ def _dispatch_to_plugin_provider(
     task_id: str | None = None,
     project_name: str | None = None,
     artifact_name: str | None = None,
+    negative_prompt: str | None = None,
+    subject_dominance: float | int | None = None,
+    width: int | None = None,
+    height: int | None = None,
 ):
     """Route the call to a plugin-registered provider when one is selected.
 
@@ -1196,11 +1216,19 @@ def _dispatch_to_plugin_provider(
         })
 
     try:
-        kwargs = {"prompt": prompt, "aspect_ratio": aspect_ratio}
+        kwargs: Dict[str, Any] = {"prompt": prompt, "aspect_ratio": aspect_ratio}
         if project_name is not None:
             kwargs["project_name"] = project_name
         if artifact_name is not None:
             kwargs["artifact_name"] = artifact_name
+        if negative_prompt is not None:
+            kwargs["negative_prompt"] = negative_prompt
+        if subject_dominance is not None:
+            kwargs["subject_dominance"] = subject_dominance
+        if width is not None:
+            kwargs["width"] = width
+        if height is not None:
+            kwargs["height"] = height
         if configured_model:
             kwargs["model"] = configured_model
         result = provider.generate(**kwargs)
@@ -1239,6 +1267,10 @@ def _handle_image_generate(args, **kw):
     aspect_ratio = args.get("aspect_ratio", DEFAULT_ASPECT_RATIO)
     project_name = args.get("project_name")
     artifact_name = args.get("artifact_name")
+    negative_prompt = args.get("negative_prompt")
+    subject_dominance = args.get("subject_dominance")
+    width = args.get("width")
+    height = args.get("height")
     task_id = kw.get("task_id")
 
     task_project_name, task_artifact_name = _consume_image_task_metadata(task_id)
@@ -1261,6 +1293,10 @@ def _handle_image_generate(args, **kw):
         task_id=task_id,
         project_name=project_name,
         artifact_name=artifact_name,
+        negative_prompt=str(negative_prompt) if isinstance(negative_prompt, str) and negative_prompt.strip() else None,
+        subject_dominance=subject_dominance if isinstance(subject_dominance, (int, float)) else None,
+        width=width if isinstance(width, int) and width > 0 else None,
+        height=height if isinstance(height, int) and height > 0 else None,
     )
     if dispatched is not None:
         return dispatched

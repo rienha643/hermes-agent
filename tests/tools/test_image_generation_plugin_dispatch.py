@@ -82,6 +82,8 @@ class TestPluginDispatch:
             "square",
             project_name="260601_망각구역",
             artifact_name="scene",
+            width=512,
+            height=512,
         )
         payload = json.loads(dispatched)
 
@@ -92,6 +94,47 @@ class TestPluginDispatch:
                 "aspect_ratio": "square",
                 "project_name": "260601_망각구역",
                 "artifact_name": "scene",
+                "width": 512,
+                "height": 512,
+            }
+        ]
+
+    def test_dispatch_forwards_character_production_preset_fields(self, monkeypatch, tmp_path):
+        from tools import image_generation_tool
+        from agent import image_gen_registry as registry_module
+        from hermes_cli import plugins as plugins_module
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "config.yaml").write_text("image_gen:\n  provider: codex\n")
+        provider = _FakeCodexProvider()
+
+        monkeypatch.setattr(image_generation_tool, "_read_configured_image_provider", lambda: "codex")
+        monkeypatch.setattr(plugins_module, "_ensure_plugins_discovered", lambda: None)
+        monkeypatch.setattr(registry_module, "get_provider", lambda name: provider if name == "codex" else None)
+
+        dispatched = image_generation_tool._dispatch_to_plugin_provider(
+            "캐릭터 전신 heroine gacha",
+            "portrait",
+            project_name="heroine_project",
+            artifact_name="heroine_art",
+            negative_prompt="blurry, watermark",
+            subject_dominance=80,
+            width=768,
+            height=1024,
+        )
+        payload = json.loads(dispatched)
+
+        assert payload["success"] is True
+        assert provider.calls == [
+            {
+                "prompt": "캐릭터 전신 heroine gacha",
+                "aspect_ratio": "portrait",
+                "project_name": "heroine_project",
+                "artifact_name": "heroine_art",
+                "negative_prompt": "blurry, watermark",
+                "subject_dominance": 80,
+                "width": 768,
+                "height": 1024,
             }
         ]
 
@@ -142,7 +185,7 @@ class TestPluginDispatch:
 
         captured = {}
 
-        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None):
+        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None, width=None, height=None, **kwargs):
             captured.update(
                 {
                     "prompt": prompt,
@@ -150,6 +193,8 @@ class TestPluginDispatch:
                     "task_id": task_id,
                     "project_name": project_name,
                     "artifact_name": artifact_name,
+                    "width": width,
+                    "height": height,
                 }
             )
             return json.dumps({"success": True, "image": "/tmp/result.png"})
@@ -171,6 +216,8 @@ class TestPluginDispatch:
             "task_id": "task-2",
             "project_name": "망각구역",
             "artifact_name": "주인공",
+            "width": None,
+            "height": None,
         }
 
     def test_handle_image_generate_defaults_artifact_to_image_when_missing(self, monkeypatch, tmp_path):
@@ -180,7 +227,7 @@ class TestPluginDispatch:
 
         captured = {}
 
-        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None):
+        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None, width=None, height=None, **kwargs):
             captured.update(
                 {
                     "prompt": prompt,
@@ -188,6 +235,8 @@ class TestPluginDispatch:
                     "task_id": task_id,
                     "project_name": project_name,
                     "artifact_name": artifact_name,
+                    "width": width,
+                    "height": height,
                 }
             )
             return json.dumps({"success": True, "image": "/tmp/result.png"})
@@ -209,6 +258,8 @@ class TestPluginDispatch:
             "task_id": "task-3",
             "project_name": "망각구역",
             "artifact_name": "검증용이미지",
+            "width": None,
+            "height": None,
         }
 
     def test_handle_image_generate_uses_task_metadata_registry(self, monkeypatch, tmp_path):
@@ -218,7 +269,7 @@ class TestPluginDispatch:
 
         captured = {}
 
-        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None):
+        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None, width=None, height=None, **kwargs):
             captured.update(
                 {
                     "prompt": prompt,
@@ -226,6 +277,8 @@ class TestPluginDispatch:
                     "task_id": task_id,
                     "project_name": project_name,
                     "artifact_name": artifact_name,
+                    "width": width,
+                    "height": height,
                 }
             )
             return json.dumps({"success": True, "image": "/tmp/result.png"})
@@ -252,6 +305,8 @@ class TestPluginDispatch:
             "task_id": "child-task-1",
             "project_name": "망각구역",
             "artifact_name": "주인공",
+            "width": None,
+            "height": None,
         }
 
     def test_dispatch_single_output_mode_reuses_cached_result_for_non_forge_provider(self, monkeypatch, tmp_path):
