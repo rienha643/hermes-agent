@@ -1,0 +1,7 @@
+name: novelai
+version: 0.1.0
+description: "NovelAI image backend with HermesWork/Image/NAI publish pipeline."
+author: Hermes Agent
+kind: backend
+requires_env:
+  - NOVELAI_API_KEY
