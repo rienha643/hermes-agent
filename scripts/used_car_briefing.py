@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Iterable
 
 from used_car_filters import apply_hard_filters, apply_recommendation_filters, summarize_exclusions
 from used_car_normalize import normalize_source_label
-from used_car_scoring import score_listings
-from used_car_sources import fetch_all_sources
+from used_car_scoring import explain_score, score_listings
+from used_car_sources import SOURCE_CONFIG, fetch_all_sources
 
 
 def dedupe_listings(listings: Iterable[dict]) -> list[dict]:
@@ -32,6 +32,7 @@ def render_markdown(
     exclusion_summary: dict[str, int],
     recommendation_exclusion_summary: dict[str, int],
     source_errors: dict[str, str],
+    source_coverage: list[str] | None = None,
     collection_failed: bool = False,
     fetch_failure_count: int = 0,
 ) -> str:
@@ -59,6 +60,8 @@ def render_markdown(
         if source_errors:
             errors = ", ".join(f"{source}={reason}" for source, reason in source_errors.items())
             lines.append(f"수집 경고: {errors}")
+        if source_coverage:
+            lines.append(f"소스별 현황: {', '.join(source_coverage)}")
         return "\n".join(lines)
 
     lines = [f"[중고차 알림] 조건 일치 {len(listings)}건", ""]
@@ -68,6 +71,8 @@ def render_markdown(
     lines.append(
         f"요약: 수집 {collected_count}건 / 하드필터 통과 {filtered_count}건 / 추천 기준 통과 {len(listings)}건"
     )
+    if source_coverage:
+        lines.append(f"소스별 현황: {', '.join(source_coverage)}")
     merged = merge_summaries(exclusion_summary, recommendation_exclusion_summary)
     if merged:
         reasons = ", ".join(f"{format_reason(reason)} {count}" for reason, count in sorted(merged.items()))
@@ -100,6 +105,7 @@ def render_listing(index: int, listing: dict) -> list[str]:
         f"- 강조옵션: {', '.join(highlights) if highlights else '없음'}",
         f"- 사고/침수: {accident} / {flood}",
         f"- 소스: {normalize_source_label(listing.get('source', ''))} | 점수: {listing.get('score', 0)}점 ({listing.get('score_tier', '미분류')})",
+        f"- 점수근거: {explain_score(listing)}",
     ]
 
 
@@ -144,6 +150,8 @@ def format_reason(reason: str) -> str:
         "score_below_threshold": "추천점수 미달",
         "required_options_below_min": "필수옵션 부족",
         "option_unverified": "옵션 미확인",
+        "drivetrain_domestic": "국산 2WD 제외",
+        "size_class": "경형/소형 제외",
     }
     return mapping.get(reason, reason)
 
@@ -157,6 +165,7 @@ def build_brief(limit_per_source: int = 24) -> tuple[str, dict]:
     scored = score_listings(filtered)
     recommended, recommendation_excluded = apply_recommendation_filters(scored)
     deduped = dedupe_listings(recommended)
+    source_coverage = build_source_coverage(successful_raw, filtered, deduped)
     collection_failed = not successful_raw and (bool(source_errors) or fetch_failure_count > 0)
     markdown = render_markdown(
         listings=deduped,
@@ -165,6 +174,7 @@ def build_brief(limit_per_source: int = 24) -> tuple[str, dict]:
         exclusion_summary=summarize_exclusions(excluded),
         recommendation_exclusion_summary=summarize_exclusions(recommendation_excluded),
         source_errors=source_errors,
+        source_coverage=source_coverage,
         collection_failed=collection_failed,
         fetch_failure_count=fetch_failure_count,
     )
@@ -178,8 +188,24 @@ def build_brief(limit_per_source: int = 24) -> tuple[str, dict]:
         "fetch_failures": fetch_failure_count,
         "collection_failed": collection_failed,
         "source_errors": source_errors,
+        "source_coverage": source_coverage,
     }
     return markdown, stats
+
+
+def build_source_coverage(raw: list[dict], filtered: list[dict], recommended: list[dict]) -> list[str]:
+    raw_counts = _source_counts(raw)
+    filtered_counts = _source_counts(filtered)
+    recommended_counts = _source_counts(recommended)
+    lines = []
+    for source in SOURCE_CONFIG:
+        label = normalize_source_label(source)
+        lines.append(f"{label} {raw_counts.get(source, 0)}→{filtered_counts.get(source, 0)}→{recommended_counts.get(source, 0)}")
+    return lines
+
+
+def _source_counts(listings: list[dict]) -> Counter:
+    return Counter(item.get("source") for item in listings)
 
 
 def main() -> int:

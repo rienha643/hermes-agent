@@ -24,6 +24,8 @@ def test_normalize_brand_maps_korean_and_english_variants():
     assert normalize_brand("포르쉐") == "포르쉐"
     assert normalize_brand("Volkswagen") == "폭스바겐"
     assert normalize_brand("Lexus") == "렉서스"
+    assert normalize_brand("Genesis") == "제네시스"
+    assert normalize_brand("Tesla") == "테슬라"
 
 
 def test_parse_year_month_extracts_year_and_month():
@@ -48,6 +50,8 @@ def test_normalize_fuel_maps_supported_types():
     assert normalize_fuel("경유") == "디젤"
     assert normalize_fuel("디젤") == "디젤"
     assert normalize_fuel("하이브리드") == "하이브리드"
+    assert normalize_fuel("가솔린 1.6 터보 하이브리드") == "하이브리드"
+    assert normalize_fuel("Electric") == "전기"
     assert normalize_fuel("LPG") == "LPG"
 
 
@@ -56,6 +60,8 @@ def test_infer_body_type_detects_suv_keywords():
     assert infer_body_type("현대 팰리세이드 디젤 2.2 4WD 익스클루시브") == "SUV"
     assert infer_body_type("폭스바겐 티구안 2.0 TDI 4Motion") == "SUV"
     assert infer_body_type("렉서스 RX 450h F SPORT") == "SUV"
+    assert infer_body_type("제네시스 GV80 가솔린 2.5 터보 AWD") == "SUV"
+    assert infer_body_type("테슬라 Model Y Long Range AWD") == "SUV"
     assert infer_body_type("현대 아반떼 1.6 모던") == "세단"
 
 

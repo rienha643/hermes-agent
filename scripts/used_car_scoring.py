@@ -6,12 +6,12 @@ from typing import Iterable
 from used_car_normalize import REQUIRED_OPTION_ALIASES
 
 SOURCE_TRUST_SCORES = {
-    "usedcar_destroyer": 3,
-    "jungcar_tv": 2,
-    "encar_certified": 5,
-    "kcar": 5,
-    "hyundai_certified": 5,
-    "kia_certified": 5,
+    "hyundai_certified": 20,
+    "kia_certified": 20,
+    "kcar": 18,
+    "encar_certified": 16,
+    "usedcar_destroyer": 11,
+    "jungcar_tv": 9,
 }
 
 
@@ -61,7 +61,7 @@ def score_listing(listing: dict, group_prices: dict | None = None) -> dict:
     score_breakdown["price_reasonableness"] = _price_score(listing, group_prices or {})
     score_breakdown["mileage"] = _mileage_score(listing.get("mileage_km"))
     score_breakdown["year"] = _year_score(listing.get("year"))
-    score_breakdown["source_trust"] = min(SOURCE_TRUST_SCORES.get(listing.get("source"), 0), 5)
+    score_breakdown["source_trust"] = min(SOURCE_TRUST_SCORES.get(listing.get("source"), 0), 20)
     score_breakdown["drivetrain"] = 5 if listing.get("drivetrain") else 0
     score_breakdown["option_data"] = 5 if option_data_present else 0
 
@@ -95,12 +95,14 @@ def _price_score(listing: dict, group_prices: dict[tuple, float]) -> int:
         return 0
     baseline = group_prices.get(key)
     if not baseline:
-        return 5
+        return 8
     ratio = price / baseline
-    if ratio <= 0.9:
-        return 10
+    if ratio <= 0.95:
+        return 15
     if ratio <= 1.05:
-        return 5
+        return 12
+    if ratio <= 1.15:
+        return 7
     return 0
 
 
@@ -128,3 +130,27 @@ def _year_score(year: int | None) -> int:
     if year >= 2017:
         return 2
     return 1
+
+
+def explain_score(listing: dict) -> str:
+    breakdown = listing.get("score_breakdown") or {}
+    trust = breakdown.get("source_trust", 0) + breakdown.get("certified_warranty", 0)
+    options = (
+        breakdown.get("required_options", 0)
+        + breakdown.get("highlight_options", 0)
+        + breakdown.get("option_data", 0)
+    )
+    condition = breakdown.get("accident_history", 0)
+    value = breakdown.get("price_reasonableness", 0)
+    age_use = breakdown.get("mileage", 0) + breakdown.get("year", 0)
+    drivetrain = breakdown.get("drivetrain", 0)
+    parts = [
+        f"신뢰 {trust}",
+        f"옵션 {options}",
+        f"상태 {condition}",
+        f"가격 {value}",
+        f"주행/연식 {age_use}",
+    ]
+    if drivetrain:
+        parts.append(f"구동 {drivetrain}")
+    return " / ".join(parts)

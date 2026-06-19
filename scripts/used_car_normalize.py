@@ -4,9 +4,16 @@ import re
 from datetime import datetime, timezone
 from typing import Iterable
 
-ALLOWED_BRANDS = {"현대", "기아", "BMW", "벤츠", "포르쉐", "폭스바겐", "렉서스"}
-ALLOWED_FUELS = {"가솔린", "디젤", "하이브리드"}
-ALLOWED_SOURCES = {"usedcar_destroyer", "jungcar_tv", "encar_certified", "kcar"}
+ALLOWED_BRANDS = {"현대", "기아", "제네시스", "BMW", "벤츠", "포르쉐", "볼보", "폭스바겐", "렉서스", "테슬라"}
+ALLOWED_FUELS = {"가솔린", "하이브리드", "전기"}
+ALLOWED_SOURCES = {
+    "hyundai_certified",
+    "kia_certified",
+    "usedcar_destroyer",
+    "jungcar_tv",
+    "encar_certified",
+    "kcar",
+}
 
 REQUIRED_OPTION_ALIASES = {
     "열선 시트": ["열선시트", "열선 시트", "시트열선", "앞좌석 열선", "뒷좌석 열선", "열선"],
@@ -30,11 +37,14 @@ HIGHLIGHT_OPTION_ALIASES = {
 SUV_KEYWORDS = {
     "현대": ["팰리세이드", "싼타페", "투싼", "코나", "베뉴", "넥쏘"],
     "기아": ["쏘렌토", "스포티지", "셀토스", "모하비", "니로", "EV9"],
+    "제네시스": ["GV60", "GV70", "GV80"],
     "BMW": ["X1", "X2", "X3", "X4", "X5", "X6", "X7", "XM", "IX"],
     "벤츠": ["GLA", "GLB", "GLC", "GLE", "GLS", "G클래스", "EQB", "EQC", "EQE SUV", "EQS SUV", "G바겐", "지바겐"],
     "포르쉐": ["카이엔", "마칸"],
+    "볼보": ["XC40", "XC60", "XC90", "EX30", "EX40", "EX90"],
     "폭스바겐": ["티구안", "투아렉", "티록", "ID.4"],
     "렉서스": ["UX", "NX", "RX", "GX", "LX", "RZ"],
+    "테슬라": ["MODEL Y", "MODEL X", "모델Y", "모델X"],
 }
 
 BRAND_PATTERNS = [
@@ -42,8 +52,11 @@ BRAND_PATTERNS = [
     (re.compile(r"^benz$|벤츠", re.I), "벤츠"),
     (re.compile(r"^bmw$|BMW", re.I), "BMW"),
     (re.compile(r"포르쉐|porsche", re.I), "포르쉐"),
+    (re.compile(r"볼보|volvo", re.I), "볼보"),
     (re.compile(r"폭스바겐|volkswagen", re.I), "폭스바겐"),
     (re.compile(r"렉서스|lexus", re.I), "렉서스"),
+    (re.compile(r"제네시스|genesis", re.I), "제네시스"),
+    (re.compile(r"테슬라|tesla", re.I), "테슬라"),
     (re.compile(r"현대|hyundai", re.I), "현대"),
     (re.compile(r"기아|kia", re.I), "기아"),
 ]
@@ -111,15 +124,17 @@ def normalize_fuel(value: str | None) -> str | None:
         return None
     value = clean_text(value)
     lowered = value.lower()
+    if "하이브리드" in value or "hybrid" in lowered:
+        return "하이브리드"
     if any(token in lowered for token in ["휘발유", "가솔린", "gasoline"]):
         return "가솔린"
     if any(token in lowered for token in ["경유", "디젤", "diesel"]):
         return "디젤"
-    if "하이브리드" in value or "hybrid" in lowered:
-        return "하이브리드"
     if "lpg" in lowered:
         return "LPG"
     if "전기" in value or "ev" == lowered:
+        return "전기"
+    if "electric" in lowered:
         return "전기"
     return value
 
@@ -215,6 +230,8 @@ def intersect_options(option_tokens: Iterable[str], candidates: dict[str, list[s
 
 def normalize_source_label(source: str) -> str:
     return {
+        "hyundai_certified": "현대/제네시스 인증중고차",
+        "kia_certified": "기아 인증중고차",
         "usedcar_destroyer": "중고차파괴자",
         "jungcar_tv": "중카TV",
         "encar_certified": "엔카 인증매물",

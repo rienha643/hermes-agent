@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from html import unescape
 from urllib.parse import quote, urljoin
 
 import requests
@@ -29,6 +30,16 @@ USER_AGENT = "Mozilla/5.0"
 TIMEOUT = 30
 ENCAR_QUERY = "(And.Hidden.N._.(Or.ServiceMark.EncarDiagnosisP0._.ServiceMark.EncarDiagnosisP1._.ServiceMark.EncarDiagnosisP2.))"
 SOURCE_CONFIG = {
+    "hyundai_certified": {
+        "list_url": "https://certified.hyundai.com/p/search/vehicle/list",
+        "detail_url": "https://certified.hyundai.com/p/goods/goodsDetail.do?goodsNo={goods_no}",
+    },
+    "kia_certified": {
+        "search_api": "https://cpo.kia.com/api/search/",
+        "detail_api": "https://cpo.kia.com/api/product/detail/{id}/",
+        "options_api": "https://cpo.kia.com/api/product/options/{id}/",
+        "insurance_api": "https://cpo.kia.com/api/product/insurance-history/{id}/",
+    },
     "usedcar_destroyer": {
         "base_url": "https://xn--299a7fv36e6lbb3goqn.com",
         "list_url": "https://xn--299a7fv36e6lbb3goqn.com/search/get_search?fn=model&country=all",
@@ -53,6 +64,10 @@ def fetch_source_listings(source: str, limit: int = 24) -> tuple[list[dict], str
     if source not in SOURCE_CONFIG:
         return [], f"지원하지 않는 소스: {source}"
     try:
+        if source == "hyundai_certified":
+            return _fetch_hyundai_certified(limit), None
+        if source == "kia_certified":
+            return _fetch_kia_certified(limit), None
         if source in {"usedcar_destroyer", "jungcar_tv"}:
             return _fetch_site_html_source(source, limit), None
         if source == "encar_certified":
@@ -147,8 +162,90 @@ def _fetch_kcar(limit: int) -> list[dict]:
     return listings
 
 
+def _fetch_hyundai_certified(limit: int) -> list[dict]:
+    cfg = SOURCE_CONFIG["hyundai_certified"]
+    params = {
+        "ntcSeq": "",
+        "type": "PLP",
+        "pageIdx": 1,
+        "rowsPerPage": limit,
+        "startNo": 0,
+        "listCnt": limit,
+        "sortType": "popularity",
+        "srchType": "srchWord",
+        "searchWord": "",
+        "sdStatCd": "",
+        "selectedCodeList": "",
+        "lowPrice": "",
+        "highPrice": "",
+        "lowMileage": "",
+        "highMileage": "",
+        "lowModelYear": "",
+        "highModelYear": "",
+        "carGubunList": "",
+        "fuelList": "",
+        "exteriorColorList": "",
+        "optionList": "",
+        "keywordList": "",
+        "filtered": "false",
+        "posNoList": "",
+    }
+    response = requests.post(
+        cfg["list_url"],
+        data=params,
+        headers={**_json_headers(), "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-Requested-With": "XMLHttpRequest"},
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    cards = extract_hyundai_cards(response.text)[:limit]
+    listings: list[dict] = []
+    for card in cards:
+        goods_no = extract_hyundai_goods_no(card)
+        detail_url = cfg["detail_url"].format(goods_no=goods_no)
+        try:
+            detail_html = fetch_html(detail_url, allow_jina_fallback=False)
+        except Exception as exc:
+            listings.append(build_failed_listing("hyundai_certified", detail_url, str(exc)))
+            continue
+        listings.append(parse_hyundai_certified_listing(card, detail_url, detail_html))
+    return listings
+
+
+def _fetch_kia_certified(limit: int) -> list[dict]:
+    cfg = SOURCE_CONFIG["kia_certified"]
+    response = requests.get(
+        cfg["search_api"],
+        params={"size": limit, "sort": "DISPLAYED_AT_DESC"},
+        headers=_json_headers(),
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    data = response.json()
+    items = (data.get("results") or data.get("content") or [])[:limit]
+    listings: list[dict] = []
+    for item in items:
+        item_id = item.get("id")
+        detail_url = build_kia_detail_url(item_id)
+        try:
+            detail_response = requests.get(cfg["detail_api"].format(id=item_id), headers=_json_headers(), timeout=TIMEOUT)
+            detail_response.raise_for_status()
+            options_response = requests.get(cfg["options_api"].format(id=item_id), headers=_json_headers(), timeout=TIMEOUT)
+            options_response.raise_for_status()
+            insurance_response = requests.get(cfg["insurance_api"].format(id=item_id), headers=_json_headers(), timeout=TIMEOUT)
+            insurance_response.raise_for_status()
+        except Exception as exc:
+            listings.append(build_failed_listing("kia_certified", detail_url, str(exc)))
+            continue
+        listings.append(parse_kia_certified_listing(item, detail_url, detail_response.json(), options_response.json(), insurance_response.json()))
+    return listings
+
+
 def build_kcar_detail_url(car_cd: str | None) -> str:
     return f"https://www.kcar.com/bc/detail/carInfoDtl?i_sCarCd={car_cd}"
+
+
+def build_kia_detail_url(item_id: str | int | None) -> str:
+    return f"https://cpo.kia.com/product/detail/{item_id}/"
 
 
 def fetch_html(url: str, allow_jina_fallback: bool = False) -> str:
@@ -342,6 +439,98 @@ def parse_kcar_listing(item: dict, detail_url: str, detail_json: dict) -> dict:
     }
 
 
+def parse_hyundai_certified_listing(card_html: str, detail_url: str, detail_html: str) -> dict:
+    text = html_to_text(detail_html)
+    listing_id = extract_hyundai_goods_no(card_html)
+    title = extract_hyundai_card_title(card_html)
+    brand = infer_hyundai_brand(title)
+    drive_spans = extract_hyundai_drive_spans(card_html)
+    year, month = parse_year_month(expand_short_korean_year(drive_spans[0] if drive_spans else ""))
+    mileage_km = parse_mileage_km(drive_spans[1] if len(drive_spans) > 1 else None)
+    region = drive_spans[3] if len(drive_spans) > 3 else infer_region(text)
+    price_krw = parse_price_krw(extract_hyundai_card_price(card_html))
+    option_tokens = extract_option_tokens(text)
+    option_data_present = detect_option_data_present(text, option_tokens)
+    return {
+        "source": "hyundai_certified",
+        "listing_id": listing_id,
+        "listing_url": detail_url,
+        "detail_url": detail_url,
+        "title": title,
+        "brand": brand,
+        "model": extract_model(title, brand),
+        "body_type": infer_body_type(title),
+        "year": year,
+        "month": month,
+        "mileage_km": mileage_km,
+        "fuel": normalize_fuel(title + " " + text),
+        "transmission": normalize_transmission(text),
+        "price_krw": price_krw,
+        "drivetrain": normalize_drivetrain(title + " " + text),
+        "certified_flag": True,
+        "warranty_flag": True,
+        "warranty_label": "현대/제네시스 인증중고차",
+        "seller_name": "현대/제네시스 인증중고차",
+        "seller_type": "제조사 인증",
+        "region": region,
+        "accident_note": infer_accident_note(text),
+        "flood_note": infer_flood_note(text),
+        "option_tokens": option_tokens,
+        "option_data_present": option_data_present,
+        "required_options_matched": intersect_options(option_tokens, REQUIRED_OPTION_ALIASES),
+        "highlight_options_matched": intersect_options(option_tokens, HIGHLIGHT_OPTION_ALIASES),
+        "raw_labels": extract_raw_labels(title + " " + text) + ["제조사 인증"],
+        "raw_text_excerpt": text[:500],
+        "collected_at": now_iso(),
+        "sale_status": infer_sale_status(text) or "판매중",
+    }
+
+
+def parse_kia_certified_listing(item: dict, detail_url: str, detail_json: dict, options_json: dict, insurance_json: dict) -> dict:
+    car = detail_json.get("car", {}) or item
+    listing_id = str(detail_json.get("id") or item.get("id"))
+    title = clean_text(car.get("modelName") or item.get("modelName"))
+    option_text = " ".join(flatten_strings(options_json))
+    option_tokens = extract_option_tokens(option_text)
+    option_data_present = detect_option_data_present(option_text, option_tokens)
+    year, month = parse_year_month(car.get("firstRegisteredOn") or item.get("firstRegisteredOn") or str(car.get("modelYear") or item.get("modelYear") or ""))
+    accident_note = infer_kia_accident_note(insurance_json)
+    flood_note = infer_kia_flood_note(insurance_json)
+    return {
+        "source": "kia_certified",
+        "listing_id": listing_id,
+        "listing_url": detail_url,
+        "detail_url": detail_url,
+        "title": f"[기아] {title}",
+        "brand": "기아",
+        "model": clean_text(car.get("modelCodeName") or item.get("modelCodeName")) or extract_model(title, "기아"),
+        "body_type": clean_text(car.get("modelCategory") or item.get("modelCategory")) or infer_body_type(title),
+        "year": year,
+        "month": month,
+        "mileage_km": _safe_int(car.get("drivingDistance") or item.get("drivingDistance")),
+        "fuel": normalize_fuel(car.get("fuelType") or car.get("engine") or item.get("modelEngine") or title),
+        "transmission": normalize_transmission(car.get("mission")),
+        "price_krw": _safe_int(car.get("price") or item.get("price")),
+        "drivetrain": normalize_drivetrain(title + " " + clean_text(car.get("engine") or "")),
+        "certified_flag": True,
+        "warranty_flag": True,
+        "warranty_label": "기아 인증중고차",
+        "seller_name": "기아 인증중고차",
+        "seller_type": "제조사 인증",
+        "region": None,
+        "accident_note": accident_note,
+        "flood_note": flood_note,
+        "option_tokens": option_tokens,
+        "option_data_present": option_data_present,
+        "required_options_matched": intersect_options(option_tokens, REQUIRED_OPTION_ALIASES),
+        "highlight_options_matched": intersect_options(option_tokens, HIGHLIGHT_OPTION_ALIASES),
+        "raw_labels": extract_raw_labels(title + " " + option_text) + flatten_kia_keywords(item),
+        "raw_text_excerpt": clean_text(json.dumps({"item": item, "insurance": insurance_json}, ensure_ascii=False))[:500],
+        "collected_at": now_iso(),
+        "sale_status": "판매중",
+    }
+
+
 def build_failed_listing(source: str, detail_url: str, reason: str) -> dict:
     listing_id = detail_url.rstrip('/').split('/')[-1]
     return {
@@ -424,6 +613,10 @@ def extract_model(title: str, brand: str | None) -> str | None:
         for keyword in ['쏘렌토', '스포티지', '셀토스', '모하비', '니로', 'EV9', '레이']:
             if keyword in title:
                 return keyword
+    if brand == '제네시스':
+        for keyword in ['GV60', 'GV70', 'GV80']:
+            if keyword.upper() in title.upper():
+                return keyword
     if brand == 'BMW':
         for keyword in ['X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7', 'XM', 'iX']:
             if keyword.upper() in title.upper():
@@ -435,6 +628,14 @@ def extract_model(title: str, brand: str | None) -> str | None:
     if brand == '포르쉐':
         for keyword in ['카이엔', '마칸']:
             if keyword in title:
+                return keyword
+    if brand == '볼보':
+        for keyword in ['XC40', 'XC60', 'XC90', 'EX30', 'EX40', 'EX90']:
+            if keyword.upper() in title.upper():
+                return keyword
+    if brand == '테슬라':
+        for keyword in ['Model Y', 'Model X', '모델Y', '모델X']:
+            if keyword.upper() in title.upper():
                 return keyword
     return clean_text(title.split()[0]) if title.split() else None
 
@@ -473,7 +674,7 @@ def infer_warranty(text: str, source: str) -> tuple[bool, str | None]:
 
 
 def infer_region(text: str) -> str | None:
-    for region in ['서울', '경기', '수원', '인천', '부산', '대구', '광주', '대전', '울산', '청주']:
+    for region in ['서울', '경기', '수원', '인천', '부산', '대구', '광주', '대전', '울산', '청주', '양산']:
         if region in text:
             return region
     return None
@@ -592,3 +793,106 @@ def infer_kcar_flood_note(carhistory: dict) -> str | None:
     if flood_count == 0:
         return '침수 없음'
     return '침수 이력 있음'
+
+
+def extract_hyundai_cards(html: str) -> list[str]:
+    parts = re.split(r'<li\s+class="type02">', html)
+    cards = []
+    for part in parts[1:]:
+        card = '<li class="type02">' + part
+        if extract_hyundai_goods_no(card):
+            cards.append(card)
+    return cards
+
+
+def extract_hyundai_goods_no(card_html: str) -> str:
+    m = re.search(r"goodsDeatil\(&#39;([^&]+)&#39;\)", card_html)
+    if m:
+        return clean_text(m.group(1))
+    m = re.search(r"goodsNo=([A-Za-z0-9]+)", card_html)
+    return clean_text(m.group(1)) if m else ""
+
+
+def extract_hyundai_card_title(card_html: str) -> str:
+    m = re.search(r'<div class="name">(.*?)</div>', card_html, flags=re.S)
+    if m:
+        return clean_text(unescape(html_to_text(m.group(1))))
+    m = re.search(r'alt="([^"]+)"', card_html)
+    return clean_text(unescape(m.group(1))) if m else "제목 미확인"
+
+
+def extract_hyundai_drive_spans(card_html: str) -> list[str]:
+    m = re.search(r'<div class="drive">(.*?)</div>', card_html, flags=re.S)
+    if not m:
+        return []
+    return [clean_text(unescape(html_to_text(span))) for span in re.findall(r'<span>(.*?)</span>', m.group(1), flags=re.S)]
+
+
+def extract_hyundai_card_price(card_html: str) -> str | None:
+    m = re.search(r'<span class="txt pay">\s*<em>(.*?)</em>\s*<i>만원</i>', card_html, flags=re.S)
+    if not m:
+        return None
+    return f"{clean_text(unescape(m.group(1)))}만원"
+
+
+def expand_short_korean_year(value: str) -> str:
+    m = re.search(r'(\d{2})년\s*(\d{1,2})월', value)
+    if not m:
+        return value
+    year = int(m.group(1))
+    prefix = 2000 if year < 80 else 1900
+    return f"{prefix + year}.{int(m.group(2)):02d}"
+
+
+def infer_hyundai_brand(title: str) -> str | None:
+    if any(keyword in title.upper() for keyword in ["G70", "G80", "G90", "GV60", "GV70", "GV80", "제네시스"]):
+        return "제네시스"
+    if extract_model(title, "현대"):
+        return "현대"
+    return normalize_brand(title)
+
+
+def flatten_strings(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        strings: list[str] = []
+        for child in value.values():
+            strings.extend(flatten_strings(child))
+        return strings
+    if isinstance(value, list):
+        strings: list[str] = []
+        for child in value:
+            strings.extend(flatten_strings(child))
+        return strings
+    return [str(value)]
+
+
+def flatten_kia_keywords(item: dict) -> list[str]:
+    keywords = []
+    for row in item.get("customKeywords") or []:
+        keyword = clean_text(row.get("keyword") if isinstance(row, dict) else str(row))
+        if keyword:
+            keywords.append(keyword)
+    return keywords
+
+
+def infer_kia_accident_note(insurance_json: dict) -> str | None:
+    own = clean_text(((insurance_json.get("myCarDamage") or {}).get("accident") or ""))
+    opponent = clean_text(((insurance_json.get("opponentCarDamage") or {}).get("accident") or ""))
+    if own.startswith("없음") and opponent.startswith("없음"):
+        return "무사고"
+    if own or opponent:
+        return "보험이력 확인 필요"
+    return None
+
+
+def infer_kia_flood_note(insurance_json: dict) -> str | None:
+    flood = clean_text(((insurance_json.get("specialAccidentHistory") or {}).get("floodInsuranceAccident") or ""))
+    if flood == "없음":
+        return "침수 없음"
+    if flood:
+        return "침수 관련 표기 확인 필요"
+    return None

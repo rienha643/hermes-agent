@@ -18,6 +18,7 @@ def _base_listing(**overrides):
         "month": 1,
         "mileage_km": 50000,
         "fuel": "가솔린",
+        "drivetrain": "AWD",
         "price_krw": 25000000,
         "listing_id": "1",
         "title": "현대 팰리세이드",
@@ -41,17 +42,27 @@ def test_apply_hard_filters_accepts_new_supported_brands():
         [
             _base_listing(listing_id="vw", brand="폭스바겐", title="폭스바겐 티구안", body_type="SUV"),
             _base_listing(listing_id="lexus", brand="렉서스", title="렉서스 RX", body_type="SUV"),
+            _base_listing(listing_id="volvo", brand="볼보", title="볼보 XC60", body_type="SUV"),
+            _base_listing(listing_id="genesis", brand="제네시스", title="제네시스 GV80", body_type="SUV"),
+            _base_listing(listing_id="tesla", brand="테슬라", title="테슬라 Model Y", body_type="SUV", fuel="전기"),
         ]
     )
-    assert [item["listing_id"] for item in kept] == ["vw", "lexus"]
+    assert [item["listing_id"] for item in kept] == ["vw", "lexus", "volvo", "genesis", "tesla"]
     assert excluded == []
 
 
-def test_apply_hard_filters_excludes_sedan_lpg_and_high_mileage():
+def test_apply_hard_filters_excludes_domestic_2wd():
+    kept, excluded = apply_hard_filters([_base_listing(drivetrain="FWD")])
+    assert kept == []
+    assert excluded[0]["reason"] == "drivetrain_domestic"
+
+
+def test_apply_hard_filters_excludes_sedan_lpg_diesel_and_high_mileage():
     kept, excluded = apply_hard_filters(
         [
             _base_listing(listing_id="sedan", body_type="세단"),
             _base_listing(listing_id="lpg", fuel="LPG"),
+            _base_listing(listing_id="diesel", fuel="디젤"),
             _base_listing(listing_id="mileage", mileage_km=150000),
         ]
     )
@@ -59,7 +70,24 @@ def test_apply_hard_filters_excludes_sedan_lpg_and_high_mileage():
     reasons = {entry["listing"]["listing_id"]: entry["reason"] for entry in excluded}
     assert reasons["sedan"] == "body_type"
     assert reasons["lpg"] == "fuel"
+    assert reasons["diesel"] == "fuel"
     assert reasons["mileage"] == "mileage"
+
+
+def test_apply_hard_filters_excludes_light_and_subcompact_models():
+    kept, excluded = apply_hard_filters(
+        [
+            _base_listing(listing_id="casper", title="현대 캐스퍼", drivetrain="AWD"),
+            _base_listing(listing_id="kona", title="현대 코나 AWD", drivetrain="AWD"),
+            _base_listing(listing_id="seltos", brand="기아", title="기아 셀토스 4WD", drivetrain="4WD"),
+        ]
+    )
+    assert kept == []
+    assert {entry["listing"]["listing_id"]: entry["reason"] for entry in excluded} == {
+        "casper": "size_class",
+        "kona": "size_class",
+        "seltos": "size_class",
+    }
 
 
 def test_apply_hard_filters_excludes_missing_required_fields():

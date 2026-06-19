@@ -6,6 +6,25 @@ from typing import Iterable
 from used_car_normalize import ALLOWED_BRANDS, ALLOWED_FUELS, ALLOWED_SOURCES
 
 REQUIRED_FIELDS = ["source", "brand", "body_type", "year", "mileage_km", "fuel", "price_krw", "listing_id", "title"]
+DOMESTIC_BRANDS = {"현대", "기아"}
+DOMESTIC_ALLOWED_DRIVETRAINS = {"AWD", "4WD"}
+EXCLUDED_BODY_KEYWORDS = {"카니발", "스타리아"}
+EXCLUDED_SMALL_MODEL_KEYWORDS = {
+    "레이",
+    "캐스퍼",
+    "코나",
+    "베뉴",
+    "셀토스",
+    "니로",
+    "티볼리",
+    "트랙스",
+    "트레일블레이저",
+    "XM3",
+    "티록",
+    "T-ROC",
+    "UX",
+    "EX30",
+}
 MISSING_FIELD_REASONS = {
     "source": "missing_source",
     "brand": "missing_brand",
@@ -39,6 +58,12 @@ def _first_exclusion_reason(listing: dict) -> str | None:
         return "source"
     if listing.get("brand") not in ALLOWED_BRANDS:
         return "brand"
+    title = str(listing.get("title") or "")
+    normalized_title = title.upper()
+    if any(keyword in title for keyword in EXCLUDED_BODY_KEYWORDS):
+        return "body_type"
+    if any(keyword.upper() in normalized_title for keyword in EXCLUDED_SMALL_MODEL_KEYWORDS):
+        return "size_class"
     if listing.get("body_type") != "SUV":
         return "body_type"
     year = listing.get("year")
@@ -49,6 +74,8 @@ def _first_exclusion_reason(listing: dict) -> str | None:
         return "mileage"
     if listing.get("fuel") not in ALLOWED_FUELS:
         return "fuel"
+    if listing.get("brand") in DOMESTIC_BRANDS and listing.get("drivetrain") not in DOMESTIC_ALLOWED_DRIVETRAINS:
+        return "drivetrain_domestic"
     sale_status = listing.get("sale_status")
     if sale_status and sale_status not in {"판매중", "상담가능", "노출중"}:
         return "sale_status"
