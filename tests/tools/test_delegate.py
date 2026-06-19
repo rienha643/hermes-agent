@@ -46,6 +46,7 @@ from tools.delegate_tool import (
     _resolve_specialist_worker_label,
     _strip_blocked_tools,
     _strip_delegate_routing_context_prefixes,
+    _strip_profile_scoped_worker_directive,
     _effective_delegate_max_iterations,
     _resolve_child_credential_pool,
     _resolve_delegation_credentials,
@@ -266,6 +267,16 @@ class TestDelegateRequirements(unittest.TestCase):
             _resolve_specialist_profile(None, contaminated, None),
             None,
         )
+
+    def test_profile_scoped_worker_directive_is_stripped_before_child_execution(self):
+        self.assertEqual(
+            _strip_profile_scoped_worker_directive(
+                "[WORKER: Angelica]\nrestored subculture portrait E2E"
+            ),
+            "restored subculture portrait E2E",
+        )
+        body_example = "작업 설명입니다.\n\n본문 예시: [WORKER: Angelica]"
+        self.assertEqual(_strip_profile_scoped_worker_directive(body_example), body_example)
 
 
 class TestChildSystemPrompt(unittest.TestCase):
@@ -573,6 +584,32 @@ class TestDelegateTask(unittest.TestCase):
         self.assertEqual(result["results"][0]["status"], "completed")
         self.assertEqual(result["results"][0]["summary"], "Done!")
         mock_run.assert_called_once()
+
+    @patch("tools.delegate_tool._run_single_child")
+    @patch("tools.delegate_tool._build_child_agent")
+    def test_profile_scoped_delegate_strips_leading_worker_directive(self, mock_build_child, mock_run):
+        child = MagicMock()
+        child._delegate_role = "leaf"
+        child.session_id = "child-session"
+        mock_build_child.return_value = child
+        mock_run.return_value = {
+            "task_index": 0,
+            "status": "completed",
+            "summary": "Done!",
+            "api_calls": 1,
+            "duration_seconds": 0.1,
+        }
+        parent = _make_mock_parent()
+        result = json.loads(
+            delegate_task(
+                goal="[WORKER: Angelica]\nrestored subculture portrait E2E",
+                profile="comfy",
+                parent_agent=parent,
+            )
+        )
+        self.assertEqual(result["results"][0]["status"], "completed")
+        mock_run.assert_called_once()
+        self.assertEqual(mock_run.call_args.args[1], "restored subculture portrait E2E")
 
     @patch("tools.delegate_tool._run_single_child")
     def test_batch_mode(self, mock_run):

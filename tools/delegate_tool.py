@@ -1112,6 +1112,10 @@ _DELEGATE_THREAD_CONTEXT_BLOCK_RE = re.compile(
     r"\[End of thread context\]\s*",
     re.IGNORECASE | re.DOTALL,
 )
+_DELEGATE_LEADING_WORKER_DIRECTIVE_RE = re.compile(
+    r"^\s*\[WORKER:\s*[^\]\n]+\]\s*(?:\n+|$)",
+    re.IGNORECASE,
+)
 
 
 def _strip_delegate_routing_context_prefixes(text: Optional[str]) -> Optional[str]:
@@ -1128,6 +1132,20 @@ def _strip_delegate_routing_context_prefixes(text: Optional[str]) -> Optional[st
             break
         cleaned = updated
     return cleaned
+
+
+def _strip_profile_scoped_worker_directive(text: Optional[str]) -> Optional[str]:
+    """Remove a leading worker directive once delegate_task already has profile.
+
+    A profile-scoped delegate_task call is already the routing boundary.  If the
+    child receives a leading ``[WORKER: ...]`` directive as its user message, the
+    gateway explicit-worker preflight treats the child as a new router and tries
+    to delegate again, tripping max_spawn_depth for Nebris-style relay tasks.
+    Body examples remain untouched because only a leading directive is stripped.
+    """
+    if text is None:
+        return None
+    return _DELEGATE_LEADING_WORKER_DIRECTIVE_RE.sub("", str(text), count=1).lstrip()
 
 
 def _normalize_specialist_profile(raw_profile: Optional[str]) -> Optional[str]:
@@ -3562,6 +3580,8 @@ def delegate_task(
                 "Specialist worker label detected, but no matching profile "
                 "could be resolved before child execution."
             )
+        if task["profile"]:
+            task["goal"] = _strip_profile_scoped_worker_directive(task.get("goal"))
         task_toolsets = task.get("toolsets") or toolsets
         task["_single_output_image"] = _is_single_output_image_task(
             task.get("goal"),
