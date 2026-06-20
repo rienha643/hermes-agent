@@ -52,6 +52,9 @@ from gateway.platforms.base import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_COMMANDER_DISPATCH_USER_IDS = {"U0BBJCF3RS7"}
+DEFAULT_COMMANDER_DISPATCH_BOT_IDS = {"B0BBQP11GSW"}
+
 # ContextVar carrying the user_id of the slash-command invoker.
 # Set in _handle_slash_command, read in send() to match the correct
 # stashed response_url when multiple users issue commands on the same
@@ -370,6 +373,14 @@ def _is_slack_not_in_channel_error(exc: Exception) -> bool:
     response = getattr(exc, "response", None)
     error = getattr(response, "data", {}).get("error") if response is not None else None
     return str(error).lower() == "not_in_channel"
+
+
+def _csv_ids(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, (list, tuple, set)):
+        return {str(part).strip() for part in value if str(part).strip()}
+    return {part.strip() for part in str(value).split(",") if part.strip()}
 
 
 class SlackAdapter(BasePlatformAdapter):
@@ -1914,6 +1925,7 @@ class SlackAdapter(BasePlatformAdapter):
         event_ts = event.get("ts", "")
         if event_ts and self._dedup.is_duplicate(event_ts):
             return
+        is_commander_dispatch = self._is_commander_dispatch_event(event)
 
         # Bot message filtering (SLACK_ALLOW_BOTS / config allow_bots):
         #   "none"     — ignore all bot messages (default, backward-compatible)
@@ -1924,7 +1936,9 @@ class SlackAdapter(BasePlatformAdapter):
             if not allow_bots:
                 allow_bots = os.getenv("SLACK_ALLOW_BOTS", "none")
             allow_bots = str(allow_bots).lower().strip()
-            if allow_bots == "none":
+            if is_commander_dispatch:
+                pass
+            elif allow_bots == "none":
                 return
             elif allow_bots == "mentions":
                 text_check = event.get("text", "")
@@ -2335,6 +2349,7 @@ class SlackAdapter(BasePlatformAdapter):
             user_id=user_id,
             user_name=user_name,
             thread_id=thread_ts,
+            is_bot=bool(event.get("bot_id") or event.get("subtype") == "bot_message"),
         )
 
         # Per-channel ephemeral prompt
@@ -2374,6 +2389,7 @@ class SlackAdapter(BasePlatformAdapter):
             channel_prompt=_channel_prompt,
             reply_to_text=reply_to_text,
             auto_skill=_auto_skill,
+            internal=is_commander_dispatch,
         )
 
         # Only react when bot is directly addressed (DM or @mention).
@@ -3116,6 +3132,40 @@ class SlackAdapter(BasePlatformAdapter):
                     raise
 
     # ── Channel mention gating ─────────────────────────────────────────────
+
+    def _commander_dispatch_user_ids(self) -> set[str]:
+        configured = _csv_ids(self.config.extra.get("commander_dispatch_user_ids"))
+        env_ids = _csv_ids(os.getenv("SLACK_COMMANDER_DISPATCH_USER_IDS", ""))
+        return configured or env_ids or set(DEFAULT_COMMANDER_DISPATCH_USER_IDS)
+
+    def _commander_dispatch_bot_ids(self) -> set[str]:
+        configured = _csv_ids(self.config.extra.get("commander_dispatch_bot_ids"))
+        env_ids = _csv_ids(os.getenv("SLACK_COMMANDER_DISPATCH_BOT_IDS", ""))
+        return configured or env_ids or set(DEFAULT_COMMANDER_DISPATCH_BOT_IDS)
+
+    def _is_commander_dispatch_event(self, event: dict) -> bool:
+        """Accept only validated Zenith/Commander worker dispatch envelopes."""
+        text = str(event.get("text") or "")
+        if "[COMMANDER_DISPATCH]" not in text or "[/COMMANDER_DISPATCH]" not in text:
+            return False
+
+        commander_users = self._commander_dispatch_user_ids()
+        commander_bots = self._commander_dispatch_bot_ids()
+        event_user = str(event.get("user") or "")
+        event_bot = str(event.get("bot_id") or "")
+        if commander_users and event_user not in commander_users:
+            return False
+        if commander_bots and event_bot and event_bot not in commander_bots:
+            return False
+
+        if self._bot_user_id and f"<@{self._bot_user_id}>" not in text:
+            return False
+        target_match = re.search(r"^target_slack_user_id:\s*(\S+)\s*$", text, flags=re.MULTILINE)
+        if target_match and self._bot_user_id and target_match.group(1) != self._bot_user_id:
+            return False
+        queue_match = re.search(r"^queue_id:\s*([A-Za-z0-9_.:-]+)\s*$", text, flags=re.MULTILINE)
+        dispatch_match = re.search(r"^dispatch_event_id:\s*([A-Za-z0-9_.:-]+)\s*$", text, flags=re.MULTILINE)
+        return bool(queue_match and dispatch_match)
 
     def _slack_require_mention(self) -> bool:
         """Return whether channel messages require an explicit bot mention.
