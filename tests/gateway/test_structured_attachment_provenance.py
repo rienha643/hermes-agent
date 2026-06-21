@@ -106,6 +106,54 @@ def test_files_field_requires_explicit_delivery_intent_for_artifact_tool(tmp_pat
     assert collected == [str(final_doc)]
 
 
+def test_image_generate_success_collects_image_without_extra_delivery_flag(tmp_path):
+    image_path = tmp_path / "generated.png"
+    image_path.write_bytes(b"png")
+    agent_result = {
+        "messages": [
+            {"role": "assistant", "content": "starting"},
+            _tool_message(
+                "image_generate",
+                {
+                    "success": True,
+                    "image": str(image_path),
+                    "local_path": str(image_path),
+                },
+            ),
+            _tool_message("terminal", {"output": f"later diagnostic mentions {image_path}"}),
+        ]
+    }
+
+    collected, debug = _collect_turn_scoped_structured_attachments(agent_result, history_len=0)
+
+    assert collected == [str(image_path)]
+    assert debug["turn_tool_messages_count"] == 2
+
+
+def test_image_generate_collects_normalized_artifacts_files(tmp_path):
+    image_path = tmp_path / "normalized.png"
+    image_path.write_bytes(b"png")
+    agent_result = {
+        "messages": [
+            _tool_message(
+                "image_generate",
+                {
+                    "success": True,
+                    "normalized_artifacts": {
+                        "count": 1,
+                        "files": [str(image_path)],
+                    },
+                },
+            ),
+        ]
+    }
+
+    collected, debug = _collect_turn_scoped_structured_attachments(agent_result, history_len=0)
+
+    assert collected == [str(image_path)]
+    assert debug["collected_count"] == 1
+
+
 @pytest.mark.asyncio
 async def test_excessive_structured_attachments_do_not_publish_documents(monkeypatch, tmp_path):
     structured_paths = []

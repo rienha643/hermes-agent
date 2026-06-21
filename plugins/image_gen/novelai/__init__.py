@@ -86,6 +86,23 @@ bad proportions,
 JPEG artifacts,
 chromatic aberration,
 scan artifacts"""
+NAI_STYLE_PRESET_ENV = "HERMES_NAI_STYLE_PRESET"
+NAI_STYLE_PRESETS: Dict[str, Dict[str, str]] = {
+    "game_default_subculture": {
+        "positive": """polished cel shading,
+cinematic lighting,
+detailed hair,
+appealing character design,
+fantasy game character art,
+clean anime shading,
+soft ambient background detail""",
+        "negative": """photorealistic,
+realistic skin texture,
+flat lighting,
+low-detail background,
+uncanny face""",
+    }
+}
 
 _SIDECAR_FILES = (
     "request.json",
@@ -178,12 +195,30 @@ def _merge_prompt_baseline(baseline: str, prompt: str | None, *, baseline_first:
     return ",\n".join(merged)
 
 
+def _configured_style_preset() -> tuple[str | None, Dict[str, str] | None]:
+    name = os.environ.get(NAI_STYLE_PRESET_ENV, "").strip()
+    if not name:
+        return None, None
+    preset = NAI_STYLE_PRESETS.get(name)
+    if preset is None:
+        return name, None
+    return name, preset
+
+
 def _merge_positive_prompt(prompt: str) -> str:
-    return _merge_prompt_baseline(NAI_DEFAULT_POSITIVE_PROMPT_PREFIX, prompt, baseline_first=True)
+    _, preset = _configured_style_preset()
+    baseline = NAI_DEFAULT_POSITIVE_PROMPT_PREFIX
+    if preset:
+        baseline = _merge_prompt_baseline(baseline, preset.get("positive"), baseline_first=True)
+    return _merge_prompt_baseline(baseline, prompt, baseline_first=True)
 
 
 def _merge_negative_prompt(negative_prompt: str | None) -> str:
-    return _merge_prompt_baseline(NAI_DEFAULT_NEGATIVE_PROMPT, negative_prompt, baseline_first=False)
+    _, preset = _configured_style_preset()
+    baseline = NAI_DEFAULT_NEGATIVE_PROMPT
+    if preset:
+        baseline = _merge_prompt_baseline(baseline, preset.get("negative"), baseline_first=True)
+    return _merge_prompt_baseline(baseline, negative_prompt, baseline_first=False)
 
 
 def build_novelai_request_payload(
@@ -218,6 +253,7 @@ def build_novelai_request_payload(
     require_safe_1024_range(width, height, high_res_approved=high_res_approved, reason=approval_reason)
     merged_prompt = _merge_positive_prompt(prompt)
     merged_negative_prompt = _merge_negative_prompt(negative_prompt)
+    style_preset_name, style_preset = _configured_style_preset()
 
     parameters: Dict[str, Any] = {
         "params_version": 3,
@@ -281,6 +317,7 @@ def build_novelai_request_payload(
             "max_pixels": SAFE_1024_RANGE_MAX_PIXELS,
             "high_res_policy": HIGH_RES_REQUIRES_APPROVAL,
             "high_res_approved": high_res_approved,
+            "style_preset": style_preset_name if style_preset else None,
         },
     }
 
@@ -516,6 +553,7 @@ def _write_live_generation_source_bundle(
                 "run_id": run_id,
                 "width": payload.get("parameters", {}).get("width"),
                 "height": payload.get("parameters", {}).get("height"),
+                "style_preset": payload.get("policy", {}).get("style_preset"),
                 "raw_response_saved": save_raw_response,
             },
             ensure_ascii=False,

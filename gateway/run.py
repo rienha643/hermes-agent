@@ -1541,6 +1541,12 @@ _SEIR_GENERATION_PROGRESS_CLAIM_RE = re.compile(
     r"generating\s+(?:image|images)|creating\s+(?:image|images))",
     re.IGNORECASE,
 )
+_SEIR_GENERATION_SUCCESS_CLAIM_RE = re.compile(
+    r"(생성\s*(?:경로|파일|완료|보고)|첨부\s*성공|Slack\s*(?:첨부|Upload)\s*:\s*(?:PASS|성공|완료|확인)|"
+    r"!\[[^\]]*\]\(\s*file://|file:///.+\.(?:png|jpe?g|webp)|"
+    r"(?:generated|created)\s+(?:image|file)|attachment\s+(?:success|complete|uploaded))",
+    re.IGNORECASE,
+)
 _SEIR_BLOCKER_RE = re.compile(
     r"(생성하지\s*않|생성할\s*수\s*없|실행하지\s*않|도구\s*호출.*없|"
     r"blocker|blocked|unavailable|approval_required|requires_approval|"
@@ -1575,7 +1581,10 @@ def _guard_seir_unverified_generation_claim(
         return body, False
     if _SEIR_BLOCKER_RE.search(body):
         return body, False
-    if not _SEIR_GENERATION_PROGRESS_CLAIM_RE.search(body):
+    if not (
+        _SEIR_GENERATION_PROGRESS_CLAIM_RE.search(body)
+        or _SEIR_GENERATION_SUCCESS_CLAIM_RE.search(body)
+    ):
         return body, False
     return _render_seir_no_artifact_generation_guard(), True
 
@@ -3114,6 +3123,12 @@ _STRUCTURED_ATTACHMENT_ARTIFACT_TOOLS = frozenset(
         "artifact_publish",
     }
 )
+_STRUCTURED_ATTACHMENT_IMAGE_TOOLS = frozenset(
+    {
+        "image_generate",
+        "image_generation",
+    }
+)
 
 
 def _normalize_structured_attachment_tool_name(value: Any) -> str:
@@ -3205,18 +3220,26 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
         seen_paths.add(expanded)
         candidates.append(expanded)
 
-    def _collect_value(value: Any) -> None:
+    def _collect_value(value: Any, *, tool_name: str = "") -> None:
         value = _coerce_structured_attachment_payload(value)
         if isinstance(value, str):
             _maybe_add_path(value)
         elif isinstance(value, dict):
-            _collect_payload(value, tool_name="")
+            _collect_payload(value, tool_name=tool_name)
         elif isinstance(value, (list, tuple)):
             for item in value:
                 if isinstance(item, (list, tuple)) and item:
-                    _collect_value(item[0])
+                    _collect_value(item[0], tool_name=tool_name)
                 else:
-                    _collect_value(item)
+                    _collect_value(item, tool_name=tool_name)
+
+    def _collect_normalized_artifacts(value: Any) -> None:
+        value = _coerce_structured_attachment_payload(value)
+        if not isinstance(value, dict):
+            return
+        for key in ("files", "media_files", "image", "local_path", "file_path", "output_path"):
+            if key in value:
+                _collect_value(value.get(key), tool_name="image_generate")
 
     def _collect_payload(payload: Any, *, tool_name: str) -> None:
         payload = _coerce_structured_attachment_payload(payload)
@@ -3240,6 +3263,11 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
             or "media_files" in payload
             or "document_files" in payload
         )
+        if (
+            normalized_tool in _STRUCTURED_ATTACHMENT_IMAGE_TOOLS
+            and payload.get("success") is True
+        ):
+            explicit_delivery_requested = True
 
         if payload.get("user_requested_delivery") is False:
             return
@@ -3250,15 +3278,21 @@ def _collect_structured_attachment_paths(agent_result: Any) -> List[str]:
         for key, value in payload.items():
             key_text = str(key or "")
             if key_text in _STRUCTURED_ATTACHMENT_EXPLICIT_FIELDS:
-                _collect_value(value)
+                _collect_value(value, tool_name=normalized_tool)
             elif key_text in _STRUCTURED_ATTACHMENT_LEGACY_ARTIFACT_FIELDS and explicit_delivery_requested:
-                _collect_value(value)
+                _collect_value(value, tool_name=normalized_tool)
             elif (
                 key_text in _STRUCTURED_ATTACHMENT_ARTIFACT_TOOL_FIELDS
                 and tool_allows_generic_files
                 and explicit_delivery_requested
             ):
-                _collect_value(value)
+                _collect_value(value, tool_name=normalized_tool)
+            elif (
+                key_text == "normalized_artifacts"
+                and normalized_tool in _STRUCTURED_ATTACHMENT_IMAGE_TOOLS
+                and explicit_delivery_requested
+            ):
+                _collect_normalized_artifacts(value)
             elif isinstance(value, dict):
                 _collect_payload(value, tool_name=normalized_tool)
             elif isinstance(value, (list, tuple)):

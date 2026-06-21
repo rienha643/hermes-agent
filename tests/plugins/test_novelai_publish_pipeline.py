@@ -100,6 +100,42 @@ def test_novelai_custom_negative_prompt_preserves_policy_baseline() -> None:
     assert params["v4_negative_prompt"]["caption"]["base_caption"] == params["negative_prompt"]
 
 
+def test_novelai_style_preset_env_merges_sfw_subculture_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    monkeypatch.setenv(novelai.NAI_STYLE_PRESET_ENV, "game_default_subculture")
+
+    payload = novelai.build_novelai_request_payload(
+        prompt="safe prompt, cinematic lighting",
+        negative_prompt="flat lighting, bad hands",
+    )
+    params = payload["parameters"]
+
+    assert payload["policy"]["style_preset"] == "game_default_subculture"
+    assert "polished cel shading" in payload["input"]
+    assert "fantasy game character art" in payload["input"]
+    assert payload["input"].count("cinematic lighting") == 1
+    assert payload["input"].endswith("safe prompt")
+    assert params["negative_prompt"].startswith("flat lighting")
+    assert "photorealistic" in params["negative_prompt"]
+    assert "realistic skin texture" in params["negative_prompt"]
+    assert params["negative_prompt"].count("flat lighting") == 1
+    assert params["v4_prompt"]["caption"]["base_caption"] == payload["input"]
+    assert params["v4_negative_prompt"]["caption"]["base_caption"] == params["negative_prompt"]
+
+
+def test_novelai_unknown_style_preset_env_does_not_change_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    monkeypatch.setenv(novelai.NAI_STYLE_PRESET_ENV, "missing-preset")
+
+    payload = novelai.build_novelai_request_payload(prompt="safe prompt")
+
+    assert payload["policy"]["style_preset"] is None
+    assert "polished cel shading" not in payload["input"]
+    assert "photorealistic" not in payload["parameters"]["negative_prompt"]
+
+
 @pytest.mark.parametrize("width,height", [(1024, 1024), (832, 1216), (768, 1344)])
 def test_novelai_safe_1024_range_payloads_are_allowed(width: int, height: int) -> None:
     import plugins.image_gen.novelai as novelai

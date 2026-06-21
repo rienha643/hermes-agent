@@ -353,6 +353,18 @@ class TestSlackMultiImage:
         client = adapter._get_client("C12345")
         client.files_upload_v2.assert_not_called()
 
+    def test_upload_ok_false_raises(self, adapter, tmp_path):
+        p = tmp_path / "img.png"
+        p.write_bytes(b"\x89PNG" + b"\x00" * 20)
+
+        with (
+            patch("gateway.platforms.slack._slack_media_block_reason", return_value=None),
+            patch("gateway.platforms.slack._files_upload_v2_with_timeout", new_callable=AsyncMock) as upload,
+        ):
+            upload.return_value = {"ok": False, "error": "upload_failed"}
+            with pytest.raises(RuntimeError, match="upload_failed"):
+                _run(adapter.send_multiple_images("C12345", [(f"file://{p}", "")]))
+
     def test_empty_noop(self, adapter):
         _run(adapter.send_multiple_images("C12345", []))
         client = adapter._get_client("C12345")

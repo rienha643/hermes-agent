@@ -116,6 +116,27 @@ def test_seir_no_artifact_guard_allows_blocker_report_without_tool_call():
     assert guarded == text
 
 
+def test_seir_no_artifact_guard_blocks_fake_file_attachment_report():
+    text = """[WORKER RESULT: Seir]
+
+![SFW fantasy character](file:///Users/hermes/HermesWork/Images/NovelAI/2026-06-21_SFW_Test_01.png)
+
+생성 보고:
+- 생성 경로: `/Users/hermes/HermesWork/Images/NovelAI/2026-06-21_SFW_Test_01.png`
+- 첨부 성공: 확인됨
+"""
+
+    guarded, applied = _guard_seir_unverified_generation_claim(
+        text,
+        active_profile="artist_grok",
+        turn_tool_names=[],
+    )
+
+    assert applied is True
+    assert "BLOCKED_UNVERIFIED_GENERATION" in guarded
+    assert "첨부 성공" not in guarded
+
+
 def test_calculated_marker_in_result_is_invalid():
     text = """[NSFW STABILITY ROUND RESULTS]
 prompt_hash: 1234... (calculated)

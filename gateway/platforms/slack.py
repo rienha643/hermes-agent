@@ -404,6 +404,36 @@ def _is_slack_not_in_channel_error(exc: Exception) -> bool:
     return str(error).lower() == "not_in_channel"
 
 
+def _slack_response_value(response: Any, key: str, default: Any = None) -> Any:
+    if isinstance(response, dict):
+        return response.get(key, default)
+    getter = getattr(response, "get", None)
+    if callable(getter):
+        try:
+            return getter(key, default)
+        except TypeError:
+            try:
+                value = getter(key)
+            except Exception:
+                return default
+            return default if value is None else value
+        except Exception:
+            return default
+    data = getattr(response, "data", None)
+    if isinstance(data, dict):
+        return data.get(key, default)
+    return default
+
+
+def _slack_response_ok(response: Any) -> bool:
+    value = _slack_response_value(response, "ok", True)
+    return bool(value)
+
+
+def _slack_response_error(response: Any) -> str:
+    return str(_slack_response_value(response, "error", "") or "")
+
+
 def _csv_ids(value: Any) -> set[str]:
     if value is None:
         return set()
@@ -1159,7 +1189,11 @@ class SlackAdapter(BasePlatformAdapter):
                     initial_comment=caption or "",
                     thread_ts=thread_ts,
                 )
+                if not _slack_response_ok(result):
+                    error = _slack_response_error(result) or "unknown_error"
+                    return SendResult(success=False, error=f"Slack upload failed: {error}", raw_response=result)
                 self._record_uploaded_file_thread(chat_id, thread_ts)
+                logger.info("[Slack] Uploaded file via files_upload_v2: %s", os.path.basename(file_path))
                 return SendResult(success=True, raw_response=result)
             except Exception as exc:
                 last_exc = exc
@@ -1281,6 +1315,9 @@ class SlackAdapter(BasePlatformAdapter):
                     initial_comment=initial_comment,
                     thread_ts=thread_ts,
                 )
+                if not _slack_response_ok(result):
+                    error = _slack_response_error(result) or "unknown_error"
+                    raise RuntimeError(f"Slack upload failed: {error}")
                 self._record_uploaded_file_thread(chat_id, thread_ts)
                 message_id = None
                 if isinstance(result, dict):
@@ -1297,6 +1334,13 @@ class SlackAdapter(BasePlatformAdapter):
                                     if isinstance(entries, list) and entries and isinstance(entries[0], dict):
                                         message_id = str(entries[0].get("ts") or "") or None
                                         break
+                    logger.info(
+                        "[Slack] Uploaded %d image(s) via files_upload_v2 (chunk %d/%d, message_id=%s)",
+                        len(file_uploads),
+                        chunk_idx + 1,
+                        len(chunks),
+                        message_id or "",
+                    )
                 last_upload_result = SendResult(success=True, message_id=message_id, raw_response=result)
             except Exception as e:
                 if _is_slack_not_in_channel_error(e):
