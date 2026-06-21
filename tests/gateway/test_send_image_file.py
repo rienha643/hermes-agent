@@ -366,12 +366,13 @@ class TestSlackSendImageFile:
         async def _raise(**kwargs):
             raise _Exc("not_in_channel")
 
-        adapter._app.client.files_upload_v2 = AsyncMock(side_effect=_raise)
+        with patch("gateway.platforms.slack._files_upload_v2_with_timeout", new_callable=AsyncMock) as upload:
+            upload.side_effect = _raise
+            result = _run(adapter.send_image_file(chat_id="C12345", image_path=str(img), reply_to="1781023592.888399"))
 
-        result = _run(adapter.send_image_file(chat_id="C12345", image_path=str(img), reply_to="1781023592.888399"))
         assert not result.success
         assert "not_in_channel" in result.error
-        adapter._app.client.files_upload_v2.assert_awaited_once()
+        upload.assert_awaited_once()
 
     def test_returns_error_when_file_missing(self, adapter):
         result = _run(

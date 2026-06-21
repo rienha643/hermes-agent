@@ -365,6 +365,40 @@ class TestSlackMultiImage:
             with pytest.raises(RuntimeError, match="upload_failed"):
                 _run(adapter.send_multiple_images("C12345", [(f"file://{p}", "")]))
 
+    def test_upload_not_in_channel_returns_failure(self, adapter, tmp_path):
+        p = tmp_path / "img.png"
+        p.write_bytes(b"\x89PNG" + b"\x00" * 20)
+
+        with (
+            patch("gateway.platforms.slack._slack_media_block_reason", return_value=None),
+            patch("gateway.platforms.slack._files_upload_v2_with_timeout", new_callable=AsyncMock) as upload,
+        ):
+            upload.return_value = {"ok": False, "error": "not_in_channel"}
+            result = _run(adapter.send_multiple_images("C12345", [(f"file://{p}", "")]))
+
+        assert not result.success
+        assert "not_in_channel" in result.error
+
+    def test_upload_not_in_channel_exception_returns_failure(self, adapter, tmp_path):
+        p = tmp_path / "img.png"
+        p.write_bytes(b"\x89PNG" + b"\x00" * 20)
+
+        class _Resp:
+            data = {"error": "not_in_channel"}
+
+        class _Exc(Exception):
+            response = _Resp()
+
+        with (
+            patch("gateway.platforms.slack._slack_media_block_reason", return_value=None),
+            patch("gateway.platforms.slack._files_upload_v2_with_timeout", new_callable=AsyncMock) as upload,
+        ):
+            upload.side_effect = _Exc("not_in_channel")
+            result = _run(adapter.send_multiple_images("C12345", [(f"file://{p}", "")]))
+
+        assert not result.success
+        assert "not_in_channel" in result.error
+
     def test_empty_noop(self, adapter):
         _run(adapter.send_multiple_images("C12345", []))
         client = adapter._get_client("C12345")

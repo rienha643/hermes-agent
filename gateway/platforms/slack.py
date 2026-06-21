@@ -1332,6 +1332,8 @@ class SlackAdapter(BasePlatformAdapter):
                 )
                 if not _slack_response_ok(result):
                     error = _slack_response_error(result) or "unknown_error"
+                    if str(error).lower() == "not_in_channel":
+                        return SendResult(success=False, error="Slack upload failed: not_in_channel", raw_response=result)
                     raise RuntimeError(f"Slack upload failed: {error}")
                 self._record_uploaded_file_thread(chat_id, thread_ts)
                 message_id = None
@@ -1359,7 +1361,7 @@ class SlackAdapter(BasePlatformAdapter):
                 last_upload_result = SendResult(success=True, message_id=message_id, raw_response=result)
             except Exception as e:
                 if _is_slack_not_in_channel_error(e):
-                    raise RuntimeError("Slack upload failed: not_in_channel") from e
+                    return SendResult(success=False, error="Slack upload failed: not_in_channel")
                 raise
 
         return last_upload_result
@@ -1698,6 +1700,8 @@ class SlackAdapter(BasePlatformAdapter):
             return SendResult(success=True, raw_response=result)
 
         except Exception as e:  # pragma: no cover - defensive logging
+            if _is_slack_not_in_channel_error(e):
+                return SendResult(success=False, error="Slack upload failed: not_in_channel")
             logger.warning(
                 "[Slack] Failed to upload image from URL %s: %s",
                 safe_url_for_log(image_url),

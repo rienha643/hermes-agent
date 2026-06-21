@@ -2802,6 +2802,44 @@ class TestSendImageSSRFGuards:
         call_kwargs = adapter._app.client.chat_postMessage.call_args.kwargs
         assert call_kwargs.get("thread_ts") == "parent_ts_789"
 
+    @pytest.mark.asyncio
+    async def test_send_image_not_in_channel_returns_failure_without_fallback(self, adapter, caplog):
+        mock_response = MagicMock()
+        mock_response.content = b"\x89PNG" + b"\x00" * 20
+        mock_response.is_redirect = False
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        class _Resp:
+            data = {"error": "not_in_channel"}
+
+        class _Exc(Exception):
+            response = _Resp()
+
+        adapter._app.client.files_upload_v2 = AsyncMock(side_effect=_Exc("not_in_channel"))
+        adapter._app.client.chat_postMessage = AsyncMock(return_value={"ts": "reply_ts"})
+
+        with (
+            patch("tools.url_safety.is_safe_url", return_value=True),
+            patch("httpx.AsyncClient", return_value=mock_client),
+            caplog.at_level(logging.WARNING, logger="gateway.platforms.slack"),
+        ):
+            result = await adapter.send_image(
+                chat_id="C_STALE",
+                image_url="https://public.example/image.png",
+                caption="see this",
+            )
+
+        assert not result.success
+        assert "not_in_channel" in result.error
+        adapter._app.client.files_upload_v2.assert_awaited_once()
+        adapter._app.client.chat_postMessage.assert_not_awaited()
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
 
 # ---------------------------------------------------------------------------
 # TestProgressMessageThread
