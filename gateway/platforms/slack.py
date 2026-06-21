@@ -985,6 +985,9 @@ class SlackAdapter(BasePlatformAdapter):
             )
 
         except Exception as e:  # pragma: no cover - defensive logging
+            if _is_slack_not_in_channel_error(e):
+                logger.debug("[Slack] Send skipped: not_in_channel for chat_id=%s", chat_id)
+                return SendResult(success=False, error="Slack send failed: not_in_channel")
             logger.error("[Slack] Send error: %s", e, exc_info=True)
             return SendResult(success=False, error=str(e))
 

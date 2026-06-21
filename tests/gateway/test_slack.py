@@ -9,6 +9,7 @@ We mock the slack modules at import time to avoid collection errors.
 """
 
 import asyncio
+import logging
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch, call
@@ -2471,6 +2472,18 @@ class TestMessageSplitting:
         )
         await adapter.send("C123", "hello world")
         assert adapter._app.client.chat_postMessage.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_send_not_in_channel_returns_failure_without_error_log(self, adapter, caplog):
+        """Shutdown notifications to stale Slack targets should not emit noisy tracebacks."""
+        adapter._app.client.chat_postMessage = AsyncMock(side_effect=RuntimeError("not_in_channel"))
+
+        with caplog.at_level(logging.ERROR, logger="gateway.platforms.slack"):
+            result = await adapter.send("C_STALE", "gateway shutting down")
+
+        assert result.success is False
+        assert "not_in_channel" in result.error
+        assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
     @pytest.mark.asyncio
     async def test_send_preserves_blockquote_formatting(self, adapter):

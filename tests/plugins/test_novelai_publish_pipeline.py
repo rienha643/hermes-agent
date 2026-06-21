@@ -57,6 +57,8 @@ def test_novelai_default_request_builder_uses_policy_defaults() -> None:
     assert "sde" in params["sampler"]
     assert params["sm"] is True
     assert params["sm_dyn"] is True
+    assert isinstance(params["seed"], int)
+    assert 0 <= params["seed"] <= novelai.NAI_SEED_MAX
     assert params["qualityToggle"] is False
     assert params["add_quality_tags"] is False
     assert params["ucPreset"] == 0
@@ -79,6 +81,18 @@ def test_novelai_default_request_builder_uses_policy_defaults() -> None:
         assert term in params["negative_prompt"]
     assert payload["policy"]["safe_range"] == "SAFE_1024_RANGE"
     assert payload["policy"]["high_res_policy"] == "HIGH_RES_REQUIRES_APPROVAL"
+    assert payload["policy"]["seed"] == params["seed"]
+    assert payload["policy"]["seed_source"] == "auto_generated"
+
+
+def test_novelai_explicit_seed_is_preserved_in_payload_policy() -> None:
+    import plugins.image_gen.novelai as novelai
+
+    payload = novelai.build_novelai_request_payload(prompt="safe prompt", seed=123456)
+
+    assert payload["parameters"]["seed"] == 123456
+    assert payload["policy"]["seed"] == 123456
+    assert payload["policy"]["seed_source"] == "provided"
 
 
 def test_novelai_custom_negative_prompt_preserves_policy_baseline() -> None:
@@ -114,11 +128,15 @@ def test_novelai_style_preset_env_merges_sfw_subculture_baseline(monkeypatch: py
     assert payload["policy"]["style_preset"] == "game_default_subculture"
     assert "polished cel shading" in payload["input"]
     assert "fantasy game character art" in payload["input"]
+    assert "rich game illustration" in payload["input"]
+    assert "premium mobile game key art" in payload["input"]
     assert payload["input"].count("cinematic lighting") == 1
     assert payload["input"].endswith("safe prompt")
     assert params["negative_prompt"].startswith("flat lighting")
     assert "photorealistic" in params["negative_prompt"]
     assert "realistic skin texture" in params["negative_prompt"]
+    assert "plain background" in params["negative_prompt"]
+    assert "simple gradient background" in params["negative_prompt"]
     assert params["negative_prompt"].count("flat lighting") == 1
     assert params["v4_prompt"]["caption"]["base_caption"] == payload["input"]
     assert params["v4_negative_prompt"]["caption"]["base_caption"] == params["negative_prompt"]
@@ -484,6 +502,9 @@ def test_novelai_live_generation_uses_mocked_endpoint_and_publishes_zip_png(
     assert seen["api_key_present"] is True
     assert seen["payload"]["parameters"]["sampler"] == novelai.NAI_SAMPLER
     assert seen["payload"]["parameters"]["qualityToggle"] is False
+    assert isinstance(seen["payload"]["parameters"]["seed"], int)
+    assert seen["payload"]["policy"]["seed"] == seen["payload"]["parameters"]["seed"]
+    assert seen["payload"]["policy"]["seed_source"] == "auto_generated"
 
     for name in ["request.json", "response.json", "metadata.json", "manifest.json", "integrity.json"]:
         assert (sidecar / name).is_file()
@@ -496,6 +517,9 @@ def test_novelai_live_generation_uses_mocked_endpoint_and_publishes_zip_png(
     assert response["response_bytes"] == len(response_zip.read_bytes())
     assert response["raw_response_saved"] is False
     assert response["normalized_artifacts"]["count"] == 1
+    metadata = json.loads((sidecar / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["seed"] == seen["payload"]["parameters"]["seed"]
+    assert metadata["seed_source"] == "auto_generated"
 
     manifest = json.loads((sidecar / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["checks"]["png"] == "PASS"
@@ -535,3 +559,39 @@ def test_novelai_live_generation_normalizes_direct_png_response(
     assert published.read_bytes() == response_png.read_bytes()
     response = json.loads((published.parent / "sidecar" / "response.json").read_text(encoding="utf-8"))
     assert response["response_shape"] == "png"
+
+
+def test_novelai_live_generation_preserves_explicit_seed_in_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    response_png = tmp_path / "response.png"
+    _write_png(response_png)
+
+    def fake_post(payload, *, api_key, endpoint, timeout):
+        assert payload["parameters"]["seed"] == 987654321
+        assert payload["policy"]["seed"] == 987654321
+        assert payload["policy"]["seed_source"] == "provided"
+        return novelai.NovelAIHTTPResponse(
+            status=200,
+            headers={"content-type": "image/png"},
+            body=response_png.read_bytes(),
+        )
+
+    monkeypatch.setenv("NOVELAI_API_KEY", "test-key-not-printed")
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork" / "Image"))
+    monkeypatch.setattr(novelai, "_post_novelai_generation", fake_post)
+    monkeypatch.setattr(novelai, "queue_nas_sync_hook", lambda **kwargs: False)
+
+    result = novelai.NovelAIImageGenProvider().generate(
+        "safe prompt",
+        run_id="live-seed",
+        seed=987654321,
+        live_generation_approved=True,
+    )
+
+    metadata = json.loads((Path(result["sidecar_dir"]) / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["seed"] == 987654321
+    assert metadata["seed_source"] == "provided"

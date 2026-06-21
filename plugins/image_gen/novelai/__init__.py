@@ -51,6 +51,7 @@ HIGH_RES_REQUIRES_APPROVAL = "HIGH_RES_REQUIRES_APPROVAL"
 LIVE_GENERATION_REQUIRES_APPROVAL = "LIVE_GENERATION_REQUIRES_APPROVAL"
 NAI_DEFAULT_WIDTH = 1024
 NAI_DEFAULT_HEIGHT = 1024
+NAI_SEED_MAX = 2**32 - 1
 NAI_DEFAULT_POSITIVE_PROMPT_PREFIX = """best quality,
 high quality,
 subculture illustration,
@@ -95,11 +96,22 @@ detailed hair,
 appealing character design,
 fantasy game character art,
 clean anime shading,
+rich game illustration,
+layered background,
+detailed environment,
+dramatic rim light,
+soft ambient occlusion,
+refined costume detail,
+premium mobile game key art,
 soft ambient background detail""",
         "negative": """photorealistic,
 realistic skin texture,
 flat lighting,
 low-detail background,
+plain background,
+empty background,
+simple gradient background,
+low-detail costume,
 uncanny face""",
     }
 }
@@ -154,6 +166,20 @@ def _coerce_dimension(value: Any, *, name: str) -> int:
     if dimension <= 0:
         raise ValueError(f"{name} must be positive")
     return dimension
+
+
+def _generate_seed() -> int:
+    return int.from_bytes(os.urandom(4), "big")
+
+
+def _coerce_seed(value: Any) -> int:
+    try:
+        seed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("seed must be an integer") from exc
+    if seed < 0 or seed > NAI_SEED_MAX:
+        raise ValueError(f"seed must be between 0 and {NAI_SEED_MAX}")
+    return seed
 
 
 def is_safe_1024_range(width: int, height: int) -> bool:
@@ -254,6 +280,12 @@ def build_novelai_request_payload(
     merged_prompt = _merge_positive_prompt(prompt)
     merged_negative_prompt = _merge_negative_prompt(negative_prompt)
     style_preset_name, style_preset = _configured_style_preset()
+    if seed is None:
+        request_seed = _generate_seed()
+        seed_source = "auto_generated"
+    else:
+        request_seed = _coerce_seed(seed)
+        seed_source = "provided"
 
     parameters: Dict[str, Any] = {
         "params_version": 3,
@@ -282,10 +314,12 @@ def build_novelai_request_payload(
         "prefer_brownian": False,
         "negative_prompt": merged_negative_prompt,
         "uc": merged_negative_prompt,
+        "seed": request_seed,
     }
-    if seed is not None:
-        parameters["seed"] = int(seed)
     parameters.update(parameter_overrides)
+    if "seed" in parameter_overrides:
+        parameters["seed"] = _coerce_seed(parameters["seed"])
+        seed_source = "override"
 
     if str(model).startswith("nai-diffusion-4"):
         parameters.setdefault(
@@ -318,6 +352,8 @@ def build_novelai_request_payload(
             "high_res_policy": HIGH_RES_REQUIRES_APPROVAL,
             "high_res_approved": high_res_approved,
             "style_preset": style_preset_name if style_preset else None,
+            "seed": parameters["seed"],
+            "seed_source": seed_source,
         },
     }
 
@@ -554,6 +590,8 @@ def _write_live_generation_source_bundle(
                 "width": payload.get("parameters", {}).get("width"),
                 "height": payload.get("parameters", {}).get("height"),
                 "style_preset": payload.get("policy", {}).get("style_preset"),
+                "seed": payload.get("parameters", {}).get("seed"),
+                "seed_source": payload.get("policy", {}).get("seed_source"),
                 "raw_response_saved": save_raw_response,
             },
             ensure_ascii=False,
@@ -623,6 +661,7 @@ def _generate_live_novelai_image(
     high_res_approved: bool,
     upscale: bool,
     high_resolution: bool,
+    seed: int | None,
     save_raw_response: bool,
     endpoint: str,
     timeout: int,
@@ -637,6 +676,7 @@ def _generate_live_novelai_image(
         high_res_approved=high_res_approved,
         upscale=upscale,
         high_resolution=high_resolution,
+        seed=seed,
         **parameter_overrides,
     )
     if str(model).startswith("nai-diffusion-4"):
@@ -1010,6 +1050,7 @@ class NovelAIImageGenProvider(ImageGenProvider):
                 high_res_approved=bool(kwargs.get("high_res_approved", False)),
                 upscale=bool(kwargs.get("upscale", False)),
                 high_resolution=bool(kwargs.get("high_resolution", False)),
+                seed=kwargs.get("seed"),
             )
             return success_response(
                 image="",
@@ -1059,6 +1100,7 @@ class NovelAIImageGenProvider(ImageGenProvider):
             "negative_prompt",
             "run_id",
             "save_raw_response",
+            "seed",
             "source_png",
             "source_sidecar_dir",
             "timeout",
@@ -1078,6 +1120,7 @@ class NovelAIImageGenProvider(ImageGenProvider):
                 high_res_approved=bool(kwargs.get("high_res_approved", False)),
                 upscale=bool(kwargs.get("upscale", False)),
                 high_resolution=bool(kwargs.get("high_resolution", False)),
+                seed=kwargs.get("seed"),
                 save_raw_response=(
                     _env_truthy("HERMES_NAI_SAVE_RAW_RESPONSE")
                     if kwargs.get("save_raw_response") is None
