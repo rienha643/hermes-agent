@@ -838,6 +838,8 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["allowed_topics"] = platform_cfg["allowed_topics"]
                 if "free_response_channels" in platform_cfg:
                     bridged["free_response_channels"] = platform_cfg["free_response_channels"]
+                if plat == Platform.SLACK and "ignored_threads" in platform_cfg:
+                    bridged["ignored_threads"] = platform_cfg["ignored_threads"]
                 if "mention_patterns" in platform_cfg:
                     bridged["mention_patterns"] = platform_cfg["mention_patterns"]
                 if "exclusive_bot_mentions" in platform_cfg:
@@ -919,6 +921,11 @@ def load_gateway_config() -> GatewayConfig:
                     if isinstance(frc, list):
                         frc = ",".join(str(v) for v in frc)
                     os.environ["SLACK_FREE_RESPONSE_CHANNELS"] = str(frc)
+                ignored_threads = slack_cfg.get("ignored_threads")
+                if ignored_threads is not None and not os.getenv("SLACK_IGNORED_THREADS"):
+                    if isinstance(ignored_threads, list):
+                        ignored_threads = ",".join(str(v) for v in ignored_threads)
+                    os.environ["SLACK_IGNORED_THREADS"] = str(ignored_threads)
                 if "reactions" in slack_cfg and not os.getenv("SLACK_REACTIONS"):
                     os.environ["SLACK_REACTIONS"] = str(slack_cfg["reactions"]).lower()
                 # allowed_channels: if set, bot ONLY responds in these channels (whitelist)

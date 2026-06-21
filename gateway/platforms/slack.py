@@ -2221,6 +2221,14 @@ class SlackAdapter(BasePlatformAdapter):
         is_thread_reply = bool(event_thread_ts and event_thread_ts != ts)
 
         if not is_dm and bot_uid:
+            if self._slack_thread_is_ignored(channel_id=channel_id, thread_ts=thread_ts):
+                logger.debug(
+                    "[Slack] Ignoring configured thread for bot responses: %s:%s",
+                    channel_id,
+                    thread_ts,
+                )
+                return
+
             # Check allowed channels — if set, only respond in these channels (whitelist)
             allowed_channels = self._slack_allowed_channels()
             if allowed_channels and channel_id not in allowed_channels:
@@ -3331,3 +3339,24 @@ class SlackAdapter(BasePlatformAdapter):
         if isinstance(raw, str) and raw.strip():
             return {part.strip() for part in raw.split(",") if part.strip()}
         return set()
+
+    def _slack_ignored_threads(self) -> set:
+        """Return channel:thread_ts pairs where Slack bot responses are disabled."""
+        raw = self.config.extra.get("ignored_threads")
+        if raw is None:
+            raw = os.getenv("SLACK_IGNORED_THREADS", "")
+        if isinstance(raw, list):
+            return {str(part).strip() for part in raw if str(part).strip()}
+        s = str(raw).strip() if raw is not None else ""
+        if s:
+            return {part.strip() for part in s.split(",") if part.strip()}
+        return set()
+
+    def _slack_thread_is_ignored(self, *, channel_id: str, thread_ts: str | None) -> bool:
+        if not channel_id or not thread_ts:
+            return False
+        ignored = self._slack_ignored_threads()
+        return (
+            f"{channel_id}:{thread_ts}" in ignored
+            or f"{channel_id}:*" in ignored
+        )
