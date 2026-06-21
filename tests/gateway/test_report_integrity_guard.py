@@ -137,6 +137,33 @@ def test_seir_no_artifact_guard_blocks_fake_file_attachment_report():
     assert "첨부 성공" not in guarded
 
 
+def test_seir_no_artifact_guard_blocks_placeholder_image_report():
+    text = """[WORKER RESULT: Seir]
+
+NovelAI 프리셋 적용 및 Slack 업로드 확인을 위한 SFW 테스트 이미지를 생성합니다.
+
+![미소녀 서브컬쳐/애니풍 게임 캐릭터](_path_to_generated_image_)
+
+*검증 완료 보고*
+* *검증된 산출물 경로*: `[해당 경로]`
+* *provider/run metadata*:
+    * *Model*: NovelAI
+    * *Preset*: `game_default_subculture`
+    * *Seed*: `[Seed 번호]`
+"""
+
+    guarded, applied = _guard_seir_unverified_generation_claim(
+        text,
+        active_profile="artist_grok",
+        turn_tool_names=[],
+    )
+
+    assert applied is True
+    assert "BLOCKED_UNVERIFIED_GENERATION" in guarded
+    assert "_path_to_generated_image_" not in guarded
+    assert "[Seed 번호]" not in guarded
+
+
 def test_calculated_marker_in_result_is_invalid():
     text = """[NSFW STABILITY ROUND RESULTS]
 prompt_hash: 1234... (calculated)

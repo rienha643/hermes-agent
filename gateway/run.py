@@ -1536,14 +1536,17 @@ def _render_invalid_gateway_report(reasons: list[str]) -> str:
 
 
 _SEIR_GENERATION_PROGRESS_CLAIM_RE = re.compile(
-    r"(생성\s*중|생성을\s*시작|생성하겠습니다|제작하겠습니다|바로\s*생성|"
+    r"(생성\s*중|생성을\s*시작|생성하겠습니다|생성합니다|제작하겠습니다|바로\s*생성|"
     r"이미지\s*생성\s*로직\s*실행|generation\s+(?:started|running|in progress)|"
     r"generating\s+(?:image|images)|creating\s+(?:image|images))",
     re.IGNORECASE,
 )
 _SEIR_GENERATION_SUCCESS_CLAIM_RE = re.compile(
-    r"(생성\s*(?:경로|파일|완료|보고)|첨부\s*성공|Slack\s*(?:첨부|Upload)\s*:\s*(?:PASS|성공|완료|확인)|"
-    r"!\[[^\]]*\]\(\s*file://|file:///.+\.(?:png|jpe?g|webp)|"
+    r"(생성\s*(?:경로|파일|완료|보고)|산출물\s*경로|검증\s*완료\s*보고|첨부\s*성공|"
+    r"Slack\s*(?:첨부|Upload)\s*:\s*(?:PASS|성공|완료|확인)|"
+    r"!\[[^\]]*\]\(\s*(?:file://|_path_to_generated_image_|\[?해당\s*경로\]?)|"
+    r"file:///.+\.(?:png|jpe?g|webp)|"
+    r"\[(?:해당\s*경로|Seed\s*번호|seed\s*number)\]|"
     r"(?:generated|created)\s+(?:image|file)|attachment\s+(?:success|complete|uploaded))",
     re.IGNORECASE,
 )
