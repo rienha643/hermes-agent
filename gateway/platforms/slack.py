@@ -733,7 +733,19 @@ class SlackAdapter(BasePlatformAdapter):
                 team_id = auth_response.get("team_id", "")
                 bot_user_id = auth_response.get("user_id", "")
                 bot_name = auth_response.get("user", "unknown")
+                bot_id = auth_response.get("bot_id", "")
                 team_name = auth_response.get("team", "unknown")
+                if bot_id:
+                    try:
+                        bots_info = getattr(client, "bots_info", None)
+                        if callable(bots_info):
+                            bot_info_response = await bots_info(bot=bot_id)
+                            if isinstance(bot_info_response, dict):
+                                display_name = (bot_info_response.get("bot") or {}).get("name")
+                                if display_name:
+                                    bot_name = display_name
+                    except Exception as e:
+                        logger.debug("[Slack] bots.info failed for %s: %s", bot_id, e)
 
                 self._team_clients[team_id] = client
                 self._team_bot_user_ids[team_id] = bot_user_id

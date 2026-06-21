@@ -205,6 +205,57 @@ class TestAppMentionHandler:
                 f"Slack slash regex does not match {expected}"
             )
 
+    def test_connect_logs_bot_display_name_from_bots_info(self, caplog):
+        """Prefer the installed bot display name over legacy auth.test username."""
+        config = PlatformConfig(enabled=True, token="xoxb-fake")
+        adapter = SlackAdapter(config)
+
+        registered_events = []
+        registered_commands = []
+
+        mock_app = MagicMock()
+
+        def mock_event(event_type):
+            def decorator(fn):
+                registered_events.append(event_type)
+                return fn
+            return decorator
+
+        def mock_command(cmd):
+            def decorator(fn):
+                registered_commands.append(cmd)
+                return fn
+            return decorator
+
+        mock_app.event = mock_event
+        mock_app.command = mock_command
+        mock_app.action = lambda action_id: (lambda fn: fn)
+        mock_app.client = AsyncMock()
+
+        mock_web_client = AsyncMock()
+        mock_web_client.auth_test = AsyncMock(return_value={
+            "bot_id": "B_CELIA",
+            "team_id": "T_FAKE",
+            "team": "FakeTeam",
+            "user": "palette",
+            "user_id": "U_CELIA",
+        })
+        mock_web_client.bots_info = AsyncMock(return_value={
+            "bot": {"id": "B_CELIA", "name": "셀리아", "user_id": "U_CELIA"},
+        })
+
+        with caplog.at_level(logging.INFO), \
+             patch.object(_slack_mod, "AsyncApp", return_value=mock_app), \
+             patch.object(_slack_mod, "AsyncWebClient", return_value=mock_web_client), \
+             patch.object(_slack_mod, "AsyncSocketModeHandler", return_value=MagicMock()), \
+             patch.dict(os.environ, {"SLACK_APP_TOKEN": "xapp-fake"}), \
+             patch("gateway.status.acquire_scoped_lock", return_value=(True, None)), \
+             patch("asyncio.create_task"):
+            asyncio.run(adapter.connect())
+
+        assert "Authenticated as @셀리아" in caplog.text
+        assert "Authenticated as @palette" not in caplog.text
+
 
 class TestSlackConnectCleanup:
     """Regression coverage for failed connect() cleanup."""
