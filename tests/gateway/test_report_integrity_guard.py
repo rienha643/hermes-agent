@@ -12,6 +12,7 @@ from gateway.run import (
     _evaluate_gateway_user_report_governance,
     _gateway_report_language,
     _gateway_report_omitted_present,
+    _guard_seir_unverified_generation_claim,
     _sanitize_gateway_final_response,
     _validate_gateway_report_integrity,
 )
@@ -73,6 +74,46 @@ def test_gateway_user_report_governance_pings_on_omitted_protected_report():
 
     assert "GOVERNANCE PING" in ping
     assert "protected_report_omitted" in ping
+
+
+def test_seir_no_artifact_guard_blocks_generation_progress_without_tool_call():
+    text = "[WORKER_RESULT: Seir]\n바로 생성을 시작합니다.\n\n1번 이미지 생성 중..."
+
+    guarded, applied = _guard_seir_unverified_generation_claim(
+        text,
+        active_profile="artist_grok",
+        turn_tool_names=[],
+    )
+
+    assert applied is True
+    assert "BLOCKED_UNVERIFIED_GENERATION" in guarded
+    assert "생성 중" not in guarded
+
+
+def test_seir_no_artifact_guard_allows_real_image_generate_tool_call():
+    text = "[WORKER_RESULT: Seir]\n1번 이미지 생성 중..."
+
+    guarded, applied = _guard_seir_unverified_generation_claim(
+        text,
+        active_profile="artist_grok",
+        turn_tool_names=["image_generate"],
+    )
+
+    assert applied is False
+    assert guarded == text
+
+
+def test_seir_no_artifact_guard_allows_blocker_report_without_tool_call():
+    text = "[WORKER_RESULT: Seir]\napproval_required: live generation approval is unclear."
+
+    guarded, applied = _guard_seir_unverified_generation_claim(
+        text,
+        active_profile="artist_grok",
+        turn_tool_names=[],
+    )
+
+    assert applied is False
+    assert guarded == text
 
 
 def test_calculated_marker_in_result_is_invalid():

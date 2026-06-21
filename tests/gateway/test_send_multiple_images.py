@@ -295,7 +295,7 @@ class TestSlackMultiImage:
         config = PlatformConfig(enabled=True, token="xoxb-fake")
         a = SlackAdapter(config)
         a._app = MagicMock()
-        a._resolve_thread_ts = MagicMock(return_value=None)
+        a._resolve_thread_ts = MagicMock(return_value="12345.6789")
         a._record_uploaded_file_thread = MagicMock()
         client = MagicMock()
         client.files_upload_v2 = AsyncMock(return_value={"ok": True})
@@ -310,12 +310,17 @@ class TestSlackMultiImage:
             paths.append(p)
 
         images = [(f"file://{p}", "") for p in paths]
-        _run(adapter.send_multiple_images("C12345", images))
+        with (
+            patch("gateway.platforms.slack._slack_media_block_reason", return_value=None),
+            patch("gateway.platforms.slack._files_upload_v2_with_timeout", new_callable=AsyncMock) as upload,
+        ):
+            upload.return_value = {"ok": True}
+            _run(adapter.send_multiple_images("C12345", images))
 
-        client = adapter._get_client("C12345")
-        client.files_upload_v2.assert_awaited_once()
-        kwargs = client.files_upload_v2.await_args.kwargs
+        upload.assert_awaited_once()
+        kwargs = upload.await_args.kwargs
         assert len(kwargs["file_uploads"]) == 3
+        assert kwargs["thread_ts"] == "12345.6789"
 
     def test_batch_over_10_chunks(self, adapter, tmp_path):
         paths = []
@@ -325,12 +330,28 @@ class TestSlackMultiImage:
             paths.append(p)
 
         images = [(f"file://{p}", "") for p in paths]
-        _run(adapter.send_multiple_images("C12345", images))
+        with (
+            patch("gateway.platforms.slack._slack_media_block_reason", return_value=None),
+            patch("gateway.platforms.slack._files_upload_v2_with_timeout", new_callable=AsyncMock) as upload,
+        ):
+            upload.return_value = {"ok": True}
+            _run(adapter.send_multiple_images("C12345", images))
+
+        assert upload.await_count == 2
+        sizes = [len(c.kwargs["file_uploads"]) for c in upload.await_args_list]
+        assert sizes == [10, 2]
+        assert all(c.kwargs["thread_ts"] == "12345.6789" for c in upload.await_args_list)
+
+    def test_missing_thread_ts_refuses_main_channel_upload(self, adapter, tmp_path):
+        p = tmp_path / "img.png"
+        p.write_bytes(b"\x89PNG" + b"\x00" * 20)
+        adapter._resolve_thread_ts = MagicMock(return_value=None)
+
+        with pytest.raises(RuntimeError, match="requires thread_ts"):
+            _run(adapter.send_multiple_images("C12345", [(f"file://{p}", "")]))
 
         client = adapter._get_client("C12345")
-        assert client.files_upload_v2.await_count == 2
-        sizes = [len(c.kwargs["file_uploads"]) for c in client.files_upload_v2.await_args_list]
-        assert sizes == [10, 2]
+        client.files_upload_v2.assert_not_called()
 
     def test_empty_noop(self, adapter):
         _run(adapter.send_multiple_images("C12345", []))

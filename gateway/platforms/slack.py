@@ -22,6 +22,7 @@ try:
     from slack_bolt.async_app import AsyncApp
     from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
     from slack_sdk.web.async_client import AsyncWebClient
+    from slack_sdk.web import WebClient
     import aiohttp
     SLACK_AVAILABLE = True
 except ImportError:
@@ -29,6 +30,7 @@ except ImportError:
     AsyncApp = Any
     AsyncSocketModeHandler = Any
     AsyncWebClient = Any
+    WebClient = Any
 
 import sys
 from pathlib import Path as _Path
@@ -88,11 +90,13 @@ def check_slack_requirements() -> bool:
         from slack_bolt.async_app import AsyncApp
         from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
         from slack_sdk.web.async_client import AsyncWebClient
+        from slack_sdk.web import WebClient
         import aiohttp
         return {
             "AsyncApp": AsyncApp,
             "AsyncSocketModeHandler": AsyncSocketModeHandler,
             "AsyncWebClient": AsyncWebClient,
+            "WebClient": WebClient,
             "aiohttp": aiohttp,
             "SLACK_AVAILABLE": True,
         }
@@ -259,6 +263,31 @@ def _apply_slack_proxy(client: Any, proxy_url: Optional[str]) -> None:
     """Apply a resolved proxy to a Slack SDK client or clear it explicitly."""
     if hasattr(client, "proxy"):
         client.proxy = proxy_url
+
+
+async def _files_upload_v2_with_timeout(
+    client: Any,
+    *,
+    timeout: float,
+    proxy_url: Optional[str] = None,
+    **kwargs: Any,
+) -> Any:
+    """Run Slack file upload behind a hard async timeout.
+
+    AsyncWebClient.files_upload_v2 can block inside the SDK upload path on some
+    runtimes. Prefer a sync WebClient in a worker thread so the gateway event
+    loop can recover if Slack's upload call stalls.
+    """
+    token = getattr(client, "token", None)
+    if token and WebClient is not Any:
+        def _sync_upload() -> Any:
+            sync_client = WebClient(token=token)
+            _apply_slack_proxy(sync_client, proxy_url)
+            return sync_client.files_upload_v2(**kwargs)
+
+        return await asyncio.wait_for(asyncio.to_thread(_sync_upload), timeout=timeout)
+
+    return await asyncio.wait_for(client.files_upload_v2(**kwargs), timeout=timeout)
 
 
 _SLACK_PROXY_HOSTS = (
@@ -1119,7 +1148,11 @@ class SlackAdapter(BasePlatformAdapter):
         last_exc = None
         for attempt in range(3):
             try:
-                result = await self._get_client(chat_id).files_upload_v2(
+                upload_timeout = float(os.getenv("HERMES_SLACK_UPLOAD_TIMEOUT_SECONDS", "90"))
+                result = await _files_upload_v2_with_timeout(
+                    self._get_client(chat_id),
+                    timeout=upload_timeout,
+                    proxy_url=_resolve_slack_proxy_url(),
                     channel=chat_id,
                     file=file_path,
                     filename=os.path.basename(file_path),
@@ -1238,7 +1271,11 @@ class SlackAdapter(BasePlatformAdapter):
                     "[Slack] Sending %d image(s) in single files_upload_v2 (chunk %d/%d)",
                     len(file_uploads), chunk_idx + 1, len(chunks),
                 )
-                result = await self._get_client(chat_id).files_upload_v2(
+                upload_timeout = float(os.getenv("HERMES_SLACK_UPLOAD_TIMEOUT_SECONDS", "90"))
+                result = await _files_upload_v2_with_timeout(
+                    self._get_client(chat_id),
+                    timeout=upload_timeout,
+                    proxy_url=_resolve_slack_proxy_url(),
                     channel=chat_id,
                     file_uploads=file_uploads,
                     initial_comment=initial_comment,
@@ -2392,10 +2429,15 @@ class SlackAdapter(BasePlatformAdapter):
             internal=is_commander_dispatch,
         )
 
-        # Only react when bot is directly addressed (DM or @mention).
-        # In listen-all channels (require_mention=false), reacting to every
-        # casual message would be noisy.
-        _should_react = (is_dm or is_mentioned) and self._reactions_enabled()
+        # React when the bot is directly addressed, or when a threaded
+        # follow-up has already passed routing/session gates.  Keep top-level
+        # listen-all channel chatter quiet.
+        _thread_followup_routed = is_thread_reply and not is_dm
+        _should_react = (
+            is_dm
+            or is_mentioned
+            or _thread_followup_routed
+        ) and self._reactions_enabled()
         if _should_react:
             self._reacting_message_ids.add(ts)
 

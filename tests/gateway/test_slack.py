@@ -1940,6 +1940,28 @@ class TestReactions:
         adapter._app.client.reactions_remove.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_reactions_registered_for_routed_thread_followup(self, adapter):
+        """Thread follow-ups that pass session routing should show progress reactions."""
+        adapter._app.client.reactions_add = AsyncMock()
+        adapter._app.client.reactions_remove = AsyncMock()
+        adapter._app.client.users_info = AsyncMock(return_value={
+            "user": {"profile": {"display_name": "Tyler"}}
+        })
+        adapter._has_active_session_for_thread = MagicMock(return_value=True)
+
+        event = {
+            "text": "follow-up",
+            "user": "U_USER",
+            "channel": "C123",
+            "channel_type": "channel",
+            "thread_ts": "1234567890.000000",
+            "ts": "1234567891.000001",
+        }
+        await adapter._handle_slack_message(event)
+
+        assert "1234567891.000001" in adapter._reacting_message_ids
+
+    @pytest.mark.asyncio
     async def test_reactions_disabled_via_env(self, adapter, monkeypatch):
         """SLACK_REACTIONS=false should suppress all reaction lifecycle."""
         monkeypatch.setenv("SLACK_REACTIONS", "false")

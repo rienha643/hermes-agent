@@ -45,6 +45,10 @@ def test_novelai_default_request_builder_uses_policy_defaults() -> None:
     payload = novelai.build_novelai_request_payload(prompt="safe prompt")
     params = payload["parameters"]
 
+    assert payload["input"].startswith("best quality")
+    assert "subculture illustration" in payload["input"]
+    assert "anime illustration" in payload["input"]
+    assert payload["input"].endswith("safe prompt")
     assert payload["model"] == novelai.DEFAULT_MODEL
     assert payload["action"] == "generate"
     assert params["sampler"] == novelai.NAI_SAMPLER
@@ -59,6 +63,8 @@ def test_novelai_default_request_builder_uses_policy_defaults() -> None:
     assert params["undesired_content_preset"] == "none"
     assert params["negative_prompt"] == novelai.NAI_DEFAULT_NEGATIVE_PROMPT
     assert params["uc"] == novelai.NAI_DEFAULT_NEGATIVE_PROMPT
+    assert params["v4_prompt"]["caption"]["base_caption"] == payload["input"]
+    assert params["v4_negative_prompt"]["caption"]["base_caption"] == novelai.NAI_DEFAULT_NEGATIVE_PROMPT
     for term in [
         "normal quality",
         "bad anatomy",
@@ -73,6 +79,25 @@ def test_novelai_default_request_builder_uses_policy_defaults() -> None:
         assert term in params["negative_prompt"]
     assert payload["policy"]["safe_range"] == "SAFE_1024_RANGE"
     assert payload["policy"]["high_res_policy"] == "HIGH_RES_REQUIRES_APPROVAL"
+
+
+def test_novelai_custom_negative_prompt_preserves_policy_baseline() -> None:
+    import plugins.image_gen.novelai as novelai
+
+    payload = novelai.build_novelai_request_payload(
+        prompt="safe prompt, best quality",
+        negative_prompt="flat lighting, bad hands",
+    )
+    params = payload["parameters"]
+
+    assert payload["input"].count("best quality") == 1
+    assert "safe prompt" in payload["input"]
+    assert params["negative_prompt"].startswith("flat lighting")
+    assert "bad hands" in params["negative_prompt"]
+    assert params["negative_prompt"].count("bad hands") == 1
+    assert "scan artifacts" in params["negative_prompt"]
+    assert params["uc"] == params["negative_prompt"]
+    assert params["v4_negative_prompt"]["caption"]["base_caption"] == params["negative_prompt"]
 
 
 @pytest.mark.parametrize("width,height", [(1024, 1024), (832, 1216), (768, 1344)])

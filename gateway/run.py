@@ -1535,6 +1535,51 @@ def _render_invalid_gateway_report(reasons: list[str]) -> str:
     ).strip()
 
 
+_SEIR_GENERATION_PROGRESS_CLAIM_RE = re.compile(
+    r"(생성\s*중|생성을\s*시작|생성하겠습니다|제작하겠습니다|바로\s*생성|"
+    r"이미지\s*생성\s*로직\s*실행|generation\s+(?:started|running|in progress)|"
+    r"generating\s+(?:image|images)|creating\s+(?:image|images))",
+    re.IGNORECASE,
+)
+_SEIR_BLOCKER_RE = re.compile(
+    r"(생성하지\s*않|생성할\s*수\s*없|실행하지\s*않|도구\s*호출.*없|"
+    r"blocker|blocked|unavailable|approval_required|requires_approval|"
+    r"no\s+image\s+was\s+generated)",
+    re.IGNORECASE,
+)
+
+
+def _render_seir_no_artifact_generation_guard() -> str:
+    return (
+        "[NO-ARTIFACT COMPLETION GUARD]\n"
+        "Final Verdict: BLOCKED_UNVERIFIED_GENERATION\n"
+        "Reason: Seir reported or implied image generation without a current-turn `image_generate` tool result.\n"
+        "No image was generated or delivered in this turn.\n"
+        "Required Action: rerun the task with a real `image_generate` tool call, or report the exact blocker instead of progress."
+    ).strip()
+
+
+def _guard_seir_unverified_generation_claim(
+    text: str,
+    *,
+    active_profile: str = "",
+    turn_tool_names: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> tuple[str, bool]:
+    """Block Seir progress/success prose when no image tool ran this turn."""
+    body = str(text or "")
+    if not body:
+        return body, False
+    if str(active_profile or "").strip() != "artist_grok":
+        return body, False
+    if any(str(name or "") == "image_generate" for name in (turn_tool_names or [])):
+        return body, False
+    if _SEIR_BLOCKER_RE.search(body):
+        return body, False
+    if not _SEIR_GENERATION_PROGRESS_CLAIM_RE.search(body):
+        return body, False
+    return _render_seir_no_artifact_generation_guard(), True
+
+
 def _validate_gateway_report_integrity(
     text: str,
     *,
@@ -10996,6 +11041,25 @@ class GatewayRunner:
                 "structured attachments event count=%d",
                 len(_structured_attachment_paths),
             )
+            _turn_tool_names = [
+                str(item.get("tool_name") or "")
+                for item in (_structured_attachment_debug or {}).get("source_summaries", [])
+                if isinstance(item, dict)
+            ]
+            response, _seir_no_artifact_blocked = _guard_seir_unverified_generation_claim(
+                response,
+                active_profile=_active_profile,
+                turn_tool_names=_turn_tool_names,
+            )
+            if _seir_no_artifact_blocked:
+                logger.warning(
+                    "Seir no-artifact completion guard blocked generation progress claim: session_id=%s session_key=%s run_generation=%s inbound_message_id=%s tool_names=%s",
+                    session_entry.session_id,
+                    _quick_key or "",
+                    run_generation,
+                    self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                    _turn_tool_names,
+                )
             _report_integrity = _validate_gateway_report_integrity(
                 response,
                 attachment_count=len(_structured_attachment_paths),
@@ -16962,9 +17026,12 @@ class GatewayRunner:
         for path in image_paths:
             try:
                 logger.debug("Auto-analyzing user image: %s", path)
-                result_json = await vision_analyze_tool(
-                    image_url=path,
-                    user_prompt=analysis_prompt,
+                result_json = await asyncio.wait_for(
+                    vision_analyze_tool(
+                        image_url=path,
+                        user_prompt=analysis_prompt,
+                    ),
+                    timeout=150.0,
                 )
                 result = json.loads(result_json)
                 if result.get("success"):
@@ -16981,6 +17048,13 @@ class GatewayRunner:
                         "this time (>_<) You can try looking at it yourself "
                         f"with vision_analyze using image_url: {path}]"
                     )
+            except asyncio.TimeoutError:
+                logger.error("Vision auto-analysis timed out for %s", path)
+                enriched_parts.append(
+                    f"[The user sent an image but automatic vision pre-analysis "
+                    f"timed out. Continue with the user's text and, if needed, "
+                    f"examine it yourself with vision_analyze using image_url: {path}]"
+                )
             except Exception as e:
                 logger.error("Vision auto-analysis error: %s", e)
                 enriched_parts.append(

@@ -1036,6 +1036,21 @@ IMAGE_GENERATE_SCHEMA = {
                 "type": "integer",
                 "description": "Optional explicit output height in pixels. When set with width, provider defaults such as square 1024x1024 must not override it.",
             },
+            "live_generation_approved": {
+                "type": "boolean",
+                "description": (
+                    "Operator approval flag for providers that require explicit live-generation approval, "
+                    "such as NovelAI. Default is false. If the current user/operator message explicitly "
+                    "approves live generation or directly asks the image worker to generate/run/proceed, "
+                    "pass true for that approved request; do not require the user to name this internal flag."
+                ),
+                "default": False,
+            },
+            "high_res_approved": {
+                "type": "boolean",
+                "description": "Operator approval flag for high-resolution provider requests. Default is false.",
+                "default": False,
+            },
         },
         "required": ["prompt"],
     },
@@ -1139,6 +1154,8 @@ def _dispatch_to_plugin_provider(
     subject_dominance: float | int | None = None,
     width: int | None = None,
     height: int | None = None,
+    live_generation_approved: bool | None = None,
+    high_res_approved: bool | None = None,
 ):
     """Route the call to a plugin-registered provider when one is selected.
 
@@ -1229,6 +1246,10 @@ def _dispatch_to_plugin_provider(
             kwargs["width"] = width
         if height is not None:
             kwargs["height"] = height
+        if live_generation_approved is not None:
+            kwargs["live_generation_approved"] = live_generation_approved
+        if high_res_approved is not None:
+            kwargs["high_res_approved"] = high_res_approved
         if configured_model:
             kwargs["model"] = configured_model
         result = provider.generate(**kwargs)
@@ -1271,6 +1292,8 @@ def _handle_image_generate(args, **kw):
     subject_dominance = args.get("subject_dominance")
     width = args.get("width")
     height = args.get("height")
+    live_generation_approved = args.get("live_generation_approved")
+    high_res_approved = args.get("high_res_approved")
     task_id = kw.get("task_id")
 
     task_project_name, task_artifact_name = _consume_image_task_metadata(task_id)
@@ -1297,6 +1320,8 @@ def _handle_image_generate(args, **kw):
         subject_dominance=subject_dominance if isinstance(subject_dominance, (int, float)) else None,
         width=width if isinstance(width, int) and width > 0 else None,
         height=height if isinstance(height, int) and height > 0 else None,
+        live_generation_approved=live_generation_approved if isinstance(live_generation_approved, bool) else None,
+        high_res_approved=high_res_approved if isinstance(high_res_approved, bool) else None,
     )
     if dispatched is not None:
         return dispatched

@@ -339,7 +339,7 @@ TOOLSETS = {
 
     "seir-tool-profile": {
         "description": (
-            "Seir NSFW/NAI prompt review and image-evaluation boundary. "
+            "Seir NSFW/NAI prompt, approved execution, and artifact-verification boundary. "
             "Explicit allowlist only; intentionally independent of "
             "_HERMES_CORE_TOOLS so future core/plugin tools do not inflate "
             "Seir's prompt schema."

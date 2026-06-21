@@ -51,6 +51,13 @@ HIGH_RES_REQUIRES_APPROVAL = "HIGH_RES_REQUIRES_APPROVAL"
 LIVE_GENERATION_REQUIRES_APPROVAL = "LIVE_GENERATION_REQUIRES_APPROVAL"
 NAI_DEFAULT_WIDTH = 1024
 NAI_DEFAULT_HEIGHT = 1024
+NAI_DEFAULT_POSITIVE_PROMPT_PREFIX = """best quality,
+high quality,
+subculture illustration,
+anime illustration,
+clean lineart,
+detailed face,
+expressive eyes"""
 NAI_DEFAULT_NEGATIVE_PROMPT = """normal quality,
 bad quality,
 low quality,
@@ -151,6 +158,34 @@ def require_safe_1024_range(
         raise NovelAIResolutionApprovalRequired(width=width, height=height, reason=reason)
 
 
+def _merge_prompt_baseline(baseline: str, prompt: str | None, *, baseline_first: bool) -> str:
+    """Merge comma/newline prompt terms while preserving the policy baseline."""
+    raw_items: list[str] = []
+    for text in (baseline, prompt or "") if baseline_first else (prompt or "", baseline):
+        for item in str(text or "").replace("\n", ",").split(","):
+            cleaned = item.strip()
+            if cleaned:
+                raw_items.append(cleaned)
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        key = item.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return ",\n".join(merged)
+
+
+def _merge_positive_prompt(prompt: str) -> str:
+    return _merge_prompt_baseline(NAI_DEFAULT_POSITIVE_PROMPT_PREFIX, prompt, baseline_first=True)
+
+
+def _merge_negative_prompt(negative_prompt: str | None) -> str:
+    return _merge_prompt_baseline(NAI_DEFAULT_NEGATIVE_PROMPT, negative_prompt, baseline_first=False)
+
+
 def build_novelai_request_payload(
     *,
     prompt: str,
@@ -181,6 +216,8 @@ def build_novelai_request_payload(
         if not high_res_approved:
             raise NovelAIResolutionApprovalRequired(width=width, height=height, reason=approval_reason)
     require_safe_1024_range(width, height, high_res_approved=high_res_approved, reason=approval_reason)
+    merged_prompt = _merge_positive_prompt(prompt)
+    merged_negative_prompt = _merge_negative_prompt(negative_prompt)
 
     parameters: Dict[str, Any] = {
         "params_version": 3,
@@ -207,8 +244,8 @@ def build_novelai_request_payload(
         "normalize_reference_strength_multiple": True,
         "deliberate_euler_ancestral_bug": False,
         "prefer_brownian": False,
-        "negative_prompt": negative_prompt if negative_prompt is not None else NAI_DEFAULT_NEGATIVE_PROMPT,
-        "uc": negative_prompt if negative_prompt is not None else NAI_DEFAULT_NEGATIVE_PROMPT,
+        "negative_prompt": merged_negative_prompt,
+        "uc": merged_negative_prompt,
     }
     if seed is not None:
         parameters["seed"] = int(seed)
@@ -218,7 +255,7 @@ def build_novelai_request_payload(
         parameters.setdefault(
             "v4_prompt",
             {
-                "caption": {"base_caption": prompt, "char_captions": []},
+                "caption": {"base_caption": merged_prompt, "char_captions": []},
                 "use_coords": False,
                 "use_order": True,
             },
@@ -227,7 +264,7 @@ def build_novelai_request_payload(
             "v4_negative_prompt",
             {
                 "caption": {
-                    "base_caption": negative_prompt if negative_prompt is not None else NAI_DEFAULT_NEGATIVE_PROMPT,
+                    "base_caption": merged_negative_prompt,
                     "char_captions": [],
                 },
                 "legacy_uc": False,
@@ -235,7 +272,7 @@ def build_novelai_request_payload(
         )
 
     return {
-        "input": prompt,
+        "input": merged_prompt,
         "model": model,
         "action": action,
         "parameters": parameters,

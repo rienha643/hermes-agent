@@ -55,6 +55,8 @@ def _get_anthropic_sdk():
 
 logger = logging.getLogger(__name__)
 
+MACOS_LOGIN_KEYCHAIN = Path.home() / "Library" / "Keychains" / "login.keychain-db"
+
 THINKING_BUDGET = {"xhigh": 32000, "high": 16000, "medium": 8000, "low": 4000}
 # Hermes effort → Anthropic adaptive-thinking effort (output_config.effort).
 # Anthropic exposes 5 levels on 4.7+: low, medium, high, xhigh, max.
@@ -814,10 +816,17 @@ def _read_claude_code_credentials_from_keychain() -> Optional[Dict[str, Any]]:
 
     try:
         # Read the "Claude Code-credentials" generic password entry
+        cmd = [
+            "security",
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ]
+        if MACOS_LOGIN_KEYCHAIN.exists():
+            cmd.append(str(MACOS_LOGIN_KEYCHAIN))
         result = subprocess.run(
-            ["security", "find-generic-password",
-             "-s", "Claude Code-credentials",
-             "-w"],
+            cmd,
             capture_output=True,
             text=True,
             timeout=5,
