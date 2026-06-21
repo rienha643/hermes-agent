@@ -53,6 +53,43 @@ DEFAULT_DENOISE = 1.0
 DEFAULT_SEED = 123456789
 DEFAULT_CATEGORY = "txt2img"
 
+DEFAULT_STABLE_STYLE_LORA = r"00_illustrious_style_candidates\K NAI Style.safetensors"
+DEFAULT_STABLE_STYLE_LORA_WEIGHT = 0.65
+DEFAULT_KEY_ART_LORA = r"00_illustrious_style_candidates\pornmaster-Aesthetics-v2-lora.safetensors"
+DEFAULT_KEY_ART_LORA_WEIGHT = 0.10
+STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
+    "stable": {
+        "preset": "stable",
+        "name": DEFAULT_STABLE_STYLE_LORA,
+        "weight": DEFAULT_STABLE_STYLE_LORA_WEIGHT,
+        "use_case": "default stable character illustration",
+    },
+    "default": {
+        "preset": "stable",
+        "name": DEFAULT_STABLE_STYLE_LORA,
+        "weight": DEFAULT_STABLE_STYLE_LORA_WEIGHT,
+        "use_case": "default stable character illustration",
+    },
+    "key_art": {
+        "preset": "key_art",
+        "name": DEFAULT_KEY_ART_LORA,
+        "weight": DEFAULT_KEY_ART_LORA_WEIGHT,
+        "use_case": "dramatic promotional key art",
+    },
+    "keyart": {
+        "preset": "key_art",
+        "name": DEFAULT_KEY_ART_LORA,
+        "weight": DEFAULT_KEY_ART_LORA_WEIGHT,
+        "use_case": "dramatic promotional key art",
+    },
+    "dramatic": {
+        "preset": "key_art",
+        "name": DEFAULT_KEY_ART_LORA,
+        "weight": DEFAULT_KEY_ART_LORA_WEIGHT,
+        "use_case": "dramatic promotional key art",
+    },
+}
+
 CHARACTER_PRODUCTION_PRESET = "character_production"
 CHARACTER_PRODUCTION_STEPS = 28
 CHARACTER_PRODUCTION_CFG = 5.0
@@ -367,6 +404,62 @@ def _build_character_production_runtime(
         "scheduler": CHARACTER_PRODUCTION_SCHEDULER,
         "prompt_translation_policy": "character-skeleton + keyword-translate + subject-dominance guidance",
     }
+
+
+def _resolve_lora_stack(kwargs: Dict[str, Any], *, runtime_preset: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Resolve ComfyUI LoRA stack from explicit kwargs or Angelica defaults."""
+    explicit_stack = kwargs.get("loras")
+    if isinstance(explicit_stack, list):
+        resolved: List[Dict[str, Any]] = []
+        for item in explicit_stack:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("lora_name") or "").strip()
+            if not name:
+                continue
+            try:
+                weight = float(item.get("weight", item.get("strength_model", 1.0)))
+            except Exception:
+                weight = 1.0
+            try:
+                clip_weight = float(item.get("clip_weight", item.get("strength_clip", weight)))
+            except Exception:
+                clip_weight = weight
+            resolved.append({
+                "preset": str(item.get("preset") or "custom").strip() or "custom",
+                "name": name,
+                "weight": weight,
+                "clip_weight": clip_weight,
+                "use_case": str(item.get("use_case") or "explicit stack").strip() or "explicit stack",
+            })
+        return resolved
+
+    explicit_name = str(kwargs.get("lora_name") or "").strip()
+    if explicit_name:
+        try:
+            weight = float(kwargs.get("lora_weight", kwargs.get("strength_model", 1.0)))
+        except Exception:
+            weight = 1.0
+        try:
+            clip_weight = float(kwargs.get("lora_clip_weight", kwargs.get("strength_clip", weight)))
+        except Exception:
+            clip_weight = weight
+        return [{
+            "preset": str(kwargs.get("lora_preset") or kwargs.get("style_preset") or "custom").strip() or "custom",
+            "name": explicit_name,
+            "weight": weight,
+            "clip_weight": clip_weight,
+            "use_case": "explicit lora",
+        }]
+
+    preset_key = str(kwargs.get("lora_preset") or kwargs.get("style_preset") or "").strip().casefold().replace("-", "_").replace(" ", "_")
+    if not preset_key and runtime_preset is not None:
+        preset_key = "stable"
+    if preset_key in STYLE_PRESET_LORAS:
+        preset = dict(STYLE_PRESET_LORAS[preset_key])
+        preset["clip_weight"] = preset["weight"]
+        return [preset]
+    return []
 
 
 def _is_smoke_or_e2e_context(task_context: str) -> bool:
@@ -753,6 +846,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             subject_dominance_value = runtime_preset.get("subject_dominance")
             subject_dominance_rule = runtime_preset.get("subject_dominance_rule")
 
+        lora_stack = _resolve_lora_stack(kwargs, runtime_preset=runtime_preset)
+
         filename_prefix = Path(str(artifact_name or kwargs.get("filename_prefix") or "angelica_txt2img").strip() or "angelica_txt2img").name
 
         try:
@@ -883,6 +978,27 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
 
         if vae is not None:
             workflow["6"] = {"inputs": {"vae_name": vae}, "class_type": "VAELoader"}
+
+        model_source = ["1", 0]
+        clip_source = ["1", 1]
+        for index, lora in enumerate(lora_stack, start=1):
+            node_id = f"L{index}"
+            workflow[node_id] = {
+                "inputs": {
+                    "model": model_source,
+                    "clip": clip_source,
+                    "lora_name": lora["name"],
+                    "strength_model": lora["weight"],
+                    "strength_clip": lora.get("clip_weight", lora["weight"]),
+                },
+                "class_type": "LoraLoader",
+            }
+            model_source = [node_id, 0]
+            clip_source = [node_id, 1]
+        if lora_stack:
+            workflow["3"]["inputs"]["clip"] = clip_source
+            workflow["4"]["inputs"]["clip"] = clip_source
+            workflow["5"]["inputs"]["model"] = model_source
         payload = {"prompt": workflow}
 
         try:
@@ -992,6 +1108,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "system_stats": system_payload,
             "runtime_preset": preset_name,
             "prompt_translation_policy": prompt_translation_policy,
+            "loras": lora_stack,
         }
         prompt_payload = {
             "prompt": prompt_for_generation,
@@ -1019,6 +1136,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "source_model_rejected": checkpoint_resolution.get("source_model_rejected"),
             "candidate_count": checkpoint_resolution.get("candidate_count"),
             "candidates": checkpoint_resolution.get("candidates"),
+            "loras": lora_stack,
         }
         metadata = {
             "provider": self.name,
@@ -1042,7 +1160,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "negative_baseline": CHARACTER_PRODUCTION_NEGATIVE_BASELINE if preset_name == CHARACTER_PRODUCTION_PRESET else None,
             "negative_prompt": negative_prompt,
             "vae": vae,
-            "loras": [],
+            "loras": lora_stack,
             "controlnet_used": False,
             "seed": seed,
             "sampler": sampler_name,

@@ -141,6 +141,55 @@ class TestComfyLocalCheckpointResolution:
         assert result.get("source_model_rejected") is None
 
 
+class TestComfyLocalLoraPresetResolution:
+    def test_character_production_uses_stable_lora_by_default(self):
+        stack = COMFY_MOD._resolve_lora_stack({}, runtime_preset={"preset": "character_production"})
+
+        assert stack == [
+            {
+                "preset": "stable",
+                "name": COMFY_MOD.DEFAULT_STABLE_STYLE_LORA,
+                "weight": COMFY_MOD.DEFAULT_STABLE_STYLE_LORA_WEIGHT,
+                "use_case": "default stable character illustration",
+                "clip_weight": COMFY_MOD.DEFAULT_STABLE_STYLE_LORA_WEIGHT,
+            }
+        ]
+
+    def test_key_art_style_preset_uses_pornmaster_low_weight(self):
+        stack = COMFY_MOD._resolve_lora_stack({"style_preset": "key_art"}, runtime_preset=None)
+
+        assert stack == [
+            {
+                "preset": "key_art",
+                "name": COMFY_MOD.DEFAULT_KEY_ART_LORA,
+                "weight": COMFY_MOD.DEFAULT_KEY_ART_LORA_WEIGHT,
+                "use_case": "dramatic promotional key art",
+                "clip_weight": COMFY_MOD.DEFAULT_KEY_ART_LORA_WEIGHT,
+            }
+        ]
+
+    def test_explicit_lora_name_overrides_style_preset(self):
+        stack = COMFY_MOD._resolve_lora_stack(
+            {
+                "style_preset": "key_art",
+                "lora_name": "custom.safetensors",
+                "lora_weight": 0.25,
+                "lora_clip_weight": 0.2,
+            },
+            runtime_preset={"preset": "character_production"},
+        )
+
+        assert stack == [
+            {
+                "preset": "key_art",
+                "name": "custom.safetensors",
+                "weight": 0.25,
+                "clip_weight": 0.2,
+                "use_case": "explicit lora",
+            }
+        ]
+
+
 class TestComfyLocalImageGenProviderGenerate:
 
     def test_generate_runs_history_gated_publish_and_writes_sidecars(self, monkeypatch, tmp_path):
