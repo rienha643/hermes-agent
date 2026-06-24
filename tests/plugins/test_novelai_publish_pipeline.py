@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 from pathlib import Path
 from types import SimpleNamespace
 import zipfile
@@ -125,6 +126,58 @@ def test_novelai_parameter_overrides_are_preserved_in_payload() -> None:
     assert params["add_quality_tags"] is True
     assert params["autoSmea"] is False
     assert params["dynamic_thresholding"] is False
+
+
+def test_novelai_reference_image_path_is_encoded_into_reference_arrays(tmp_path: Path) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    reference = tmp_path / "reference.png"
+    _write_png(reference)
+
+    payload = novelai.build_novelai_request_payload(
+        prompt="safe prompt",
+        reference_image_path=str(reference),
+        reference_strength=0.72,
+        reference_information_extracted=0.88,
+        experimental_reference_images=True,
+    )
+    params = payload["parameters"]
+
+    assert base64.b64decode(params["reference_image_multiple"][0]).startswith(b"\x89PNG\r\n\x1a\n")
+    assert params["reference_strength_multiple"] == [0.72]
+    assert params["reference_information_extracted_multiple"] == [0.88]
+
+
+def test_novelai_dry_run_reference_image_path_is_encoded(tmp_path: Path) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    reference = tmp_path / "reference.png"
+    _write_png(reference)
+
+    provider = novelai.NovelAIImageGenProvider()
+    result = provider.generate(
+        "safe prompt",
+        dry_run_request=True,
+        reference_image_path=str(reference),
+        reference_strength=0.55,
+        reference_information_extracted=0.9,
+        experimental_reference_images=True,
+    )
+
+    params = result["request_payload"]["parameters"]
+    assert base64.b64decode(params["reference_image_multiple"][0]).startswith(b"\x89PNG\r\n\x1a\n")
+    assert params["reference_strength_multiple"] == [0.55]
+    assert params["reference_information_extracted_multiple"] == [0.9]
+
+
+def test_novelai_reference_images_are_gated_after_failed_live_smoke(tmp_path: Path) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    reference = tmp_path / "reference.png"
+    _write_png(reference)
+
+    with pytest.raises(ValueError, match="experimental"):
+        novelai.build_novelai_request_payload(prompt="safe prompt", reference_image_path=str(reference))
 
 
 def test_novelai_custom_negative_prompt_preserves_policy_baseline() -> None:

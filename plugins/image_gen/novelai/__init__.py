@@ -9,6 +9,7 @@ sync hooks.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -182,6 +183,93 @@ def _coerce_seed(value: Any) -> int:
     return seed
 
 
+def _coerce_reference_images(parameter_overrides: Dict[str, Any]) -> None:
+    """Normalize friendly reference-image kwargs into NovelAI reference arrays."""
+    requested = any(
+        key in parameter_overrides
+        for key in (
+            "reference_image_multiple",
+            "reference_images",
+            "reference_image_paths",
+            "reference_image",
+            "reference_image_path",
+        )
+    )
+    if not requested:
+        return
+    experimental_enabled = bool(parameter_overrides.pop("experimental_reference_images", False))
+    if not experimental_enabled:
+        raise ValueError(
+            "NovelAI reference images are experimental and failed live smoke testing; "
+            "set experimental_reference_images=True only for explicit API validation."
+        )
+    if parameter_overrides.get("reference_image_multiple"):
+        return
+
+    raw_images = (
+        parameter_overrides.pop("reference_images", None)
+        or parameter_overrides.pop("reference_image_paths", None)
+        or parameter_overrides.pop("reference_image", None)
+        or parameter_overrides.pop("reference_image_path", None)
+    )
+    if raw_images is None:
+        return
+    if isinstance(raw_images, (str, Path)):
+        images = [raw_images]
+    elif isinstance(raw_images, list):
+        images = raw_images
+    else:
+        raise ValueError("NovelAI reference_image must be a path, base64 string, or list")
+
+    encoded_images: list[str] = []
+    for item in images:
+        if isinstance(item, Path) or (isinstance(item, str) and Path(item).expanduser().exists()):
+            path = Path(item).expanduser().resolve(strict=True)
+            data = path.read_bytes()
+            if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError(f"NovelAI reference image must be a PNG: {path}")
+            encoded_images.append(base64.b64encode(data).decode("ascii"))
+        elif isinstance(item, str):
+            try:
+                base64.b64decode(item, validate=True)
+            except Exception as exc:
+                raise ValueError("NovelAI reference_image string must be an existing PNG path or base64 data") from exc
+            encoded_images.append(item)
+        else:
+            raise ValueError("NovelAI reference_image entries must be paths or base64 strings")
+
+    if not encoded_images:
+        return
+
+    strength = parameter_overrides.pop("reference_strength", None)
+    if strength is None:
+        strength = parameter_overrides.pop("reference_strengths", None)
+    if strength is None:
+        strength = 0.6
+    if isinstance(strength, list):
+        strengths = [float(value) for value in strength]
+    else:
+        strengths = [float(strength)] * len(encoded_images)
+    if len(strengths) != len(encoded_images):
+        raise ValueError("NovelAI reference_strength count must match reference_image count")
+
+    information = parameter_overrides.pop("reference_information_extracted", None)
+    if information is None:
+        information = parameter_overrides.pop("reference_information_extracteds", None)
+    if information is None:
+        information = 1.0
+    if isinstance(information, list):
+        information_values = [float(value) for value in information]
+    else:
+        information_values = [float(information)] * len(encoded_images)
+    if len(information_values) != len(encoded_images):
+        raise ValueError("NovelAI reference_information_extracted count must match reference_image count")
+
+    parameter_overrides["reference_image_multiple"] = encoded_images
+    parameter_overrides["reference_strength_multiple"] = strengths
+    parameter_overrides["reference_information_extracted_multiple"] = information_values
+
+
 def is_safe_1024_range(width: int, height: int) -> bool:
     """Return True when a NovelAI request is within SAFE_1024_RANGE."""
     return _coerce_dimension(width, name="width") * _coerce_dimension(height, name="height") <= SAFE_1024_RANGE_MAX_PIXELS
@@ -286,6 +374,8 @@ def build_novelai_request_payload(
     else:
         request_seed = _coerce_seed(seed)
         seed_source = "provided"
+    parameter_overrides = dict(parameter_overrides)
+    _coerce_reference_images(parameter_overrides)
 
     parameters: Dict[str, Any] = {
         "params_version": 3,
