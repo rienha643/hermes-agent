@@ -12,7 +12,7 @@ from gateway.run import (
     _evaluate_gateway_user_report_governance,
     _gateway_report_language,
     _gateway_report_omitted_present,
-    _guard_seir_unverified_generation_claim,
+    _guard_unverified_image_generation_claim,
     _sanitize_gateway_final_response,
     _validate_gateway_report_integrity,
 )
@@ -79,7 +79,7 @@ def test_gateway_user_report_governance_pings_on_omitted_protected_report():
 def test_seir_no_artifact_guard_blocks_generation_progress_without_tool_call():
     text = "[WORKER_RESULT: Seir]\n바로 생성을 시작합니다.\n\n1번 이미지 생성 중..."
 
-    guarded, applied = _guard_seir_unverified_generation_claim(
+    guarded, applied = _guard_unverified_image_generation_claim(
         text,
         active_profile="artist_grok",
         turn_tool_names=[],
@@ -93,7 +93,7 @@ def test_seir_no_artifact_guard_blocks_generation_progress_without_tool_call():
 def test_seir_no_artifact_guard_allows_real_image_generate_tool_call():
     text = "[WORKER_RESULT: Seir]\n1번 이미지 생성 중..."
 
-    guarded, applied = _guard_seir_unverified_generation_claim(
+    guarded, applied = _guard_unverified_image_generation_claim(
         text,
         active_profile="artist_grok",
         turn_tool_names=["image_generate"],
@@ -106,7 +106,7 @@ def test_seir_no_artifact_guard_allows_real_image_generate_tool_call():
 def test_seir_no_artifact_guard_allows_blocker_report_without_tool_call():
     text = "[WORKER_RESULT: Seir]\napproval_required: live generation approval is unclear."
 
-    guarded, applied = _guard_seir_unverified_generation_claim(
+    guarded, applied = _guard_unverified_image_generation_claim(
         text,
         active_profile="artist_grok",
         turn_tool_names=[],
@@ -126,7 +126,7 @@ def test_seir_no_artifact_guard_blocks_fake_file_attachment_report():
 - 첨부 성공: 확인됨
 """
 
-    guarded, applied = _guard_seir_unverified_generation_claim(
+    guarded, applied = _guard_unverified_image_generation_claim(
         text,
         active_profile="artist_grok",
         turn_tool_names=[],
@@ -152,7 +152,7 @@ NovelAI 프리셋 적용 및 Slack 업로드 확인을 위한 SFW 테스트 이�
     * *Seed*: `[Seed 번호]`
 """
 
-    guarded, applied = _guard_seir_unverified_generation_claim(
+    guarded, applied = _guard_unverified_image_generation_claim(
         text,
         active_profile="artist_grok",
         turn_tool_names=[],
@@ -162,6 +162,38 @@ NovelAI 프리셋 적용 및 Slack 업로드 확인을 위한 SFW 테스트 이�
     assert "BLOCKED_UNVERIFIED_GENERATION" in guarded
     assert "_path_to_generated_image_" not in guarded
     assert "[Seed 번호]" not in guarded
+
+
+def test_angelica_no_artifact_guard_blocks_placeholder_success_report():
+    text = """SFW 미소녀 얼굴 초상 이미지 1장을 생성하였습니다.
+
+*생성 결과 요약:*
+- *상태*: 성공
+- *이미지 경로*: [여기에 실제 artifact_path를 삽입]
+
+*생성 메타데이터:*
+- *Checkpoint*: `pornmasterAnime_ilV5.safetensors`
+- *VAE*: (사용된 VAE 명칭)
+- *LoRA*: (사용된 LoRA 스택)
+- *Sampler*: (사용된 Sampler)
+- *CFG*: (설정된 CFG 값)
+- *Steps*: (실행된 Step 수)
+- *Seed*: (사용된 Seed 값)
+- *Dimensions*: (설정된 해상도)
+
+[WORKER RESULT: Angelica]
+"""
+
+    guarded, applied = _guard_unverified_image_generation_claim(
+        text,
+        active_profile="comfy",
+        turn_tool_names=[],
+    )
+
+    assert applied is True
+    assert "BLOCKED_UNVERIFIED_GENERATION" in guarded
+    assert "artifact_path" not in guarded
+    assert "사용된 VAE" not in guarded
 
 
 def test_calculated_marker_in_result_is_invalid():

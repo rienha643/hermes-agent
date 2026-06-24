@@ -1542,12 +1542,20 @@ _SEIR_GENERATION_PROGRESS_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 _SEIR_GENERATION_SUCCESS_CLAIM_RE = re.compile(
-    r"(생성\s*(?:경로|파일|완료|보고)|산출물\s*경로|검증\s*완료\s*보고|첨부\s*성공|"
+    r"(생성\s*(?:경로|파일|완료|보고|결과)|이미지\s*\d*\s*장?\s*을?\s*생성(?:하였|했|했습니다|하였습니다)|"
+    r"상태\s*[:：]\s*성공|산출물\s*경로|검증\s*완료\s*보고|첨부\s*성공|"
     r"Slack\s*(?:첨부|Upload)\s*:\s*(?:PASS|성공|완료|확인)|"
     r"!\[[^\]]*\]\(\s*(?:file://|_path_to_generated_image_|\[?해당\s*경로\]?)|"
     r"file:///.+\.(?:png|jpe?g|webp)|"
     r"\[(?:해당\s*경로|Seed\s*번호|seed\s*number)\]|"
     r"(?:generated|created)\s+(?:image|file)|attachment\s+(?:success|complete|uploaded))",
+    re.IGNORECASE,
+)
+_SEIR_PLACEHOLDER_ARTIFACT_REPORT_RE = re.compile(
+    r"(\[여기에\s*실제\s*artifact_path|실제\s*artifact_path(?:를)?\s*삽입|"
+    r"\((?:사용된|설정된|실행된)\s*(?:VAE|LoRA|Sampler|CFG|Step|Seed|해상도|명칭|값|수)[^)]*\)|"
+    r"\[(?:해당\s*경로|Seed\s*번호|seed\s*number|실제\s*artifact_path)\]|"
+    r"_path_to_generated_image_)",
     re.IGNORECASE,
 )
 _SEIR_BLOCKER_RE = re.compile(
@@ -1592,6 +1600,7 @@ def _guard_unverified_image_generation_claim(
     if not (
         _SEIR_GENERATION_PROGRESS_CLAIM_RE.search(body)
         or _SEIR_GENERATION_SUCCESS_CLAIM_RE.search(body)
+        or _SEIR_PLACEHOLDER_ARTIFACT_REPORT_RE.search(body)
     ):
         return body, False
     return _render_no_artifact_generation_guard(guarded_profiles[profile]), True
