@@ -52,6 +52,7 @@ DEFAULT_SAMPLER = "euler"
 DEFAULT_DENOISE = 1.0
 DEFAULT_SEED = 123456789
 DEFAULT_CATEGORY = "txt2img"
+POSTPROCESS_CATEGORY = "postprocess"
 
 DEFAULT_STABLE_STYLE_LORA = r"00_illustrious_style_candidates\K NAI Style.safetensors"
 DEFAULT_STABLE_STYLE_LORA_WEIGHT = 0.65
@@ -93,9 +94,12 @@ STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
 CHARACTER_PRODUCTION_PRESET = "character_production"
 PORTRAIT_PRODUCTION_PRESET = "portrait_production"
 V8_STYLE_WORKFLOW_PRESET = "v8_style_workflow"
+SOURCE_PRESERVING_POSTPROCESS_OPERATION = "source_preserving_postprocess"
+FACE8M_HAND9C_POSTPROCESS_PRESET = "face8m_d035_hand9c_d025"
 DEFAULT_WORKFLOW_KEY = "txt2img_minimal_v1"
 CHARACTER_KEY_VISUAL_WORKFLOW_KEY = "character_key_visual_txt2img_v1"
 PORTRAIT_WORKFLOW_KEY = "portrait_round_v1_txt2img_v1"
+SOURCE_PRESERVING_FACE_HAND_WORKFLOW_KEY = "source_preserving_face8m_hand9c_v1"
 CHARACTER_PRODUCTION_STEPS = 28
 CHARACTER_PRODUCTION_CFG = 5.0
 CHARACTER_PRODUCTION_SAMPLER = "dpmpp_2m"
@@ -355,6 +359,145 @@ def _download_comfy_output_file(base_url: str, output_image: Dict[str, Any], pro
     cache_path = _remote_output_cache_dir() / f"{safe_prompt}_{filename}"
     cache_path.write_bytes(bytes(content))
     return cache_path
+
+
+def _upload_comfy_input_file(base_url: str, source_path: Path) -> Dict[str, Any]:
+    """Upload a local source image to ComfyUI input storage for LoadImage."""
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Source image not found: {source_path}")
+    with source_path.open("rb") as handle:
+        response = requests.post(
+            f"{base_url.rstrip('/')}/upload/image",
+            files={"image": (source_path.name, handle, "image/png")},
+            data={"overwrite": "true", "type": "input"},
+            timeout=60,
+        )
+    response.raise_for_status()
+    payload = response.json()
+    name = str(payload.get("name") or payload.get("filename") or source_path.name).strip()
+    if not name:
+        raise ValueError("ComfyUI upload response did not include an input image name")
+    return {
+        "name": name,
+        "subfolder": str(payload.get("subfolder") or ""),
+        "type": str(payload.get("type") or "input"),
+        "source_path": str(source_path),
+    }
+
+
+def _build_face8m_hand9c_postprocess_workflow(
+    *,
+    checkpoint: str,
+    source_image_name: str,
+    positive_prompt: str,
+    negative_prompt: str,
+    filename_prefix: str,
+) -> Dict[str, Any]:
+    return {
+        "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
+        "2": {"inputs": {"image": source_image_name}, "class_type": "LoadImage"},
+        "3": {"inputs": {"text": positive_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "4": {"inputs": {"text": negative_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "5": {"inputs": {"model_name": "bbox/face_yolov8m.pt"}, "class_type": "UltralyticsDetectorProvider"},
+        "6": {
+            "inputs": {
+                "image": ["2", 0],
+                "model": ["1", 0],
+                "clip": ["1", 1],
+                "vae": ["1", 2],
+                "guide_size": 512,
+                "guide_size_for": True,
+                "max_size": 1024,
+                "seed": 20260643,
+                "steps": 16,
+                "cfg": 5.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "positive": ["3", 0],
+                "negative": ["4", 0],
+                "denoise": 0.35,
+                "feather": 6,
+                "noise_mask": True,
+                "force_inpaint": True,
+                "bbox_threshold": 0.45,
+                "bbox_dilation": 8,
+                "bbox_crop_factor": 3.0,
+                "sam_detection_hint": "center-1",
+                "sam_dilation": 0,
+                "sam_threshold": 0.93,
+                "sam_bbox_expansion": 0,
+                "sam_mask_hint_threshold": 0.7,
+                "sam_mask_hint_use_negative": "False",
+                "drop_size": 10,
+                "bbox_detector": ["5", 0],
+                "wildcard": "",
+                "cycle": 1,
+            },
+            "class_type": "FaceDetailer",
+        },
+        "7": {
+            "inputs": {
+                "text": (
+                    "masterpiece, best quality, high quality, anime illustration, clean hand anatomy, "
+                    "elegant fingers, natural hand pose, five fingers, clean lineart, polished cel shading, "
+                    "consistent character art style, preserve original character identity and lighting"
+                ),
+                "clip": ["1", 1],
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "8": {
+            "inputs": {
+                "text": (
+                    "low quality, blurry, bad hands, malformed hands, extra fingers, missing fingers, "
+                    "fused fingers, broken fingers, mutated fingers, deformed palm, distorted hand, "
+                    "photorealistic, 3d render, changing pose, changing character identity"
+                ),
+                "clip": ["1", 1],
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "9": {"inputs": {"model_name": "bbox/hand_yolov9c.pt"}, "class_type": "UltralyticsDetectorProvider"},
+        "10": {
+            "inputs": {
+                "bbox_detector": ["9", 0],
+                "image": ["6", 0],
+                "threshold": 0.35,
+                "dilation": 10,
+                "crop_factor": 3.0,
+                "drop_size": 12,
+                "labels": "all",
+            },
+            "class_type": "BboxDetectorSEGS",
+        },
+        "11": {
+            "inputs": {
+                "image": ["6", 0],
+                "segs": ["10", 0],
+                "model": ["1", 0],
+                "clip": ["1", 1],
+                "vae": ["1", 2],
+                "guide_size": 384,
+                "guide_size_for": True,
+                "max_size": 768,
+                "seed": 20260697,
+                "steps": 14,
+                "cfg": 5.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "positive": ["7", 0],
+                "negative": ["8", 0],
+                "denoise": 0.25,
+                "feather": 5,
+                "noise_mask": True,
+                "force_inpaint": True,
+                "wildcard": "",
+                "cycle": 1,
+            },
+            "class_type": "DetailerForEach",
+        },
+        "99": {"inputs": {"images": ["11", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
+    }
 
 
 def _resolve_model() -> str:
@@ -982,6 +1125,14 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         seed = int(kwargs.get("seed")) if explicit_seed else DEFAULT_SEED
         negative_prompt = str(kwargs.get("negative_prompt") or "").strip()
         subject_dominance = kwargs.get("subject_dominance")
+        operation = str(kwargs.get("operation") or "").strip()
+        source_image_path = str(kwargs.get("source_image_path") or kwargs.get("source_image") or "").strip()
+        postprocess_preset = str(kwargs.get("postprocess_preset") or "").strip()
+        source_preserving_postprocess = (
+            operation in {"postprocess", SOURCE_PRESERVING_POSTPROCESS_OPERATION}
+            or postprocess_preset == FACE8M_HAND9C_POSTPROCESS_PRESET
+            or bool(source_image_path)
+        )
         runtime_preset: Optional[Dict[str, Any]] = None
         try:
             runtime_preset = _build_character_production_runtime(
@@ -1125,6 +1276,275 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     prompt=prompt,
                     aspect_ratio=aspect,
                 )
+
+        if source_preserving_postprocess:
+            if postprocess_preset and postprocess_preset != FACE8M_HAND9C_POSTPROCESS_PRESET:
+                return error_response(
+                    error=f"Unsupported ComfyUI postprocess preset: {postprocess_preset}",
+                    error_type="invalid_argument",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            if not source_image_path:
+                return error_response(
+                    error="source_image_path is required for source-preserving postprocess",
+                    error_type="invalid_argument",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            source_input_path = Path(source_image_path).expanduser()
+            try:
+                uploaded_source = _upload_comfy_input_file(base_url, source_input_path)
+            except Exception as exc:  # noqa: BLE001
+                return error_response(
+                    error=f"ComfyUI source image upload failed: {exc}",
+                    error_type="api_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            preset_name = FACE8M_HAND9C_POSTPROCESS_PRESET
+            workflow_key = SOURCE_PRESERVING_FACE_HAND_WORKFLOW_KEY
+            if not negative_prompt:
+                negative_prompt = (
+                    "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, "
+                    "missing fingers, distorted face, text, watermark, changing pose, changing character identity"
+                )
+            workflow = _build_face8m_hand9c_postprocess_workflow(
+                checkpoint=checkpoint,
+                source_image_name=str(uploaded_source["name"]),
+                positive_prompt=prompt_for_generation,
+                negative_prompt=negative_prompt,
+                filename_prefix=filename_prefix,
+            )
+            payload = {"prompt": workflow}
+
+            try:
+                response = requests.post(f"{base_url}/prompt", json=payload, timeout=30)
+                response.raise_for_status()
+                submit = response.json()
+            except Exception as exc:  # noqa: BLE001
+                return error_response(
+                    error=f"ComfyUI prompt submission failed: {exc}",
+                    error_type="api_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            prompt_id = str(submit.get("prompt_id") or "").strip()
+            if not prompt_id:
+                return error_response(
+                    error="ComfyUI prompt response did not include prompt_id",
+                    error_type="invalid_response",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            history_payload: Optional[Dict[str, Any]] = None
+            deadline = time.monotonic() + 300
+            while time.monotonic() < deadline:
+                try:
+                    history_response = requests.get(_history_url(base_url, prompt_id), timeout=15)
+                    history_response.raise_for_status()
+                    history_payload = history_response.json()
+                except Exception as exc:  # noqa: BLE001
+                    return error_response(
+                        error=f"ComfyUI history lookup failed: {exc}",
+                        error_type="api_error",
+                        provider=self.name,
+                        model=checkpoint,
+                        prompt=prompt,
+                        aspect_ratio=aspect,
+                    )
+                if isinstance(history_payload, dict) and _history_completed_successfully(history_payload, prompt_id):
+                    break
+                time.sleep(1)
+            else:
+                return error_response(
+                    error=f"ComfyUI history timed out before success for prompt_id={prompt_id}",
+                    error_type="timeout",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            output_image = _first_output_image(history_payload or {}, prompt_id)
+            if not output_image:
+                return error_response(
+                    error="ComfyUI history success did not contain an output image",
+                    error_type="invalid_response",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            output_source_path = _find_comfy_output_file(output_image)
+            source_origin = "local_output_dir"
+            if output_source_path is None:
+                output_source_path = _download_comfy_output_file(base_url, output_image, prompt_id)
+                source_origin = "remote_view_download" if output_source_path is not None else "missing"
+            if output_source_path is None:
+                return error_response(
+                    error="ComfyUI output file not found after history success",
+                    error_type="io_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            if not wait_for_file_stable(output_source_path, checks=2, delay_seconds=0.1):
+                return error_response(
+                    error=f"ComfyUI output file did not stabilize: {output_source_path}",
+                    error_type="io_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            created_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            prompt_payload = {
+                "prompt": prompt_for_generation,
+                "source_prompt": source_prompt,
+                "negative_prompt": negative_prompt,
+                "source_image_path": str(source_input_path),
+                "uploaded_source": uploaded_source,
+                "runtime_preset": preset_name,
+                "workflow_key": workflow_key,
+                "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
+                "face_detailer": {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5},
+                "hand_detailer": {"model": "bbox/hand_yolov9c.pt", "denoise": 0.25, "steps": 14, "cfg": 5.5},
+                "raw_prompt_payload": {
+                    "submit_payload": payload,
+                    "submit_response": submit,
+                    "history_status": (history_payload or {}).get(prompt_id, {}).get("status", {}),
+                    "output_image": output_image,
+                    "system_stats": system_payload,
+                    "workflow_key": workflow_key,
+                },
+            }
+            metadata = {
+                "provider": self.name,
+                "prompt_id": prompt_id,
+                "api_base_url": base_url,
+                "workflow_key": workflow_key,
+                "checkpoint": checkpoint,
+                "requested_checkpoint": checkpoint_resolution.get("requested_checkpoint", requested_checkpoint),
+                "resolved_checkpoint": checkpoint,
+                "preset": preset_name,
+                "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
+                "source_image_path": str(source_input_path),
+                "uploaded_source": uploaded_source,
+                "negative_prompt": negative_prompt,
+                "vae": None,
+                "loras": [],
+                "controlnet_used": False,
+                "created_at": created_at,
+                "category": POSTPROCESS_CATEGORY,
+                "output_source_path": str(output_source_path),
+                "output_source_origin": source_origin,
+                "local_status": "후보정 완료",
+                "publish_status": "HermesWork publish 완료",
+                "slack_status": "primary image 준비됨",
+            }
+            try:
+                bundle = publish_filesystem_image_bundle(
+                    output_source_path,
+                    prefix=filename_prefix,
+                    project_name=project_name,
+                    artifact_name=artifact_name or filename_prefix,
+                    category=POSTPROCESS_CATEGORY,
+                    workflow_json=workflow,
+                    prompt_payload=prompt_payload,
+                    metadata=metadata,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return error_response(
+                    error=f"Could not publish ComfyUI postprocess bundle to HermesWork: {exc}",
+                    error_type="io_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            evidence = {
+                "workflow_key": workflow_key,
+                "workflow_path": str(bundle["workflow_path"]),
+                "prompt_id": prompt_id,
+                "source_image": str(source_input_path),
+                "uploaded_source": uploaded_source,
+                "seed": None,
+                "vae": None,
+                "vae_report_value": "checkpoint_builtin_vae",
+                "loras": [],
+                "face_detailer": {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5},
+                "hand_detailer": {"model": "bbox/hand_yolov9c.pt", "denoise": 0.25, "steps": 14, "cfg": 5.5},
+                "output_image": output_image,
+                "artifact_path": str(bundle["primary_image_path"]),
+                "output_source_origin": source_origin,
+            }
+            nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
+            return success_response(
+                image=str(bundle["primary_image_path"]),
+                model=checkpoint,
+                prompt=prompt_for_generation,
+                aspect_ratio=aspect,
+                provider=self.name,
+                extra={
+                    "base_url": base_url,
+                    "preset": preset_name,
+                    "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
+                    "workflow_key": workflow_key,
+                    "evidence": evidence,
+                    "source_image": str(source_input_path),
+                    "vae": None,
+                    "vae_report_value": "checkpoint_builtin_vae",
+                    "loras": [],
+                    "local_status": "후보정 완료",
+                    "publish_status": "HermesWork publish 완료",
+                    "nas_status": nas_status,
+                    "slack_status": "primary image 준비됨",
+                    "workflow_path": str(bundle["workflow_path"]),
+                    "prompt_path": str(bundle["prompt_path"]),
+                    "metadata_path": str(bundle["metadata_path"]),
+                    "manifest_path": str(bundle["manifest_path"]),
+                    "artifact_path": str(bundle["primary_image_path"]),
+                    "primary_image": bundle["primary_image"],
+                    "media_files": [str(bundle["primary_image_path"])],
+                    "sidecars": bundle["sidecars"],
+                    "artifact_files": [
+                        str(bundle["primary_image_path"]),
+                        str(bundle["workflow_path"]),
+                        str(bundle["prompt_path"]),
+                        str(bundle["metadata_path"]),
+                        str(bundle["manifest_path"]),
+                        str(bundle["integrity_path"]),
+                    ],
+                    "file_sha256": bundle.get("file_sha256"),
+                    "integrity_path": str(bundle["integrity_path"]),
+                    "nas_hook_requested": bundle["nas_hook_requested"],
+                    "nas_evidence": bundle.get("nas_evidence"),
+                    "slack_upload_evidence": False,
+                    "output_source_origin": source_origin,
+                    "output_image": output_image,
+                    "prompt_id": prompt_id,
+                    "category": POSTPROCESS_CATEGORY,
+                    "api_base_url": base_url,
+                },
+            )
 
         workflow: Dict[str, Any] = {
             "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},

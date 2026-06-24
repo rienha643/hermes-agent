@@ -1091,6 +1091,21 @@ IMAGE_GENERATE_SCHEMA = {
                 "description": "Operator approval flag for high-resolution provider requests. Default is false.",
                 "default": False,
             },
+            "operation": {
+                "type": "string",
+                "enum": ["generate", "postprocess", "source_preserving_postprocess"],
+                "description": "Optional provider operation. Use `source_preserving_postprocess` only when the user explicitly asks to preserve an existing source image and apply localized postprocess/editing.",
+                "default": "generate",
+            },
+            "source_image_path": {
+                "type": "string",
+                "description": "Optional absolute local source image path for source-preserving ComfyUI postprocess workflows. Requires operation=`source_preserving_postprocess` or a provider-specific postprocess_preset.",
+            },
+            "postprocess_preset": {
+                "type": "string",
+                "enum": ["face8m_d035_hand9c_d025"],
+                "description": "Optional ComfyUI source-preserving postprocess preset. `face8m_d035_hand9c_d025` applies FaceDetailer face_yolov8m denoise 0.35 plus hand_yolov9c denoise 0.25.",
+            },
         },
         "required": ["prompt"],
     },
@@ -1206,6 +1221,9 @@ def _dispatch_to_plugin_provider(
     dynamic_thresholding: bool | None = None,
     live_generation_approved: bool | None = None,
     high_res_approved: bool | None = None,
+    operation: str | None = None,
+    source_image_path: str | None = None,
+    postprocess_preset: str | None = None,
 ):
     """Route the call to a plugin-registered provider when one is selected.
 
@@ -1321,6 +1339,12 @@ def _dispatch_to_plugin_provider(
             kwargs["live_generation_approved"] = live_generation_approved
         if high_res_approved is not None:
             kwargs["high_res_approved"] = high_res_approved
+        if operation is not None:
+            kwargs["operation"] = operation
+        if source_image_path is not None:
+            kwargs["source_image_path"] = source_image_path
+        if postprocess_preset is not None:
+            kwargs["postprocess_preset"] = postprocess_preset
         if configured_model:
             kwargs["model"] = configured_model
         result = provider.generate(**kwargs)
@@ -1375,6 +1399,9 @@ def _handle_image_generate(args, **kw):
     dynamic_thresholding = args.get("dynamic_thresholding")
     live_generation_approved = args.get("live_generation_approved")
     high_res_approved = args.get("high_res_approved")
+    operation = args.get("operation")
+    source_image_path = args.get("source_image_path")
+    postprocess_preset = args.get("postprocess_preset")
     task_id = kw.get("task_id")
 
     task_project_name, task_artifact_name = _consume_image_task_metadata(task_id)
@@ -1413,6 +1440,9 @@ def _handle_image_generate(args, **kw):
         dynamic_thresholding=dynamic_thresholding if isinstance(dynamic_thresholding, bool) else None,
         live_generation_approved=live_generation_approved if isinstance(live_generation_approved, bool) else None,
         high_res_approved=high_res_approved if isinstance(high_res_approved, bool) else None,
+        operation=str(operation).strip() if isinstance(operation, str) and operation.strip() else None,
+        source_image_path=str(source_image_path).strip() if isinstance(source_image_path, str) and source_image_path.strip() else None,
+        postprocess_preset=str(postprocess_preset).strip() if isinstance(postprocess_preset, str) and postprocess_preset.strip() else None,
     )
     if dispatched is not None:
         return dispatched
