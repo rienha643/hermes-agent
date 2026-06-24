@@ -1068,15 +1068,27 @@ class TestComfyLocalCharacterProductionPreset:
         assert captured["prompt_payload"]["cfg"] == 6.0
         assert captured["prompt_payload"]["sampler"] == "euler"
         assert captured["prompt_payload"]["scheduler"] == "normal"
+        assert captured["prompt_payload"]["seed"] == 12345
         prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
         assert "upper body portrait" in prompt_text
-        assert "face focus" in prompt_text
+        assert "light novel cover art" in prompt_text
+        assert "anime key visual" in prompt_text
+        assert "ornate costume" in prompt_text
+        assert "subculture illustration" in prompt_text
+        assert "premium game character portrait" not in prompt_text
+        assert "patterned ornamental backdrop" not in prompt_text
         assert "full-body character art" not in prompt_text
         assert "standing full body" not in prompt_text
+        assert captured["metadata"]["loras"] == []
+        assert captured["metadata"]["vae"] is None
+        assert "6" not in captured["workflow_json"]
+        assert captured["workflow_json"]["7"]["inputs"]["vae"] == ["1", 2]
         negative_text = captured["workflow_json"]["4"]["inputs"]["text"]
-        assert "full body" in negative_text
+        assert "bad hands" in negative_text
+        assert "extra fingers" in negative_text
+        assert "picture frame" not in negative_text
         assert result["preset"] == "portrait_production"
-        assert result["prompt_translation_policy"] == "portrait-skeleton + keyword-translate + sfw-sanitize"
+        assert result["prompt_translation_policy"] == "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize"
 
     def test_generate_sanitizes_weighted_nsfw_tag_from_sfw_portrait_prompt(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(

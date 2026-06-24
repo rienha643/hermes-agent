@@ -101,6 +101,7 @@ PORTRAIT_PRODUCTION_HEIGHT = 1536
 PORTRAIT_PRODUCTION_CFG = 6.0
 PORTRAIT_PRODUCTION_SAMPLER = "euler"
 PORTRAIT_PRODUCTION_SCHEDULER = "normal"
+PORTRAIT_PRODUCTION_SEED = 12345
 CHARACTER_PRODUCTION_POSITIVE_SKELETON = (
     "1girl, solo, full body, standing, looking at viewer, character focus, centered character, "
     "large character, detailed face, detailed eyes, detailed outfit, beautiful young adult woman, "
@@ -110,11 +111,9 @@ CHARACTER_PRODUCTION_POSITIVE_SKELETON = (
     "simple background, background secondary, safe, masterpiece, high score, great score, absurdres"
 )
 PORTRAIT_PRODUCTION_POSITIVE_SKELETON = (
-    "1girl, solo, upper body portrait, face focus, looking at viewer, centered portrait composition, "
-    "large face, detailed face, detailed eyes, sharp appealing eyes, beautiful young adult woman, "
-    "gacha game heroine, refined anime illustration, premium game character portrait, commercial game illustration, "
-    "clean lineart, polished anime rendering, ornate costume details near shoulders and neckline, "
-    "simple background, background secondary, safe, masterpiece, high score, great score, absurdres"
+    "adult woman, long hair, golden eyes, beautiful face, detailed eyes, ornate costume, "
+    "anime illustration, upper body portrait, commercial quality, clean lineart, "
+    "subculture illustration, light novel cover art, anime key visual"
 )
 CHARACTER_PRODUCTION_NEGATIVE_BASELINE = (
     "low quality, worst quality, bad quality, normal quality, lowres, blurry, watermark, text, signature, "
@@ -126,10 +125,8 @@ CHARACTER_PRODUCTION_NEGATIVE_BASELINE = (
     "scenery-first composition"
 )
 PORTRAIT_PRODUCTION_NEGATIVE_BASELINE = (
-    "low quality, worst quality, bad quality, normal quality, lowres, blurry, watermark, text, signature, "
-    "username, bad anatomy, distorted face, asymmetrical eyes, dull eyes, unreadable face, face out of frame, "
-    "head out of frame, cropped head, covered face, full body, standing full body, tiny face, distant character, "
-    "background focus, scenery focus, overwhelming background, noisy background"
+    "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, missing fingers, "
+    "distorted face, text, watermark"
 )
 CHARACTER_PRODUCTION_KEYWORDS: Tuple[str, ...] = (
     "캐릭터",
@@ -479,7 +476,9 @@ def _build_character_production_runtime(
             "cfg": PORTRAIT_PRODUCTION_CFG,
             "sampler_name": PORTRAIT_PRODUCTION_SAMPLER,
             "scheduler": PORTRAIT_PRODUCTION_SCHEDULER,
-            "prompt_translation_policy": "portrait-skeleton + keyword-translate + sfw-sanitize",
+            "seed": PORTRAIT_PRODUCTION_SEED,
+            "use_checkpoint_vae": True,
+            "prompt_translation_policy": "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize",
         }
     if not _is_character_production_request(prompt):
         return None
@@ -556,7 +555,8 @@ def _resolve_lora_stack(kwargs: Dict[str, Any], *, runtime_preset: Optional[Dict
         }]
 
     preset_key = str(kwargs.get("lora_preset") or kwargs.get("style_preset") or "").strip().casefold().replace("-", "_").replace(" ", "_")
-    if not preset_key and runtime_preset is not None:
+    runtime_preset_name = str((runtime_preset or {}).get("preset") or "")
+    if not preset_key and runtime_preset_name == CHARACTER_PRODUCTION_PRESET:
         preset_key = "stable"
     if preset_key in STYLE_PRESET_LORAS:
         preset = dict(STYLE_PRESET_LORAS[preset_key])
@@ -912,7 +912,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         denoise = float(kwargs.get("denoise")) if isinstance(kwargs.get("denoise"), (int, float)) and float(kwargs.get("denoise")) > 0 else DEFAULT_DENOISE
         sampler_name = str(kwargs.get("sampler_name") or DEFAULT_SAMPLER).strip() or DEFAULT_SAMPLER
         scheduler = str(kwargs.get("scheduler") or "normal").strip() or "normal"
-        seed = int(kwargs.get("seed")) if isinstance(kwargs.get("seed"), int) else DEFAULT_SEED
+        explicit_seed = isinstance(kwargs.get("seed"), int)
+        seed = int(kwargs.get("seed")) if explicit_seed else DEFAULT_SEED
         negative_prompt = str(kwargs.get("negative_prompt") or "").strip()
         subject_dominance = kwargs.get("subject_dominance")
         runtime_preset: Optional[Dict[str, Any]] = None
@@ -952,6 +953,10 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             subject_dominance_rule = runtime_preset.get("subject_dominance_rule")
             if preset_name == PORTRAIT_PRODUCTION_PRESET and not explicit_dimensions:
                 width, height = PORTRAIT_PRODUCTION_WIDTH, PORTRAIT_PRODUCTION_HEIGHT
+            if not explicit_seed and isinstance(runtime_preset.get("seed"), int):
+                seed = int(runtime_preset["seed"])
+            if runtime_preset.get("use_checkpoint_vae") is True:
+                vae = None
 
         lora_stack = _resolve_lora_stack(kwargs, runtime_preset=runtime_preset)
 
