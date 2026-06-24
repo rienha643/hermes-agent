@@ -57,6 +57,7 @@ from agent.process_bootstrap import _install_safe_stdio
 from agent.prompt_caching import apply_anthropic_cache_control
 from agent.retry_utils import jittered_backoff
 from agent.trajectory import has_incomplete_scratchpad
+from agent.transports.types import build_tool_call
 from agent.usage_pricing import estimate_usage_cost, normalize_usage
 from hermes_constants import PARTIAL_STREAM_STUB_ID
 from hermes_logging import set_session_context
@@ -64,6 +65,110 @@ from tools.skill_provenance import set_current_write_origin
 from utils import base_url_host_matches, env_var_enabled
 
 logger = logging.getLogger(__name__)
+
+
+_GEMMA_TEXT_TOOL_CALL_RE = re.compile(
+    r"<\|tool_call>call:([A-Za-z_][A-Za-z0-9_.-]*)\{(.*?)\}<tool_call\|>",
+    re.DOTALL,
+)
+_GEMMA_TEXT_ARG_RE = re.compile(
+    r"\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*:\s*<\|\"\|>(.*?)<\|\"\|>\s*(?:,|$)",
+    re.DOTALL,
+)
+_GEMMA_TEXT_ARG_KEY_RE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*:\s*", re.DOTALL)
+
+
+def _parse_gemma_text_tool_args(raw_args: str) -> Optional[dict[str, Any]]:
+    """Parse llama.cpp/Gemma text tool args into a safe string dict.
+
+    Some local Gemma chat templates emit tool calls as plain text, e.g.
+    ``<|tool_call>call:name{arg:<|"|>value<|"|>}<tool_call|>``.  Promote
+    only the quoted-marker form so malformed prose cannot become executable.
+    """
+    args: dict[str, Any] = {}
+    pos = 0
+    while pos < len(raw_args):
+        key_match = _GEMMA_TEXT_ARG_KEY_RE.match(raw_args, pos)
+        if not key_match:
+            if raw_args[pos:].strip():
+                return None
+            break
+        key = key_match.group(1)
+        pos = key_match.end()
+        if raw_args.startswith('<|"|>', pos):
+            end = raw_args.find('<|"|>', pos + 5)
+            if end < 0:
+                return None
+            args[key] = raw_args[pos + 5:end]
+            pos = end + 5
+        else:
+            next_comma = raw_args.find(",", pos)
+            if next_comma < 0:
+                token = raw_args[pos:].strip()
+                pos = len(raw_args)
+            else:
+                token = raw_args[pos:next_comma].strip()
+                pos = next_comma
+            lowered = token.lower()
+            if lowered == "true":
+                args[key] = True
+            elif lowered == "false":
+                args[key] = False
+            elif lowered == "null":
+                args[key] = None
+            else:
+                try:
+                    args[key] = int(token)
+                except ValueError:
+                    try:
+                        args[key] = float(token)
+                    except ValueError:
+                        return None
+        while pos < len(raw_args) and raw_args[pos].isspace():
+            pos += 1
+        if pos < len(raw_args):
+            if raw_args[pos] != ",":
+                return None
+            pos += 1
+    return args
+
+
+def _promote_gemma_text_tool_calls(agent: Any, assistant_message: Any) -> bool:
+    """Convert Gemma text tool-call markers to structured tool calls.
+
+    This is intentionally conservative: the tool must already be enabled for
+    the agent and every argument block must parse cleanly.  On success the raw
+    marker text is removed from the user-visible assistant content.
+    """
+    content = getattr(assistant_message, "content", None)
+    if not isinstance(content, str) or "<|tool_call>" not in content:
+        return False
+    if getattr(assistant_message, "tool_calls", None):
+        return False
+
+    valid_tools = set(getattr(agent, "valid_tool_names", []) or [])
+    promoted = []
+    for idx, match in enumerate(_GEMMA_TEXT_TOOL_CALL_RE.finditer(content)):
+        name = match.group(1)
+        if name not in valid_tools:
+            return False
+        args = _parse_gemma_text_tool_args(match.group(2))
+        if args is None:
+            return False
+        promoted.append(
+            build_tool_call(
+                id=f"call_gemma_text_{uuid.uuid4().hex[:12]}_{idx}",
+                name=name,
+                arguments=args,
+                source="gemma_text_tool_call",
+            )
+        )
+
+    if not promoted:
+        return False
+    assistant_message.tool_calls = promoted
+    assistant_message.content = _GEMMA_TEXT_TOOL_CALL_RE.sub("", content).strip()
+    return True
 
 
 def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str]:
@@ -3613,6 +3718,7 @@ def run_conversation(
             _normalize_kwargs = {}
             if agent.api_mode == "anthropic_messages":
                 _normalize_kwargs["strip_tool_prefix"] = agent._is_anthropic_oauth
+            _normalize_kwargs["base_url"] = agent.base_url
             normalized = _transport.normalize_response(response, **_normalize_kwargs)
             assistant_message = normalized
             finish_reason = normalized.finish_reason
@@ -3637,6 +3743,9 @@ def run_conversation(
                     assistant_message.content = "\n".join(parts)
                 else:
                     assistant_message.content = str(raw)
+
+            if _promote_gemma_text_tool_calls(agent, assistant_message):
+                finish_reason = "tool_calls"
 
             try:
                 from hermes_cli.plugins import invoke_hook as _invoke_hook

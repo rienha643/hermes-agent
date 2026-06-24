@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from agent.codex_responses_adapter import _normalize_codex_response
+from agent.conversation_loop import _promote_gemma_text_tool_calls
 
 import run_agent
 from run_agent import AIAgent
@@ -375,6 +376,16 @@ class TestStripThinkBlocks:
     def test_orphaned_thought_tag(self, agent):
         result = agent._strip_think_blocks("<thought>orphaned reasoning without close")
         assert "<thought>" not in result
+
+    def test_gemma_channel_thought_marker_removed(self, agent):
+        result = agent._strip_think_blocks("<|channel>thought\ninternal\n<channel|>answer")
+        assert "internal" not in result
+        assert "<channel|>" not in result
+        assert result == "answer"
+
+    def test_gemma_fragmented_channel_markers_removed(self, agent):
+        assert agent._strip_think_blocks("thought\n<channel|>") == ""
+        assert agent._strip_think_blocks("<channel|>") == ""
 
     # ─── Unterminated-block coverage (#8878, #9568, #10408) ──────────────
     # Reasoning models served via NIM / MiniMax M2.7 frequently drop the
@@ -2118,6 +2129,35 @@ class TestFormatToolsForSystemMessage:
 
 
 class TestExecuteToolCalls:
+    def test_promotes_gemma_text_tool_call_markers(self):
+        agent = SimpleNamespace(valid_tool_names=["vision_analyze"])
+        assistant_message = SimpleNamespace(
+            content='<|tool_call>call:vision_analyze{image_url:<|"|>/tmp/ref.png<|"|>,live_generation_approved:true,question:<|"|>describe it<|"|>}<tool_call|>',
+            tool_calls=None,
+        )
+
+        assert _promote_gemma_text_tool_calls(agent, assistant_message) is True
+        assert assistant_message.content == ""
+        assert len(assistant_message.tool_calls) == 1
+        call = assistant_message.tool_calls[0]
+        assert call.function.name == "vision_analyze"
+        assert json.loads(call.function.arguments) == {
+            "image_url": "/tmp/ref.png",
+            "live_generation_approved": True,
+            "question": "describe it",
+        }
+
+    def test_rejects_gemma_text_tool_call_for_unknown_tool(self):
+        agent = SimpleNamespace(valid_tool_names=["image_generate"])
+        assistant_message = SimpleNamespace(
+            content='<|tool_call>call:vision_analyze{image_url:<|"|>/tmp/ref.png<|"|>}<tool_call|>',
+            tool_calls=None,
+        )
+
+        assert _promote_gemma_text_tool_calls(agent, assistant_message) is False
+        assert assistant_message.tool_calls is None
+        assert "<|tool_call>" in assistant_message.content
+
     def test_single_tool_executed(self, agent):
         tc = _mock_tool_call(name="web_search", arguments='{"q":"test"}', call_id="c1")
         mock_msg = _mock_assistant_msg(content="", tool_calls=[tc])

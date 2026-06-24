@@ -472,6 +472,24 @@ def strip_think_blocks(agent, content: str) -> str:
     content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL | re.IGNORECASE)
     content = re.sub(r'<REASONING_SCRATCHPAD>.*?</REASONING_SCRATCHPAD>', '', content, flags=re.DOTALL | re.IGNORECASE)
     content = re.sub(r'<thought>.*?</thought>', '', content, flags=re.DOTALL | re.IGNORECASE)
+    content = re.sub(
+        r'<\|channel\|?>thought\b.*?<channel\|>',
+        '',
+        content,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    content = re.sub(
+        r'^\s*thought\s*<channel\|>\s*',
+        '',
+        content,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    content = re.sub(
+        r'^\s*<channel\|>\s*$',
+        '',
+        content,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     # 1b. Tool-call XML blocks (openclaw/openclaw#67318). Handle the
     #     generic tag names first — they have no attribute gating since
     #     a literal <tool_call> in prose is already vanishingly rare.

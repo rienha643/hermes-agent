@@ -99,6 +99,17 @@ def _is_gemini_openai_compat_base_url(base_url: Any) -> bool:
     return normalized.endswith("/openai")
 
 
+def _is_local_llamacpp_base_url(base_url: Any) -> bool:
+    normalized = str(base_url or "").strip().rstrip("/").lower()
+    if not normalized:
+        return False
+    return (
+        "127.0.0.1" in normalized
+        or "localhost" in normalized
+        or "[::1]" in normalized
+    )
+
+
 class ChatCompletionsTransport(ProviderTransport):
     """Transport for api_mode='chat_completions'.
 
@@ -610,8 +621,17 @@ class ChatCompletionsTransport(ProviderTransport):
         if rd:
             provider_data["reasoning_details"] = rd
 
+        content = msg.content
+        if (
+            (content is None or content == "")
+            and isinstance(reasoning_content, str)
+            and reasoning_content.strip()
+            and _is_local_llamacpp_base_url(kwargs.get("base_url"))
+        ):
+            content = reasoning_content
+
         return NormalizedResponse(
-            content=msg.content,
+            content=content,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             reasoning=reasoning,
