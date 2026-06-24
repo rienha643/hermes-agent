@@ -635,6 +635,73 @@ def test_novelai_live_generation_uses_mocked_endpoint_and_publishes_zip_png(
     assert manifest["checks"]["slack_upload"] == "READY"
 
 
+def test_novelai_live_reference_image_is_encoded_before_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    reference = tmp_path / "reference.png"
+    response_png = tmp_path / "response.png"
+    _write_png(reference)
+    _write_png(response_png)
+    seen = {}
+
+    def fake_encode_vibe(
+        *,
+        image_base64,
+        information_extracted,
+        model,
+        api_key,
+        endpoint=novelai.NOVELAI_ENCODE_VIBE_ENDPOINT,
+        mask=None,
+        timeout=0,
+    ):
+        seen["encode"] = {
+            "image_starts_png": base64.b64decode(image_base64).startswith(b"\x89PNG\r\n\x1a\n"),
+            "information_extracted": information_extracted,
+            "model": model,
+            "api_key_present": bool(api_key),
+            "endpoint": endpoint,
+            "mask": mask,
+            "timeout": timeout,
+        }
+        return "encoded-vibe-reference"
+
+    def fake_post(payload, *, api_key, endpoint, timeout):
+        seen["payload"] = payload
+        return novelai.NovelAIHTTPResponse(
+            status=200,
+            headers={"content-type": "image/png"},
+            body=response_png.read_bytes(),
+        )
+
+    monkeypatch.setenv("NOVELAI_API_KEY", "test-key-not-printed")
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork" / "Image"))
+    monkeypatch.setattr(novelai, "_post_novelai_encode_vibe", fake_encode_vibe)
+    monkeypatch.setattr(novelai, "_post_novelai_generation", fake_post)
+    monkeypatch.setattr(novelai, "queue_nas_sync_hook", lambda **kwargs: False)
+
+    result = novelai.NovelAIImageGenProvider().generate(
+        "safe prompt",
+        run_id="live-vibe",
+        reference_image_path=str(reference),
+        reference_strength=0.45,
+        reference_information_extracted=0.8,
+        experimental_reference_images=True,
+        live_generation_approved=True,
+    )
+
+    assert result["success"] is True
+    assert seen["encode"]["image_starts_png"] is True
+    assert seen["encode"]["information_extracted"] == 0.8
+    assert seen["encode"]["api_key_present"] is True
+    params = seen["payload"]["parameters"]
+    assert params["reference_image_multiple"] == ["encoded-vibe-reference"]
+    assert params["reference_strength_multiple"] == [0.45]
+    assert params["reference_information_extracted_multiple"] == [0.8]
+
+
 def test_novelai_live_generation_normalizes_direct_png_response(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
