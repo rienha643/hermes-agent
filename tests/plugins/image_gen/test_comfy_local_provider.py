@@ -1031,6 +1031,8 @@ class TestComfyLocalCharacterProductionPreset:
 
         assert result["success"] is True
         assert captured["prompt_payload"]["runtime_preset"] == "character_production"
+        assert captured["prompt_payload"]["workflow_key"] == "character_key_visual_txt2img_v1"
+        assert captured["metadata"]["workflow_key"] == "character_key_visual_txt2img_v1"
         assert captured["prompt_payload"]["steps"] == 28
         assert captured["prompt_payload"]["cfg"] == 5.0
         assert captured["prompt_payload"]["sampler"] == "dpmpp_2m"
@@ -1047,6 +1049,8 @@ class TestComfyLocalCharacterProductionPreset:
         for term in ("low quality", "bad anatomy", "unreadable face", "background focus", "covered face", "blurry", "watermark"):
             assert term in negative_text
         assert result["preset"] == "character_production"
+        assert result["workflow_key"] == "character_key_visual_txt2img_v1"
+        assert result["evidence"]["workflow_key"] == "character_key_visual_txt2img_v1"
         assert result["prompt_translation_policy"] == "character-skeleton + keyword-translate + subject-dominance guidance"
         assert result["steps"] == 28
         assert result["cfg_scale"] == 5.0
@@ -1063,6 +1067,8 @@ class TestComfyLocalCharacterProductionPreset:
 
         assert result["success"] is True
         assert captured["prompt_payload"]["runtime_preset"] == "portrait_production"
+        assert captured["prompt_payload"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
+        assert captured["metadata"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert captured["prompt_payload"]["width"] == 1024
         assert captured["prompt_payload"]["height"] == 1536
         assert captured["prompt_payload"]["cfg"] == 6.0
@@ -1088,6 +1094,8 @@ class TestComfyLocalCharacterProductionPreset:
         assert "extra fingers" in negative_text
         assert "picture frame" not in negative_text
         assert result["preset"] == "portrait_production"
+        assert result["workflow_key"] == "portrait_round_v1_txt2img_v1"
+        assert result["evidence"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["prompt_translation_policy"] == "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize"
 
     def test_generate_sanitizes_weighted_nsfw_tag_from_sfw_portrait_prompt(self, monkeypatch, tmp_path):
@@ -1149,6 +1157,7 @@ class TestComfyLocalCharacterProductionPreset:
         assert captured["prompt_payload"]["resolution_mode"] == "exact"
         assert captured["prompt_payload"]["resolved_checkpoint"] == "AOM3A1_orangemixs.safetensors"
         assert captured["metadata"]["preset"] == "character_production"
+        assert captured["metadata"]["workflow_key"] == "character_key_visual_txt2img_v1"
         assert result["resolution_mode"] == "exact"
         assert result["resolved_checkpoint"] == "AOM3A1_orangemixs.safetensors"
 

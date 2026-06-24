@@ -92,6 +92,9 @@ STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
 
 CHARACTER_PRODUCTION_PRESET = "character_production"
 PORTRAIT_PRODUCTION_PRESET = "portrait_production"
+DEFAULT_WORKFLOW_KEY = "txt2img_minimal_v1"
+CHARACTER_KEY_VISUAL_WORKFLOW_KEY = "character_key_visual_txt2img_v1"
+PORTRAIT_WORKFLOW_KEY = "portrait_round_v1_txt2img_v1"
 CHARACTER_PRODUCTION_STEPS = 28
 CHARACTER_PRODUCTION_CFG = 5.0
 CHARACTER_PRODUCTION_SAMPLER = "dpmpp_2m"
@@ -464,6 +467,7 @@ def _build_character_production_runtime(
             final_negative_prompt = _merge_comma_terms(PORTRAIT_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
         return {
             "preset": PORTRAIT_PRODUCTION_PRESET,
+            "workflow_key": PORTRAIT_WORKFLOW_KEY,
             "source_prompt": source_prompt,
             "translated_prompt": translated_prompt,
             "prompt": translated_prompt,
@@ -492,6 +496,7 @@ def _build_character_production_runtime(
         final_negative_prompt = _merge_comma_terms(CHARACTER_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
     return {
         "preset": CHARACTER_PRODUCTION_PRESET,
+        "workflow_key": CHARACTER_KEY_VISUAL_WORKFLOW_KEY,
         "source_prompt": source_prompt,
         "translated_prompt": translated_prompt,
         "prompt": final_prompt,
@@ -939,7 +944,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         prompt_translation_policy = "raw"
         subject_dominance_value: Optional[float] = None
         subject_dominance_rule: Optional[str] = None
-        workflow_key = "txt2img_minimal_v1"
+        workflow_key = DEFAULT_WORKFLOW_KEY
         if runtime_preset is not None:
             preset_name = str(runtime_preset.get("preset") or CHARACTER_PRODUCTION_PRESET)
             source_prompt = str(runtime_preset.get("source_prompt") or source_prompt)
