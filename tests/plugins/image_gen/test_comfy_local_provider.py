@@ -1053,6 +1053,47 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["sampler_name"] == "dpmpp_2m"
         assert result["scheduler"] == "karras"
 
+    def test_generate_routes_portrait_request_to_portrait_preset(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt="미소녀 얼굴 초상 portrait, ornate costume, clean subculture illustration",
+            negative_prompt="blurry, watermark",
+        )
+
+        assert result["success"] is True
+        assert captured["prompt_payload"]["runtime_preset"] == "portrait_production"
+        assert captured["prompt_payload"]["width"] == 1024
+        assert captured["prompt_payload"]["height"] == 1536
+        assert captured["prompt_payload"]["cfg"] == 6.0
+        assert captured["prompt_payload"]["sampler"] == "euler"
+        assert captured["prompt_payload"]["scheduler"] == "normal"
+        prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
+        assert "upper body portrait" in prompt_text
+        assert "face focus" in prompt_text
+        assert "full-body character art" not in prompt_text
+        assert "standing full body" not in prompt_text
+        negative_text = captured["workflow_json"]["4"]["inputs"]["text"]
+        assert "full body" in negative_text
+        assert result["preset"] == "portrait_production"
+        assert result["prompt_translation_policy"] == "portrait-skeleton + keyword-translate + sfw-sanitize"
+
+    def test_generate_sanitizes_weighted_nsfw_tag_from_sfw_portrait_prompt(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt="미소녀 얼굴 초상, silver hair, blue dress, (NSFW:1.3), no NSFW, no full body",
+            negative_prompt="blurry",
+        )
+
+        assert result["success"] is True
+        prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
+        assert "NSFW" not in prompt_text
+        assert "no upper body portrait" not in prompt_text
+        assert "NSFW" not in captured["prompt_payload"]["source_prompt"]
+        assert "NSFW" not in captured["metadata"]["source_prompt"]
+        assert "NSFW" not in captured["metadata"]["translated_prompt"]
+
     def test_generate_injects_negative_baseline_when_character_negative_prompt_missing(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(
             monkeypatch,

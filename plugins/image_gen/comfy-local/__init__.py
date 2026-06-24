@@ -91,16 +91,29 @@ STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
 }
 
 CHARACTER_PRODUCTION_PRESET = "character_production"
+PORTRAIT_PRODUCTION_PRESET = "portrait_production"
 CHARACTER_PRODUCTION_STEPS = 28
 CHARACTER_PRODUCTION_CFG = 5.0
 CHARACTER_PRODUCTION_SAMPLER = "dpmpp_2m"
 CHARACTER_PRODUCTION_SCHEDULER = "karras"
+PORTRAIT_PRODUCTION_WIDTH = 1024
+PORTRAIT_PRODUCTION_HEIGHT = 1536
+PORTRAIT_PRODUCTION_CFG = 6.0
+PORTRAIT_PRODUCTION_SAMPLER = "euler"
+PORTRAIT_PRODUCTION_SCHEDULER = "normal"
 CHARACTER_PRODUCTION_POSITIVE_SKELETON = (
     "1girl, solo, full body, standing, looking at viewer, character focus, centered character, "
     "large character, detailed face, detailed eyes, detailed outfit, beautiful young adult woman, "
     "gacha game heroine, RPG protagonist, protagonist-grade heroine, attractive face, clear facial features, "
     "readable expression, refined anime illustration, premium game character illustration, ornate fantasy outfit, "
     "detailed costume design, elegant silhouette, clean silhouette, full-body character art, vertical portrait, "
+    "simple background, background secondary, safe, masterpiece, high score, great score, absurdres"
+)
+PORTRAIT_PRODUCTION_POSITIVE_SKELETON = (
+    "1girl, solo, upper body portrait, face focus, looking at viewer, centered portrait composition, "
+    "large face, detailed face, detailed eyes, sharp appealing eyes, beautiful young adult woman, "
+    "gacha game heroine, refined anime illustration, premium game character portrait, commercial game illustration, "
+    "clean lineart, polished anime rendering, ornate costume details near shoulders and neckline, "
     "simple background, background secondary, safe, masterpiece, high score, great score, absurdres"
 )
 CHARACTER_PRODUCTION_NEGATIVE_BASELINE = (
@@ -111,6 +124,12 @@ CHARACTER_PRODUCTION_NEGATIVE_BASELINE = (
     "scenery focus, environment focus, unreadable face, face out of frame, head out of frame, cropped body, "
     "cropped legs, covered face, wings covering body, overwhelming background, symbolic art first, "
     "scenery-first composition"
+)
+PORTRAIT_PRODUCTION_NEGATIVE_BASELINE = (
+    "low quality, worst quality, bad quality, normal quality, lowres, blurry, watermark, text, signature, "
+    "username, bad anatomy, distorted face, asymmetrical eyes, dull eyes, unreadable face, face out of frame, "
+    "head out of frame, cropped head, covered face, full body, standing full body, tiny face, distant character, "
+    "background focus, scenery focus, overwhelming background, noisy background"
 )
 CHARACTER_PRODUCTION_KEYWORDS: Tuple[str, ...] = (
     "캐릭터",
@@ -123,6 +142,23 @@ CHARACTER_PRODUCTION_KEYWORDS: Tuple[str, ...] = (
     "gacha",
     "full body",
 )
+PORTRAIT_PRODUCTION_KEYWORDS: Tuple[str, ...] = (
+    "초상",
+    "얼굴",
+    "상반신",
+    "흉상",
+    "프로필",
+    "프로필사진",
+    "portrait",
+    "upper body",
+    "bust",
+    "headshot",
+    "face focus",
+    "icon",
+    "avatar",
+)
+NSFW_WEIGHTED_TAG_RE = re.compile(r"(?:^|,\s*)\(?\s*NSFW\s*:\s*[-+]?\d+(?:\.\d+)?\s*\)?", re.IGNORECASE)
+NSFW_TEXT_TAG_RE = re.compile(r"(?:^|,\s*)\(?\s*(?:no\s+)?NSFW\s*\)?", re.IGNORECASE)
 
 _ASPECT_DIMENSIONS: dict[str, tuple[int, int]] = {
     "landscape": (1024, 768),
@@ -312,8 +348,30 @@ def _is_character_production_request(prompt_text: str) -> bool:
     return any(keyword.casefold() in lowered for keyword in CHARACTER_PRODUCTION_KEYWORDS)
 
 
+def _is_portrait_production_request(prompt_text: str) -> bool:
+    lowered = str(prompt_text or "").casefold()
+    return any(keyword.casefold() in lowered for keyword in PORTRAIT_PRODUCTION_KEYWORDS)
+
+
+def _sanitize_sfw_prompt_terms(prompt_text: str) -> str:
+    sanitized = NSFW_WEIGHTED_TAG_RE.sub("", str(prompt_text or ""))
+    sanitized = NSFW_TEXT_TAG_RE.sub("", sanitized)
+    sanitized = re.sub(r"\s*,\s*,+", ", ", sanitized)
+    sanitized = re.sub(r"^\s*,\s*|\s*,\s*$", "", sanitized)
+    return re.sub(r"\s+", " ", sanitized).strip()
+
+
+def _sanitize_portrait_prompt_terms(prompt_text: str) -> str:
+    sanitized = _sanitize_sfw_prompt_terms(prompt_text)
+    sanitized = re.sub(r"\(?\s*no\s+full\s+body\s*\)?", "", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"\(?\s*no\s+wide\s+shot\s*\)?", "", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"\s*,\s*,+", ", ", sanitized)
+    sanitized = re.sub(r"^\s*,\s*|\s*,\s*$", "", sanitized)
+    return re.sub(r"\s+", " ", sanitized).strip()
+
+
 def _translate_character_production_prompt(prompt_text: str) -> str:
-    translated = str(prompt_text or "").strip()
+    translated = _sanitize_sfw_prompt_terms(prompt_text)
     if not translated:
         return translated
     for pattern, replacement in (
@@ -326,6 +384,27 @@ def _translate_character_production_prompt(prompt_text: str) -> str:
         translated = re.sub(pattern, replacement, translated, flags=re.IGNORECASE)
     translated = re.sub(r"\s+", " ", translated).strip()
     return _merge_comma_terms(CHARACTER_PRODUCTION_POSITIVE_SKELETON, translated)
+
+
+def _translate_portrait_production_prompt(prompt_text: str) -> str:
+    translated = _sanitize_portrait_prompt_terms(prompt_text)
+    if not translated:
+        return translated
+    for pattern, replacement in (
+        (r"주인공급", "heroine-grade"),
+        (r"미소녀", "beautiful girl"),
+        (r"캐릭터", "character"),
+        (r"초상", "portrait"),
+        (r"얼굴", "face focus"),
+        (r"상반신", "upper body"),
+        (r"흉상", "bust portrait"),
+        (r"프로필사진", "profile portrait"),
+        (r"프로필", "profile portrait"),
+    ):
+        translated = re.sub(pattern, replacement, translated, flags=re.IGNORECASE)
+    translated = re.sub(r"\bfull body\b", "upper body portrait", translated, flags=re.IGNORECASE)
+    translated = re.sub(r"\s+", " ", translated).strip()
+    return _merge_comma_terms(PORTRAIT_PRODUCTION_POSITIVE_SKELETON, translated)
 
 
 def _merge_comma_terms(*segments: str) -> str:
@@ -379,18 +458,42 @@ def _build_character_production_runtime(
     negative_prompt: str,
     subject_dominance: Any,
 ) -> Optional[Dict[str, Any]]:
+    if _is_portrait_production_request(prompt):
+        negative_prompt_text = str(negative_prompt or "").strip()
+        source_prompt = _sanitize_portrait_prompt_terms(prompt)
+        translated_prompt = _translate_portrait_production_prompt(source_prompt)
+        final_negative_prompt = PORTRAIT_PRODUCTION_NEGATIVE_BASELINE
+        if negative_prompt_text:
+            final_negative_prompt = _merge_comma_terms(PORTRAIT_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
+        return {
+            "preset": PORTRAIT_PRODUCTION_PRESET,
+            "source_prompt": source_prompt,
+            "translated_prompt": translated_prompt,
+            "prompt": translated_prompt,
+            "negative_prompt": final_negative_prompt,
+            "negative_baseline": PORTRAIT_PRODUCTION_NEGATIVE_BASELINE,
+            "subject_dominance": None,
+            "subject_dominance_ratio": None,
+            "subject_dominance_rule": None,
+            "steps": CHARACTER_PRODUCTION_STEPS,
+            "cfg": PORTRAIT_PRODUCTION_CFG,
+            "sampler_name": PORTRAIT_PRODUCTION_SAMPLER,
+            "scheduler": PORTRAIT_PRODUCTION_SCHEDULER,
+            "prompt_translation_policy": "portrait-skeleton + keyword-translate + sfw-sanitize",
+        }
     if not _is_character_production_request(prompt):
         return None
     negative_prompt_text = str(negative_prompt or "").strip()
     dominance_pct, normalized_subject_dominance, subject_rule = _normalize_subject_dominance(subject_dominance)
-    translated_prompt = _translate_character_production_prompt(prompt)
+    source_prompt = _sanitize_sfw_prompt_terms(prompt)
+    translated_prompt = _translate_character_production_prompt(source_prompt)
     final_prompt = f"{translated_prompt}, {subject_rule}" if subject_rule else translated_prompt
     final_negative_prompt = CHARACTER_PRODUCTION_NEGATIVE_BASELINE
     if negative_prompt_text:
         final_negative_prompt = _merge_comma_terms(CHARACTER_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
     return {
         "preset": CHARACTER_PRODUCTION_PRESET,
-        "source_prompt": str(prompt or "").strip(),
+        "source_prompt": source_prompt,
         "translated_prompt": translated_prompt,
         "prompt": final_prompt,
         "negative_prompt": final_negative_prompt,
@@ -802,6 +905,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         project_name = kwargs.get("project_name")
         artifact_name = kwargs.get("artifact_name")
         category = str(kwargs.get("category") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
+        explicit_dimensions = isinstance(kwargs.get("width"), int) and int(kwargs.get("width")) > 0 and isinstance(kwargs.get("height"), int) and int(kwargs.get("height")) > 0
         width, height = _resolve_dimensions(aspect, kwargs.get("width"), kwargs.get("height"))
         steps = int(kwargs.get("steps")) if isinstance(kwargs.get("steps"), int) and int(kwargs.get("steps")) > 0 else DEFAULT_STEPS
         cfg = float(kwargs.get("cfg_scale")) if isinstance(kwargs.get("cfg_scale"), (int, float)) and float(kwargs.get("cfg_scale")) > 0 else DEFAULT_CFG
@@ -836,6 +940,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         subject_dominance_rule: Optional[str] = None
         if runtime_preset is not None:
             preset_name = str(runtime_preset.get("preset") or CHARACTER_PRODUCTION_PRESET)
+            source_prompt = str(runtime_preset.get("source_prompt") or source_prompt)
             prompt_for_generation = str(runtime_preset.get("prompt") or prompt)
             negative_prompt = str(runtime_preset.get("negative_prompt") or negative_prompt)
             steps = int(runtime_preset.get("steps") or steps)
@@ -845,6 +950,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             prompt_translation_policy = str(runtime_preset.get("prompt_translation_policy") or prompt_translation_policy)
             subject_dominance_value = runtime_preset.get("subject_dominance")
             subject_dominance_rule = runtime_preset.get("subject_dominance_rule")
+            if preset_name == PORTRAIT_PRODUCTION_PRESET and not explicit_dimensions:
+                width, height = PORTRAIT_PRODUCTION_WIDTH, PORTRAIT_PRODUCTION_HEIGHT
 
         lora_stack = _resolve_lora_stack(kwargs, runtime_preset=runtime_preset)
 
@@ -1157,7 +1264,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "prompt_translation_policy": prompt_translation_policy,
             "subject_dominance": subject_dominance_value,
             "subject_dominance_rule": subject_dominance_rule,
-            "negative_baseline": CHARACTER_PRODUCTION_NEGATIVE_BASELINE if preset_name == CHARACTER_PRODUCTION_PRESET else None,
+            "negative_baseline": runtime_preset.get("negative_baseline") if runtime_preset is not None else None,
             "negative_prompt": negative_prompt,
             "vae": vae,
             "loras": lora_stack,
@@ -1261,7 +1368,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "prompt_translation_policy": prompt_translation_policy,
                 "subject_dominance": subject_dominance_value,
                 "subject_dominance_rule": subject_dominance_rule,
-                "negative_baseline": CHARACTER_PRODUCTION_NEGATIVE_BASELINE if preset_name == CHARACTER_PRODUCTION_PRESET else None,
+                "negative_baseline": runtime_preset.get("negative_baseline") if runtime_preset is not None else None,
                 "negative_prompt": negative_prompt,
                 "width": width,
                 "height": height,
