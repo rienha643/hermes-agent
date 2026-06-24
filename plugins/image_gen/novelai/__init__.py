@@ -1041,6 +1041,29 @@ class NovelAIImageGenProvider(ImageGenProvider):
         if kwargs.get("dry_run_request"):
             width = kwargs.get("width", NAI_DEFAULT_WIDTH)
             height = kwargs.get("height", NAI_DEFAULT_HEIGHT)
+            dry_run_reserved = {
+                "artifact_name",
+                "dry_run_request",
+                "endpoint",
+                "height",
+                "high_res_approved",
+                "high_resolution",
+                "live_generation_approved",
+                "model",
+                "negative_prompt",
+                "run_id",
+                "save_raw_response",
+                "seed",
+                "source_png",
+                "source_sidecar_dir",
+                "timeout",
+                "upscale",
+                "width",
+            }
+            parameter_overrides = {
+                key: value for key, value in kwargs.items()
+                if key not in dry_run_reserved and value is not None
+            }
             payload = build_novelai_request_payload(
                 prompt=prompt,
                 width=width,
@@ -1051,6 +1074,7 @@ class NovelAIImageGenProvider(ImageGenProvider):
                 upscale=bool(kwargs.get("upscale", False)),
                 high_resolution=bool(kwargs.get("high_resolution", False)),
                 seed=kwargs.get("seed"),
+                **parameter_overrides,
             )
             return success_response(
                 image="",

@@ -1036,6 +1036,46 @@ IMAGE_GENERATE_SCHEMA = {
                 "type": "integer",
                 "description": "Optional explicit output height in pixels. When set with width, provider defaults such as square 1024x1024 must not override it.",
             },
+            "seed": {
+                "type": "integer",
+                "description": "Optional deterministic generation seed. NovelAI preserves this in request sidecars for reproducible comparisons.",
+            },
+            "steps": {
+                "type": "integer",
+                "description": "Optional provider sampling step count. For NovelAI this maps to the `steps` request parameter.",
+            },
+            "scale": {
+                "type": "number",
+                "description": "Optional provider guidance scale. For NovelAI this maps to the `scale` request parameter.",
+            },
+            "sampler": {
+                "type": "string",
+                "description": "Optional provider sampler id. For NovelAI use ids such as `k_dpmpp_sde` only when a specific sampler is intended.",
+            },
+            "cfg_rescale": {
+                "type": "number",
+                "description": "Optional NovelAI CFG rescale value. Omit to use the provider default.",
+            },
+            "uc_preset": {
+                "type": "integer",
+                "description": "Optional NovelAI undesired-content preset value. Omit to use the Hermes baseline.",
+            },
+            "noise_schedule": {
+                "type": "string",
+                "description": "Optional NovelAI noise schedule, for example `karras`. Omit to use the provider default.",
+            },
+            "add_quality_tags": {
+                "type": "boolean",
+                "description": "Optional NovelAI quality tag toggle. Omit to use the Hermes baseline.",
+            },
+            "auto_smea": {
+                "type": "boolean",
+                "description": "Optional NovelAI SMEA toggle. Omit to use the provider default.",
+            },
+            "dynamic_thresholding": {
+                "type": "boolean",
+                "description": "Optional NovelAI dynamic-thresholding toggle. Omit to use the provider default.",
+            },
             "live_generation_approved": {
                 "type": "boolean",
                 "description": (
@@ -1154,6 +1194,16 @@ def _dispatch_to_plugin_provider(
     subject_dominance: float | int | None = None,
     width: int | None = None,
     height: int | None = None,
+    seed: int | None = None,
+    steps: int | None = None,
+    scale: float | int | None = None,
+    sampler: str | None = None,
+    cfg_rescale: float | int | None = None,
+    uc_preset: int | None = None,
+    noise_schedule: str | None = None,
+    add_quality_tags: bool | None = None,
+    auto_smea: bool | None = None,
+    dynamic_thresholding: bool | None = None,
     live_generation_approved: bool | None = None,
     high_res_approved: bool | None = None,
 ):
@@ -1246,6 +1296,27 @@ def _dispatch_to_plugin_provider(
             kwargs["width"] = width
         if height is not None:
             kwargs["height"] = height
+        if seed is not None:
+            kwargs["seed"] = seed
+        if steps is not None:
+            kwargs["steps"] = steps
+        if scale is not None:
+            kwargs["scale"] = scale
+        if sampler is not None:
+            kwargs["sampler"] = sampler
+        if cfg_rescale is not None:
+            kwargs["cfg_rescale"] = cfg_rescale
+        if uc_preset is not None:
+            kwargs["ucPreset"] = uc_preset
+        if noise_schedule is not None:
+            kwargs["noise_schedule"] = noise_schedule
+        if add_quality_tags is not None:
+            kwargs["qualityToggle"] = add_quality_tags
+            kwargs["add_quality_tags"] = add_quality_tags
+        if auto_smea is not None:
+            kwargs["autoSmea"] = auto_smea
+        if dynamic_thresholding is not None:
+            kwargs["dynamic_thresholding"] = dynamic_thresholding
         if live_generation_approved is not None:
             kwargs["live_generation_approved"] = live_generation_approved
         if high_res_approved is not None:
@@ -1292,6 +1363,16 @@ def _handle_image_generate(args, **kw):
     subject_dominance = args.get("subject_dominance")
     width = args.get("width")
     height = args.get("height")
+    seed = args.get("seed")
+    steps = args.get("steps")
+    scale = args.get("scale")
+    sampler = args.get("sampler")
+    cfg_rescale = args.get("cfg_rescale")
+    uc_preset = args.get("uc_preset")
+    noise_schedule = args.get("noise_schedule")
+    add_quality_tags = args.get("add_quality_tags")
+    auto_smea = args.get("auto_smea")
+    dynamic_thresholding = args.get("dynamic_thresholding")
     live_generation_approved = args.get("live_generation_approved")
     high_res_approved = args.get("high_res_approved")
     task_id = kw.get("task_id")
@@ -1320,6 +1401,16 @@ def _handle_image_generate(args, **kw):
         subject_dominance=subject_dominance if isinstance(subject_dominance, (int, float)) else None,
         width=width if isinstance(width, int) and width > 0 else None,
         height=height if isinstance(height, int) and height > 0 else None,
+        seed=seed if isinstance(seed, int) and seed >= 0 else None,
+        steps=steps if isinstance(steps, int) and steps > 0 else None,
+        scale=scale if isinstance(scale, (int, float)) and scale > 0 else None,
+        sampler=str(sampler).strip() if isinstance(sampler, str) and sampler.strip() else None,
+        cfg_rescale=cfg_rescale if isinstance(cfg_rescale, (int, float)) and cfg_rescale >= 0 else None,
+        uc_preset=uc_preset if isinstance(uc_preset, int) and uc_preset >= 0 else None,
+        noise_schedule=str(noise_schedule).strip() if isinstance(noise_schedule, str) and noise_schedule.strip() else None,
+        add_quality_tags=add_quality_tags if isinstance(add_quality_tags, bool) else None,
+        auto_smea=auto_smea if isinstance(auto_smea, bool) else None,
+        dynamic_thresholding=dynamic_thresholding if isinstance(dynamic_thresholding, bool) else None,
         live_generation_approved=live_generation_approved if isinstance(live_generation_approved, bool) else None,
         high_res_approved=high_res_approved if isinstance(high_res_approved, bool) else None,
     )

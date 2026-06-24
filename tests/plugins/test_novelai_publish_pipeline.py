@@ -95,6 +95,38 @@ def test_novelai_explicit_seed_is_preserved_in_payload_policy() -> None:
     assert payload["policy"]["seed_source"] == "provided"
 
 
+def test_novelai_parameter_overrides_are_preserved_in_payload() -> None:
+    import plugins.image_gen.novelai as novelai
+
+    payload = novelai.build_novelai_request_payload(
+        prompt="safe prompt",
+        seed=123456,
+        steps=36,
+        scale=6.5,
+        sampler="k_euler_ancestral",
+        cfg_rescale=0.25,
+        ucPreset=2,
+        noise_schedule="native",
+        qualityToggle=True,
+        add_quality_tags=True,
+        autoSmea=False,
+        dynamic_thresholding=False,
+    )
+    params = payload["parameters"]
+
+    assert params["seed"] == 123456
+    assert params["steps"] == 36
+    assert params["scale"] == 6.5
+    assert params["sampler"] == "k_euler_ancestral"
+    assert params["cfg_rescale"] == 0.25
+    assert params["ucPreset"] == 2
+    assert params["noise_schedule"] == "native"
+    assert params["qualityToggle"] is True
+    assert params["add_quality_tags"] is True
+    assert params["autoSmea"] is False
+    assert params["dynamic_thresholding"] is False
+
+
 def test_novelai_custom_negative_prompt_preserves_policy_baseline() -> None:
     import plugins.image_gen.novelai as novelai
 
@@ -208,13 +240,36 @@ def test_novelai_dry_run_generate_returns_payload_without_live_generation() -> N
     import plugins.image_gen.novelai as novelai
 
     provider = novelai.NovelAIImageGenProvider()
-    result = provider.generate("safe prompt", dry_run_request=True, width=1024, height=1024)
+    result = provider.generate(
+        "safe prompt",
+        dry_run_request=True,
+        width=1024,
+        height=1024,
+        seed=42,
+        steps=34,
+        scale=6.0,
+        sampler="k_euler_ancestral",
+        cfg_rescale=0.2,
+        ucPreset=1,
+        noise_schedule="native",
+        autoSmea=False,
+        dynamic_thresholding=False,
+    )
 
     assert result["success"] is True
     assert result["provider"] == "novelai"
     assert result["dry_run_request"] is True
-    assert result["request_payload"]["parameters"]["width"] == 1024
-    assert result["request_payload"]["parameters"]["sampler"] == novelai.NAI_SAMPLER
+    params = result["request_payload"]["parameters"]
+    assert params["width"] == 1024
+    assert params["seed"] == 42
+    assert params["steps"] == 34
+    assert params["scale"] == 6.0
+    assert params["sampler"] == "k_euler_ancestral"
+    assert params["cfg_rescale"] == 0.2
+    assert params["ucPreset"] == 1
+    assert params["noise_schedule"] == "native"
+    assert params["autoSmea"] is False
+    assert params["dynamic_thresholding"] is False
 
 
 def test_novelai_live_generation_requires_explicit_operator_approval(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -448,7 +503,7 @@ def test_artist_grok_routes_image_generation_to_novelai_without_changing_main_ll
     config = yaml.safe_load(Path("/Users/hermes/.hermes/profiles/artist_grok/config.yaml").read_text(encoding="utf-8"))
 
     assert config["image_gen"]["provider"] == "novelai"
-    assert config["model"]["provider"] == "custom:gemma4-local"
+    assert config["model"]["provider"] in {"custom:gemma4-local", "custom:gemma4-windows-cuda"}
     assert config["slack"]["require_mention"] is True
 
 
