@@ -92,6 +92,7 @@ STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
 
 CHARACTER_PRODUCTION_PRESET = "character_production"
 PORTRAIT_PRODUCTION_PRESET = "portrait_production"
+V8_STYLE_WORKFLOW_PRESET = "v8_style_workflow"
 DEFAULT_WORKFLOW_KEY = "txt2img_minimal_v1"
 CHARACTER_KEY_VISUAL_WORKFLOW_KEY = "character_key_visual_txt2img_v1"
 PORTRAIT_WORKFLOW_KEY = "portrait_round_v1_txt2img_v1"
@@ -105,6 +106,25 @@ PORTRAIT_PRODUCTION_CFG = 6.0
 PORTRAIT_PRODUCTION_SAMPLER = "euler"
 PORTRAIT_PRODUCTION_SCHEDULER = "normal"
 PORTRAIT_PRODUCTION_SEED = 12345
+V8_STYLE_WORKFLOW_KEYWORDS: Tuple[str, ...] = (
+    "v8_style_workflow",
+    "v8 workflow",
+    "use v8",
+    "이미지_v8",
+    "v8 화풍",
+    "v8 워크플로우",
+)
+V8_STYLE_SUBJECT_BASELINE = (
+    "1girl, solo, anime girl, athletic anime heroine, visible human face, "
+    "beautiful face, polished eyes, detailed hair, sporty outfit, "
+    "subculture anime game illustration, clean skin lighting, crisp linework, "
+    "bright indoor gym or sports lounge background"
+)
+V8_STYLE_COMPOSITION_GUARD = (
+    "medium full shot, cowboy shot, standing pose, camera at chest height, "
+    "character centered, full torso and upper thighs visible, balanced perspective, "
+    "no first-person perspective"
+)
 CHARACTER_PRODUCTION_POSITIVE_SKELETON = (
     "1girl, solo, full body, standing, looking at viewer, character focus, centered character, "
     "large character, detailed face, detailed eyes, detailed outfit, beautiful young adult woman, "
@@ -130,6 +150,11 @@ CHARACTER_PRODUCTION_NEGATIVE_BASELINE = (
 PORTRAIT_PRODUCTION_NEGATIVE_BASELINE = (
     "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, missing fingers, "
     "distorted face, text, watermark"
+)
+V8_STYLE_NEGATIVE_COMPOSITION_GUARD = (
+    "extreme close-up, close-up, headshot, bust shot, cropped body, pov, first-person view, "
+    "knees foreground, fisheye, face filling frame, body out of frame, male, muscular man, "
+    "camera head, faceless, silhouette-only character, abstract body, monster body"
 )
 CHARACTER_PRODUCTION_KEYWORDS: Tuple[str, ...] = (
     "캐릭터",
@@ -353,6 +378,11 @@ def _is_portrait_production_request(prompt_text: str) -> bool:
     return any(keyword.casefold() in lowered for keyword in PORTRAIT_PRODUCTION_KEYWORDS)
 
 
+def _is_v8_style_workflow_request(prompt_text: str) -> bool:
+    lowered = str(prompt_text or "").casefold()
+    return any(keyword.casefold() in lowered for keyword in V8_STYLE_WORKFLOW_KEYWORDS)
+
+
 def _sanitize_sfw_prompt_terms(prompt_text: str) -> str:
     sanitized = NSFW_WEIGHTED_TAG_RE.sub("", str(prompt_text or ""))
     sanitized = NSFW_TEXT_TAG_RE.sub("", sanitized)
@@ -458,6 +488,37 @@ def _build_character_production_runtime(
     negative_prompt: str,
     subject_dominance: Any,
 ) -> Optional[Dict[str, Any]]:
+    if _is_v8_style_workflow_request(prompt):
+        negative_prompt_text = str(negative_prompt or "").strip()
+        source_prompt = _merge_comma_terms(
+            _sanitize_sfw_prompt_terms(prompt),
+            V8_STYLE_SUBJECT_BASELINE,
+            V8_STYLE_COMPOSITION_GUARD,
+        )
+        final_negative_prompt = _merge_comma_terms(
+            PORTRAIT_PRODUCTION_NEGATIVE_BASELINE,
+            V8_STYLE_NEGATIVE_COMPOSITION_GUARD,
+        )
+        if negative_prompt_text:
+            final_negative_prompt = _merge_comma_terms(final_negative_prompt, negative_prompt_text)
+        return {
+            "preset": V8_STYLE_WORKFLOW_PRESET,
+            "workflow_key": PORTRAIT_WORKFLOW_KEY,
+            "source_prompt": source_prompt,
+            "translated_prompt": source_prompt,
+            "prompt": source_prompt,
+            "negative_prompt": final_negative_prompt,
+            "negative_baseline": PORTRAIT_PRODUCTION_NEGATIVE_BASELINE,
+            "subject_dominance": None,
+            "subject_dominance_ratio": None,
+            "subject_dominance_rule": None,
+            "steps": CHARACTER_PRODUCTION_STEPS,
+            "cfg": PORTRAIT_PRODUCTION_CFG,
+            "sampler_name": PORTRAIT_PRODUCTION_SAMPLER,
+            "scheduler": PORTRAIT_PRODUCTION_SCHEDULER,
+            "use_checkpoint_vae": True,
+            "prompt_translation_policy": "v8-style-workflow + sfw-sanitize + composition-guard + no portrait rewrite",
+        }
     if _is_portrait_production_request(prompt):
         negative_prompt_text = str(negative_prompt or "").strip()
         source_prompt = _sanitize_portrait_prompt_terms(prompt)
@@ -958,7 +1019,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             subject_dominance_value = runtime_preset.get("subject_dominance")
             subject_dominance_rule = runtime_preset.get("subject_dominance_rule")
             workflow_key = str(runtime_preset.get("workflow_key") or workflow_key)
-            if preset_name == PORTRAIT_PRODUCTION_PRESET and not explicit_dimensions:
+            if preset_name in {PORTRAIT_PRODUCTION_PRESET, V8_STYLE_WORKFLOW_PRESET} and not explicit_dimensions:
                 width, height = PORTRAIT_PRODUCTION_WIDTH, PORTRAIT_PRODUCTION_HEIGHT
             if not explicit_seed and isinstance(runtime_preset.get("seed"), int):
                 seed = int(runtime_preset["seed"])

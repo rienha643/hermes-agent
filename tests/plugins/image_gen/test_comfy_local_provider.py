@@ -901,6 +901,7 @@ class TestComfyLocalCharacterProductionPreset:
         prompt,
         negative_prompt=None,
         subject_dominance=None,
+        seed=None,
         model="AOM3A1_orangemixs.safetensors",
         task_context="character production",
         output_filename="heroine_00001_.png",
@@ -1016,6 +1017,7 @@ class TestComfyLocalCharacterProductionPreset:
             artifact_name="heroine_art",
             negative_prompt=negative_prompt,
             subject_dominance=subject_dominance,
+            seed=seed,
             task_context=task_context,
         )
         return result, captured
@@ -1097,6 +1099,82 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["evidence"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["prompt_translation_policy"] == "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize"
+
+    def test_generate_routes_v8_style_request_to_portrait_workflow_without_portrait_rewrite(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt=(
+                "v8_style_workflow, 이미지_v8 workflow, SFW athletic anime heroine, "
+                "head-to-knees framing, gym background, barbell, clear facial features"
+            ),
+            negative_prompt="blurry, watermark, close-up",
+            seed=20260625,
+        )
+
+        assert result["success"] is True
+        assert captured["prompt_payload"]["runtime_preset"] == "v8_style_workflow"
+        assert captured["prompt_payload"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
+        assert captured["metadata"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
+        assert captured["prompt_payload"]["width"] == 1024
+        assert captured["prompt_payload"]["height"] == 1536
+        assert captured["prompt_payload"]["cfg"] == 6.0
+        assert captured["prompt_payload"]["sampler"] == "euler"
+        assert captured["prompt_payload"]["scheduler"] == "normal"
+        assert captured["prompt_payload"]["seed"] == 20260625
+        prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
+        assert "v8_style_workflow" in prompt_text
+        assert "head-to-knees framing" in prompt_text
+        assert "1girl" in prompt_text
+        assert "anime girl" in prompt_text
+        assert "visible human face" in prompt_text
+        assert "subculture anime game illustration" in prompt_text
+        assert "medium full shot" in prompt_text
+        assert "camera at chest height" in prompt_text
+        assert "no first-person perspective" in prompt_text
+        assert "upper body portrait" not in prompt_text
+        negative_text = captured["workflow_json"]["4"]["inputs"]["text"]
+        assert "extreme close-up" in negative_text
+        assert "first-person view" in negative_text
+        assert "knees foreground" in negative_text
+        assert "close-up" in negative_text
+        assert "camera head" in negative_text
+        assert "faceless" in negative_text
+        assert "muscular man" in negative_text
+        assert captured["metadata"]["loras"] == []
+        assert captured["metadata"]["vae"] is None
+        assert "6" not in captured["workflow_json"]
+        assert captured["workflow_json"]["7"]["inputs"]["vae"] == ["1", 2]
+        assert result["preset"] == "v8_style_workflow"
+        assert result["workflow_key"] == "portrait_round_v1_txt2img_v1"
+        assert result["evidence"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
+        assert result["prompt_translation_policy"] == "v8-style-workflow + sfw-sanitize + composition-guard + no portrait rewrite"
+
+    def test_v8_style_composition_only_prompt_keeps_subject_baseline(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt=(
+                "v8_style_workflow, medium full shot, cowboy shot, "
+                "from head to above knees, camera at chest height, balanced perspective"
+            ),
+            seed=20260625,
+        )
+
+        assert result["success"] is True
+        assert captured["prompt_payload"]["runtime_preset"] == "v8_style_workflow"
+        prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
+        assert "1girl" in prompt_text
+        assert "anime girl" in prompt_text
+        assert "athletic anime heroine" in prompt_text
+        assert "visible human face" in prompt_text
+        assert "polished eyes" in prompt_text
+        assert "subculture anime game illustration" in prompt_text
+        assert "medium full shot" in prompt_text
+        negative_text = captured["workflow_json"]["4"]["inputs"]["text"]
+        assert "camera head" in negative_text
+        assert "faceless" in negative_text
+        assert "monster body" in negative_text
 
     def test_generate_sanitizes_weighted_nsfw_tag_from_sfw_portrait_prompt(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(
