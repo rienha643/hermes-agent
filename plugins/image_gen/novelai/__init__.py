@@ -37,6 +37,7 @@ from nas_sync_hooks import queue_nas_sync_hook
 DEFAULT_MODEL = "nai-diffusion-4-5-curated"
 NOVELAI_GENERATE_ENDPOINT = "https://image.novelai.net/ai/generate-image"
 NOVELAI_GENERATE_STREAM_ENDPOINT = "https://image.novelai.net/ai/generate-image-stream"
+NOVELAI_ENCODE_VIBE_ENDPOINT = "https://image.novelai.net/ai/encode-vibe"
 NOVELAI_REQUEST_TIMEOUT_SECONDS = 180
 
 # NovelAI Generation Policy V1 / Hermes Image Generation Standard V1.
@@ -183,12 +184,10 @@ def _coerce_seed(value: Any) -> int:
     return seed
 
 
-def _coerce_reference_images(parameter_overrides: Dict[str, Any]) -> None:
-    """Normalize friendly reference-image kwargs into NovelAI reference arrays."""
+def _extract_reference_image_config(parameter_overrides: Dict[str, Any]) -> tuple[list[str], list[float], list[float]]:
     requested = any(
         key in parameter_overrides
         for key in (
-            "reference_image_multiple",
             "reference_images",
             "reference_image_paths",
             "reference_image",
@@ -196,15 +195,13 @@ def _coerce_reference_images(parameter_overrides: Dict[str, Any]) -> None:
         )
     )
     if not requested:
-        return
+        return [], [], []
     experimental_enabled = bool(parameter_overrides.pop("experimental_reference_images", False))
     if not experimental_enabled:
         raise ValueError(
-            "NovelAI reference images are experimental and failed live smoke testing; "
+            "NovelAI reference images require the experimental encode-vibe path; "
             "set experimental_reference_images=True only for explicit API validation."
         )
-    if parameter_overrides.get("reference_image_multiple"):
-        return
 
     raw_images = (
         parameter_overrides.pop("reference_images", None)
@@ -213,7 +210,7 @@ def _coerce_reference_images(parameter_overrides: Dict[str, Any]) -> None:
         or parameter_overrides.pop("reference_image_path", None)
     )
     if raw_images is None:
-        return
+        return [], [], []
     if isinstance(raw_images, (str, Path)):
         images = [raw_images]
     elif isinstance(raw_images, list):
@@ -221,25 +218,25 @@ def _coerce_reference_images(parameter_overrides: Dict[str, Any]) -> None:
     else:
         raise ValueError("NovelAI reference_image must be a path, base64 string, or list")
 
-    encoded_images: list[str] = []
+    raw_image_base64: list[str] = []
     for item in images:
         if isinstance(item, Path) or (isinstance(item, str) and Path(item).expanduser().exists()):
             path = Path(item).expanduser().resolve(strict=True)
             data = path.read_bytes()
             if not data.startswith(b"\x89PNG\r\n\x1a\n"):
                 raise ValueError(f"NovelAI reference image must be a PNG: {path}")
-            encoded_images.append(base64.b64encode(data).decode("ascii"))
+            raw_image_base64.append(base64.b64encode(data).decode("ascii"))
         elif isinstance(item, str):
             try:
                 base64.b64decode(item, validate=True)
             except Exception as exc:
                 raise ValueError("NovelAI reference_image string must be an existing PNG path or base64 data") from exc
-            encoded_images.append(item)
+            raw_image_base64.append(item)
         else:
             raise ValueError("NovelAI reference_image entries must be paths or base64 strings")
 
-    if not encoded_images:
-        return
+    if not raw_image_base64:
+        return [], [], []
 
     strength = parameter_overrides.pop("reference_strength", None)
     if strength is None:
@@ -249,8 +246,8 @@ def _coerce_reference_images(parameter_overrides: Dict[str, Any]) -> None:
     if isinstance(strength, list):
         strengths = [float(value) for value in strength]
     else:
-        strengths = [float(strength)] * len(encoded_images)
-    if len(strengths) != len(encoded_images):
+        strengths = [float(strength)] * len(raw_image_base64)
+    if len(strengths) != len(raw_image_base64):
         raise ValueError("NovelAI reference_strength count must match reference_image count")
 
     information = parameter_overrides.pop("reference_information_extracted", None)
@@ -261,11 +258,21 @@ def _coerce_reference_images(parameter_overrides: Dict[str, Any]) -> None:
     if isinstance(information, list):
         information_values = [float(value) for value in information]
     else:
-        information_values = [float(information)] * len(encoded_images)
-    if len(information_values) != len(encoded_images):
+        information_values = [float(information)] * len(raw_image_base64)
+    if len(information_values) != len(raw_image_base64):
         raise ValueError("NovelAI reference_information_extracted count must match reference_image count")
 
-    parameter_overrides["reference_image_multiple"] = encoded_images
+    return raw_image_base64, strengths, information_values
+
+
+def _coerce_reference_images(parameter_overrides: Dict[str, Any]) -> None:
+    """Normalize friendly reference-image kwargs into dry-run reference arrays."""
+    if parameter_overrides.get("reference_image_multiple"):
+        return
+    raw_image_base64, strengths, information_values = _extract_reference_image_config(parameter_overrides)
+    if not raw_image_base64:
+        return
+    parameter_overrides["reference_image_multiple"] = raw_image_base64
     parameter_overrides["reference_strength_multiple"] = strengths
     parameter_overrides["reference_information_extracted_multiple"] = information_values
 
@@ -502,6 +509,77 @@ def _post_novelai_generation(
         raise RuntimeError(f"NovelAI generation HTTP {exc.code}: {body[:512]!r}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"NovelAI generation request failed: {exc.reason}") from exc
+
+
+def _post_novelai_encode_vibe(
+    *,
+    image_base64: str,
+    information_extracted: float,
+    model: str,
+    api_key: str,
+    endpoint: str = NOVELAI_ENCODE_VIBE_ENDPOINT,
+    mask: str | None = None,
+    timeout: int = NOVELAI_REQUEST_TIMEOUT_SECONDS,
+) -> str:
+    payload: Dict[str, Any] = {
+        "image": image_base64,
+        "information_extracted": information_extracted,
+        "model": model,
+    }
+    if mask:
+        payload["mask"] = mask
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/octet-stream,*/*",
+            "User-Agent": "Mozilla/5.0 (Hermes Agent; NovelAI vibe encoding)",
+            "Origin": "https://novelai.net",
+            "Referer": "https://novelai.net/",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator-configured endpoint.
+            data = response.read()
+    except urllib.error.HTTPError as exc:
+        body = exc.read()
+        raise RuntimeError(f"NovelAI encode-vibe HTTP {exc.code}: {body[:512]!r}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"NovelAI encode-vibe request failed: {exc.reason}") from exc
+    if not data:
+        raise RuntimeError("NovelAI encode-vibe returned an empty response")
+    return base64.b64encode(data).decode("ascii")
+
+
+def _encode_reference_images_for_live(
+    parameter_overrides: Dict[str, Any],
+    *,
+    api_key: str,
+    model: str,
+    timeout: int,
+) -> Dict[str, Any]:
+    parameter_overrides = dict(parameter_overrides)
+    if parameter_overrides.get("reference_image_multiple"):
+        return parameter_overrides
+    raw_image_base64, strengths, information_values = _extract_reference_image_config(parameter_overrides)
+    if not raw_image_base64:
+        return parameter_overrides
+    parameter_overrides["reference_image_multiple"] = [
+        _post_novelai_encode_vibe(
+            image_base64=image_base64,
+            information_extracted=information_values[index],
+            model=model,
+            api_key=api_key,
+            timeout=timeout,
+        )
+        for index, image_base64 in enumerate(raw_image_base64)
+    ]
+    parameter_overrides["reference_strength_multiple"] = strengths
+    parameter_overrides["reference_information_extracted_multiple"] = information_values
+    return parameter_overrides
 
 
 def _default_dimensions_for_aspect_ratio(aspect_ratio: str) -> tuple[int, int]:
@@ -757,6 +835,13 @@ def _generate_live_novelai_image(
     timeout: int,
     parameter_overrides: Dict[str, Any],
 ) -> Dict[str, Any]:
+    api_key = _novelai_api_key()
+    parameter_overrides = _encode_reference_images_for_live(
+        parameter_overrides,
+        api_key=api_key,
+        model=model,
+        timeout=timeout,
+    )
     payload = build_novelai_request_payload(
         prompt=prompt,
         width=width,
@@ -775,7 +860,7 @@ def _generate_live_novelai_image(
         payload.get("parameters", {}).pop("sm_dyn", None)
     http_response = _post_novelai_generation(
         payload,
-        api_key=_novelai_api_key(),
+        api_key=api_key,
         endpoint=endpoint,
         timeout=timeout,
     )
