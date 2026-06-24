@@ -141,14 +141,24 @@ def _promote_gemma_text_tool_calls(agent: Any, assistant_message: Any) -> bool:
     marker text is removed from the user-visible assistant content.
     """
     content = getattr(assistant_message, "content", None)
-    if not isinstance(content, str) or "<|tool_call>" not in content:
+    reasoning = getattr(assistant_message, "reasoning", None)
+    reasoning_content = getattr(assistant_message, "reasoning_content", None)
+    marker_source = next(
+        (
+            value
+            for value in (content, reasoning_content, reasoning)
+            if isinstance(value, str) and "<|tool_call>" in value
+        ),
+        None,
+    )
+    if marker_source is None:
         return False
     if getattr(assistant_message, "tool_calls", None):
         return False
 
     valid_tools = set(getattr(agent, "valid_tool_names", []) or [])
     promoted = []
-    for idx, match in enumerate(_GEMMA_TEXT_TOOL_CALL_RE.finditer(content)):
+    for idx, match in enumerate(_GEMMA_TEXT_TOOL_CALL_RE.finditer(marker_source)):
         name = match.group(1)
         if name not in valid_tools:
             return False
@@ -167,7 +177,10 @@ def _promote_gemma_text_tool_calls(agent: Any, assistant_message: Any) -> bool:
     if not promoted:
         return False
     assistant_message.tool_calls = promoted
-    assistant_message.content = _GEMMA_TEXT_TOOL_CALL_RE.sub("", content).strip()
+    for field in ("content", "reasoning_content", "reasoning"):
+        value = getattr(assistant_message, field, None)
+        if isinstance(value, str) and "<|tool_call>" in value:
+            setattr(assistant_message, field, _GEMMA_TEXT_TOOL_CALL_RE.sub("", value).strip())
     return True
 
 

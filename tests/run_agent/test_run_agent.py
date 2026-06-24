@@ -2158,6 +2158,23 @@ class TestExecuteToolCalls:
         assert assistant_message.tool_calls is None
         assert "<|tool_call>" in assistant_message.content
 
+    def test_promotes_gemma_text_tool_call_from_reasoning_content(self):
+        agent = SimpleNamespace(valid_tool_names=["image_generate"])
+        assistant_message = SimpleNamespace(
+            content="",
+            reasoning=None,
+            reasoning_content='<|channel>thought<channel|><|tool_call>call:image_generate{prompt:<|"|>safe heroine portrait<|"|>}<tool_call|>',
+            tool_calls=None,
+        )
+
+        assert _promote_gemma_text_tool_calls(agent, assistant_message) is True
+        assert assistant_message.content == ""
+        assert assistant_message.reasoning_content == "<|channel>thought<channel|>"
+        assert len(assistant_message.tool_calls) == 1
+        call = assistant_message.tool_calls[0]
+        assert call.function.name == "image_generate"
+        assert json.loads(call.function.arguments) == {"prompt": "safe heroine portrait"}
+
     def test_single_tool_executed(self, agent):
         tc = _mock_tool_call(name="web_search", arguments='{"q":"test"}', call_id="c1")
         mock_msg = _mock_assistant_msg(content="", tool_calls=[tc])

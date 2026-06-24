@@ -1558,27 +1558,32 @@ _SEIR_BLOCKER_RE = re.compile(
 )
 
 
-def _render_seir_no_artifact_generation_guard() -> str:
+def _render_no_artifact_generation_guard(profile_label: str = "Worker") -> str:
     return (
         "[NO-ARTIFACT COMPLETION GUARD]\n"
         "Final Verdict: BLOCKED_UNVERIFIED_GENERATION\n"
-        "Reason: Seir reported or implied image generation without a current-turn `image_generate` tool result.\n"
+        f"Reason: {profile_label} reported or implied image generation without a current-turn `image_generate` tool result.\n"
         "No image was generated or delivered in this turn.\n"
         "Required Action: rerun the task with a real `image_generate` tool call, or report the exact blocker instead of progress."
     ).strip()
 
 
-def _guard_seir_unverified_generation_claim(
+def _guard_unverified_image_generation_claim(
     text: str,
     *,
     active_profile: str = "",
     turn_tool_names: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> tuple[str, bool]:
-    """Block Seir progress/success prose when no image tool ran this turn."""
+    """Block image-worker progress/success prose when no image tool ran this turn."""
     body = str(text or "")
     if not body:
         return body, False
-    if str(active_profile or "").strip() != "artist_grok":
+    profile = str(active_profile or "").strip()
+    guarded_profiles = {
+        "artist_grok": "Seir",
+        "comfy": "Angelica",
+    }
+    if profile not in guarded_profiles:
         return body, False
     if any(str(name or "") == "image_generate" for name in (turn_tool_names or [])):
         return body, False
@@ -1589,7 +1594,7 @@ def _guard_seir_unverified_generation_claim(
         or _SEIR_GENERATION_SUCCESS_CLAIM_RE.search(body)
     ):
         return body, False
-    return _render_seir_no_artifact_generation_guard(), True
+    return _render_no_artifact_generation_guard(guarded_profiles[profile]), True
 
 
 def _validate_gateway_report_integrity(
@@ -11083,7 +11088,7 @@ class GatewayRunner:
                 for item in (_structured_attachment_debug or {}).get("source_summaries", [])
                 if isinstance(item, dict)
             ]
-            response, _seir_no_artifact_blocked = _guard_seir_unverified_generation_claim(
+            response, _seir_no_artifact_blocked = _guard_unverified_image_generation_claim(
                 response,
                 active_profile=_active_profile,
                 turn_tool_names=_turn_tool_names,
