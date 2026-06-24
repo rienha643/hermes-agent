@@ -1223,6 +1223,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "runtime_preset": preset_name,
             "prompt_translation_policy": prompt_translation_policy,
             "loras": lora_stack,
+            "workflow_key": workflow_key,
         }
         prompt_payload = {
             "prompt": prompt_for_generation,
@@ -1251,11 +1252,13 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "candidate_count": checkpoint_resolution.get("candidate_count"),
             "candidates": checkpoint_resolution.get("candidates"),
             "loras": lora_stack,
+            "workflow_key": workflow_key,
         }
         metadata = {
             "provider": self.name,
             "prompt_id": prompt_id,
             "api_base_url": base_url,
+            "workflow_key": workflow_key,
             "checkpoint": checkpoint,
             "requested_checkpoint": checkpoint_resolution.get("requested_checkpoint", requested_checkpoint),
             "resolved_checkpoint": checkpoint,
@@ -1353,6 +1356,22 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 qualification_report_path = write_qualification_report(bundle["published_dir"], report_payload)
 
         nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
+        evidence = {
+            "workflow_key": workflow_key,
+            "workflow_path": str(bundle["workflow_path"]),
+            "prompt_id": prompt_id,
+            "seed": seed,
+            "vae": vae,
+            "vae_report_value": vae if vae is not None else "checkpoint_builtin_vae",
+            "loras": lora_stack,
+            "output_image": output_image,
+            "artifact_path": str(bundle["primary_image_path"]),
+            "output_source_origin": source_origin,
+            "reporting_note": (
+                "Use evidence.workflow_key for the workflow key. "
+                "Do not substitute workflow_path when reporting workflow_key."
+            ),
+        }
         return success_response(
             image=str(bundle["primary_image_path"]),
             model=checkpoint,
@@ -1377,9 +1396,11 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "subject_dominance_rule": subject_dominance_rule,
                 "negative_baseline": runtime_preset.get("negative_baseline") if runtime_preset is not None else None,
                 "negative_prompt": negative_prompt,
+                "evidence": evidence,
                 "workflow_key": workflow_key,
                 "seed": seed,
                 "vae": vae,
+                "vae_report_value": evidence["vae_report_value"],
                 "loras": lora_stack,
                 "width": width,
                 "height": height,
