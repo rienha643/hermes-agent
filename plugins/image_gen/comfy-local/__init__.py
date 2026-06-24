@@ -939,6 +939,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         prompt_translation_policy = "raw"
         subject_dominance_value: Optional[float] = None
         subject_dominance_rule: Optional[str] = None
+        workflow_key = "txt2img_minimal_v1"
         if runtime_preset is not None:
             preset_name = str(runtime_preset.get("preset") or CHARACTER_PRODUCTION_PRESET)
             source_prompt = str(runtime_preset.get("source_prompt") or source_prompt)
@@ -951,6 +952,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             prompt_translation_policy = str(runtime_preset.get("prompt_translation_policy") or prompt_translation_policy)
             subject_dominance_value = runtime_preset.get("subject_dominance")
             subject_dominance_rule = runtime_preset.get("subject_dominance_rule")
+            workflow_key = str(runtime_preset.get("workflow_key") or workflow_key)
             if preset_name == PORTRAIT_PRODUCTION_PRESET and not explicit_dimensions:
                 width, height = PORTRAIT_PRODUCTION_WIDTH, PORTRAIT_PRODUCTION_HEIGHT
             if not explicit_seed and isinstance(runtime_preset.get("seed"), int):
@@ -1375,6 +1377,10 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "subject_dominance_rule": subject_dominance_rule,
                 "negative_baseline": runtime_preset.get("negative_baseline") if runtime_preset is not None else None,
                 "negative_prompt": negative_prompt,
+                "workflow_key": workflow_key,
+                "seed": seed,
+                "vae": vae,
+                "loras": lora_stack,
                 "width": width,
                 "height": height,
                 "steps": steps,
@@ -1410,6 +1416,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "nas_evidence": bundle.get("nas_evidence"),
                 "slack_upload_evidence": False,
                 "output_source_origin": source_origin,
+                "output_image": output_image,
                 "prompt_id": prompt_id,
                 "category": category,
                 "api_base_url": base_url,
