@@ -170,6 +170,22 @@ def test_novelai_dry_run_reference_image_path_is_encoded(tmp_path: Path) -> None
     assert params["reference_information_extracted_multiple"] == [0.9]
 
 
+def test_novelai_rejects_source_image_task_text_as_plain_prompt() -> None:
+    import plugins.image_gen.novelai as novelai
+
+    provider = novelai.NovelAIImageGenProvider()
+    result = provider.generate(
+        'source_image_path: /Volumes/SSD_Hermes/HermesWork/Image/260624_이피치/이피치_v19.png, '
+        'operation: "source_preserving_postprocess", title: "restore v19"',
+        live_generation_approved=True,
+    )
+
+    assert result["success"] is False
+    assert result["error_type"] == "source_image_task_prompt_only"
+    assert result["detected_source_image_task_prompt_only"] is True
+    assert result["completion_report_forbidden"] is True
+
+
 def test_novelai_reference_images_are_gated_after_failed_live_smoke(tmp_path: Path) -> None:
     import plugins.image_gen.novelai as novelai
 

@@ -14,6 +14,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import struct
 import time
@@ -54,6 +55,11 @@ LIVE_GENERATION_REQUIRES_APPROVAL = "LIVE_GENERATION_REQUIRES_APPROVAL"
 NAI_DEFAULT_WIDTH = 1024
 NAI_DEFAULT_HEIGHT = 1024
 NAI_SEED_MAX = 2**32 - 1
+SOURCE_IMAGE_PROMPT_ONLY_RE = re.compile(
+    r"(source_image_path\s*:|source_image\s*:|operation\s*:\s*[\"']?(?:source_preserving_postprocess|postprocess|local_retouch|masked_inpaint|upscale)|"
+    r"source[-_ ]preserving[-_ ]postprocess)",
+    re.IGNORECASE,
+)
 NAI_DEFAULT_POSITIVE_PROMPT_PREFIX = """best quality,
 high quality,
 subculture illustration,
@@ -1269,6 +1275,24 @@ class NovelAIImageGenProvider(ImageGenProvider):
         source_png = kwargs.get("source_png")
         run_id = str(kwargs.get("run_id") or "").strip() or _default_run_id()
         model = str(kwargs.get("model") or DEFAULT_MODEL)
+        if not source_png and SOURCE_IMAGE_PROMPT_ONLY_RE.search(str(prompt or "")):
+            return error_response(
+                error=(
+                    "source-image task text was passed as a plain NovelAI prompt. "
+                    "NovelAI generation requires an actual image-generation prompt; source-image postprocess tasks must use an explicit supported backend."
+                ),
+                error_type="source_image_task_prompt_only",
+                provider="novelai",
+                model=model,
+                prompt=prompt,
+                aspect_ratio=resolve_aspect_ratio(aspect_ratio),
+                extra={
+                    "detected_source_image_task_prompt_only": True,
+                    "required_backend": "source-image-capable image backend",
+                    "final_report_allowed": False,
+                    "completion_report_forbidden": True,
+                },
+            )
         if kwargs.get("dry_run_request"):
             width = kwargs.get("width", NAI_DEFAULT_WIDTH)
             height = kwargs.get("height", NAI_DEFAULT_HEIGHT)

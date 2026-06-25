@@ -1149,6 +1149,13 @@ def success_response(
     }
     if extra:
         payload.update(extra)
+    if isinstance(payload.get("report_evidence"), dict):
+        payload["completion_report_contract"] = {
+            "authoritative_source": "report_evidence",
+            "rule": "Copy values from report_evidence exactly. Do not infer, rewrite, normalize, or summarize paths and identifiers.",
+            "unknown_policy": "If a requested report field is absent from report_evidence, use evidence/tool fields next; otherwise report UNKNOWN.",
+            "required_exact_fields": sorted(payload["report_evidence"].keys()),
+        }
     return payload
 
 
