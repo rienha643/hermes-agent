@@ -95,11 +95,14 @@ CHARACTER_PRODUCTION_PRESET = "character_production"
 PORTRAIT_PRODUCTION_PRESET = "portrait_production"
 V8_STYLE_WORKFLOW_PRESET = "v8_style_workflow"
 SOURCE_PRESERVING_POSTPROCESS_OPERATION = "source_preserving_postprocess"
+UPSCALE_OPERATION = "upscale"
 FACE8M_HAND9C_POSTPROCESS_PRESET = "face8m_d035_hand9c_d025"
+DEFAULT_UPSCALE_MODEL = "4x-UltraSharp.pth"
 DEFAULT_WORKFLOW_KEY = "txt2img_minimal_v1"
 CHARACTER_KEY_VISUAL_WORKFLOW_KEY = "character_key_visual_txt2img_v1"
 PORTRAIT_WORKFLOW_KEY = "portrait_round_v1_txt2img_v1"
 SOURCE_PRESERVING_FACE_HAND_WORKFLOW_KEY = "source_preserving_face8m_hand9c_v1"
+SOURCE_IMAGE_UPSCALE_WORKFLOW_KEY = "source_image_4x_ultrasharp_v1"
 CHARACTER_PRODUCTION_STEPS = 28
 CHARACTER_PRODUCTION_CFG = 5.0
 CHARACTER_PRODUCTION_SAMPLER = "dpmpp_2m"
@@ -361,6 +364,31 @@ def _download_comfy_output_file(base_url: str, output_image: Dict[str, Any], pro
     return cache_path
 
 
+def _make_slack_preview_image(image_path: Path, *, max_edge: int = 2048) -> Optional[Path]:
+    """Create a smaller PNG preview for Slack when a generated PNG is too large."""
+    try:
+        from PIL import Image
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("slack_preview_pillow_unavailable path=%s err=%s", image_path, exc)
+        return None
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+            largest = max(width, height)
+            if largest <= max_edge:
+                return None
+            scale = max_edge / float(largest)
+            preview_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+            preview = image.convert("RGBA")
+            preview.thumbnail(preview_size, Image.Resampling.LANCZOS)
+            preview_path = image_path.with_name(f"{image_path.stem}_slack_preview.png")
+            preview.save(preview_path, "PNG", optimize=True)
+            return preview_path
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("slack_preview_create_failed path=%s err=%s", image_path, exc)
+        return None
+
+
 def _upload_comfy_input_file(base_url: str, source_path: Path) -> Dict[str, Any]:
     """Upload a local source image to ComfyUI input storage for LoadImage."""
     if not source_path.is_file():
@@ -497,6 +525,20 @@ def _build_face8m_hand9c_postprocess_workflow(
             "class_type": "DetailerForEach",
         },
         "99": {"inputs": {"images": ["11", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
+    }
+
+
+def _build_source_image_upscale_workflow(
+    *,
+    source_image_name: str,
+    upscale_model: str,
+    filename_prefix: str,
+) -> Dict[str, Any]:
+    return {
+        "1": {"inputs": {"image": source_image_name}, "class_type": "LoadImage"},
+        "2": {"inputs": {"model_name": upscale_model}, "class_type": "UpscaleModelLoader"},
+        "3": {"inputs": {"upscale_model": ["2", 0], "image": ["1", 0]}, "class_type": "ImageUpscaleWithModel"},
+        "99": {"inputs": {"images": ["3", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
     }
 
 
@@ -1128,10 +1170,11 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         operation = str(kwargs.get("operation") or "").strip()
         source_image_path = str(kwargs.get("source_image_path") or kwargs.get("source_image") or "").strip()
         postprocess_preset = str(kwargs.get("postprocess_preset") or "").strip()
+        source_image_upscale = operation == UPSCALE_OPERATION
         source_preserving_postprocess = (
             operation in {"postprocess", SOURCE_PRESERVING_POSTPROCESS_OPERATION}
             or postprocess_preset == FACE8M_HAND9C_POSTPROCESS_PRESET
-            or bool(source_image_path)
+            or (bool(source_image_path) and not source_image_upscale)
         )
         runtime_preset: Optional[Dict[str, Any]] = None
         try:
@@ -1252,6 +1295,250 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             )
             return result
         checkpoint = str(checkpoint_resolution.get("resolved_checkpoint") or checkpoint)
+
+        if source_image_upscale:
+            if not source_image_path:
+                return error_response(
+                    error="source_image_path is required for ComfyUI source-image upscale",
+                    error_type="invalid_argument",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            source_input_path = Path(source_image_path).expanduser()
+            upscale_model = str(kwargs.get("upscale_model") or DEFAULT_UPSCALE_MODEL).strip() or DEFAULT_UPSCALE_MODEL
+            try:
+                uploaded_source = _upload_comfy_input_file(base_url, source_input_path)
+            except Exception as exc:  # noqa: BLE001
+                return error_response(
+                    error=f"ComfyUI source image upload failed: {exc}",
+                    error_type="api_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            workflow_key = SOURCE_IMAGE_UPSCALE_WORKFLOW_KEY
+            workflow = _build_source_image_upscale_workflow(
+                source_image_name=str(uploaded_source["name"]),
+                upscale_model=upscale_model,
+                filename_prefix=filename_prefix,
+            )
+            payload = {"prompt": workflow}
+
+            try:
+                response = requests.post(f"{base_url}/prompt", json=payload, timeout=30)
+                response.raise_for_status()
+                submit = response.json()
+            except Exception as exc:  # noqa: BLE001
+                return error_response(
+                    error=f"ComfyUI upscale prompt submission failed: {exc}",
+                    error_type="api_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            prompt_id = str(submit.get("prompt_id") or "").strip()
+            if not prompt_id:
+                return error_response(
+                    error="ComfyUI upscale prompt response did not include prompt_id",
+                    error_type="invalid_response",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            history_payload: Optional[Dict[str, Any]] = None
+            deadline = time.monotonic() + 300
+            while time.monotonic() < deadline:
+                try:
+                    history_response = requests.get(_history_url(base_url, prompt_id), timeout=15)
+                    history_response.raise_for_status()
+                    history_payload = history_response.json()
+                except Exception as exc:  # noqa: BLE001
+                    return error_response(
+                        error=f"ComfyUI upscale history lookup failed: {exc}",
+                        error_type="api_error",
+                        provider=self.name,
+                        model=checkpoint,
+                        prompt=prompt,
+                        aspect_ratio=aspect,
+                    )
+                if isinstance(history_payload, dict) and _history_completed_successfully(history_payload, prompt_id):
+                    break
+                time.sleep(1)
+            else:
+                return error_response(
+                    error=f"ComfyUI upscale history timed out before success for prompt_id={prompt_id}",
+                    error_type="timeout",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            output_image = _first_output_image(history_payload or {}, prompt_id)
+            if not output_image:
+                return error_response(
+                    error="ComfyUI upscale history success did not contain an output image",
+                    error_type="invalid_response",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            output_source_path = _find_comfy_output_file(output_image)
+            source_origin = "local_output_dir"
+            if output_source_path is None:
+                output_source_path = _download_comfy_output_file(base_url, output_image, prompt_id)
+                source_origin = "remote_view_download" if output_source_path is not None else "missing"
+            if output_source_path is None:
+                return error_response(
+                    error="ComfyUI upscale output file not found after history success",
+                    error_type="io_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            if not wait_for_file_stable(output_source_path, checks=2, delay_seconds=0.1):
+                return error_response(
+                    error=f"ComfyUI upscale output file did not stabilize: {output_source_path}",
+                    error_type="io_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            created_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            prompt_payload = {
+                "prompt": prompt_for_generation,
+                "source_prompt": source_prompt,
+                "source_image_path": str(source_input_path),
+                "uploaded_source": uploaded_source,
+                "runtime_preset": "source_image_upscale",
+                "workflow_key": workflow_key,
+                "upscale_model": upscale_model,
+                "raw_prompt_payload": {
+                    "submit_payload": payload,
+                    "submit_response": submit,
+                    "history_status": (history_payload or {}).get(prompt_id, {}).get("status", {}),
+                    "output_image": output_image,
+                    "system_stats": system_payload,
+                    "workflow_key": workflow_key,
+                },
+            }
+            metadata = {
+                "provider": self.name,
+                "prompt_id": prompt_id,
+                "api_base_url": base_url,
+                "workflow_key": workflow_key,
+                "checkpoint": None,
+                "source_image_path": str(source_input_path),
+                "uploaded_source": uploaded_source,
+                "upscale_model": upscale_model,
+                "created_at": created_at,
+                "category": "upscale",
+                "output_source_path": str(output_source_path),
+                "output_source_origin": source_origin,
+                "local_status": "업스케일 완료",
+                "publish_status": "HermesWork publish 완료",
+                "slack_status": "primary image 준비됨",
+            }
+            try:
+                bundle = publish_filesystem_image_bundle(
+                    output_source_path,
+                    prefix=filename_prefix,
+                    project_name=project_name,
+                    artifact_name=artifact_name or filename_prefix,
+                    category="upscale",
+                    workflow_json=workflow,
+                    prompt_payload=prompt_payload,
+                    metadata=metadata,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return error_response(
+                    error=f"Could not publish ComfyUI upscale bundle to HermesWork: {exc}",
+                    error_type="io_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            evidence = {
+                "workflow_key": workflow_key,
+                "workflow_path": str(bundle["workflow_path"]),
+                "prompt_id": prompt_id,
+                "source_image": str(source_input_path),
+                "uploaded_source": uploaded_source,
+                "upscale_model": upscale_model,
+                "output_image": output_image,
+                "artifact_path": str(bundle["primary_image_path"]),
+                "output_source_origin": source_origin,
+            }
+            slack_preview_path = _make_slack_preview_image(bundle["primary_image_path"])
+            media_files = [str(slack_preview_path or bundle["primary_image_path"])]
+            artifact_files = [
+                str(bundle["primary_image_path"]),
+                str(bundle["workflow_path"]),
+                str(bundle["prompt_path"]),
+                str(bundle["metadata_path"]),
+                str(bundle["manifest_path"]),
+                str(bundle["integrity_path"]),
+            ]
+            if slack_preview_path is not None:
+                evidence["slack_preview_image"] = str(slack_preview_path)
+                artifact_files.append(str(slack_preview_path))
+            delivery_image_path = slack_preview_path or bundle["primary_image_path"]
+            nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
+            return success_response(
+                image=str(delivery_image_path),
+                model=upscale_model,
+                prompt=prompt_for_generation,
+                aspect_ratio=aspect,
+                provider=self.name,
+                extra={
+                    "base_url": base_url,
+                    "preset": "source_image_upscale",
+                    "workflow_key": workflow_key,
+                    "evidence": evidence,
+                    "source_image": str(source_input_path),
+                    "upscale_model": upscale_model,
+                    "local_status": "업스케일 완료",
+                    "publish_status": "HermesWork publish 완료",
+                    "nas_status": nas_status,
+                    "slack_status": "primary image 준비됨",
+                    "workflow_path": str(bundle["workflow_path"]),
+                    "prompt_path": str(bundle["prompt_path"]),
+                    "metadata_path": str(bundle["metadata_path"]),
+                    "manifest_path": str(bundle["manifest_path"]),
+                    "artifact_path": str(bundle["primary_image_path"]),
+                    "original_image_path": str(bundle["primary_image_path"]),
+                    "primary_image": bundle["primary_image"],
+                    "media_files": media_files,
+                    "slack_preview_image": str(slack_preview_path) if slack_preview_path is not None else None,
+                    "sidecars": bundle["sidecars"],
+                    "artifact_files": artifact_files,
+                    "file_sha256": bundle.get("file_sha256"),
+                    "integrity_path": str(bundle["integrity_path"]),
+                    "nas_hook_requested": bundle["nas_hook_requested"],
+                    "nas_evidence": bundle.get("nas_evidence"),
+                    "slack_upload_evidence": False,
+                    "output_source_origin": source_origin,
+                    "output_image": output_image,
+                    "prompt_id": prompt_id,
+                    "category": "upscale",
+                    "api_base_url": base_url,
+                },
+            )
 
         if vae is not None:
             try:

@@ -1093,18 +1093,22 @@ IMAGE_GENERATE_SCHEMA = {
             },
             "operation": {
                 "type": "string",
-                "enum": ["generate", "postprocess", "source_preserving_postprocess"],
-                "description": "Optional provider operation. Use `source_preserving_postprocess` only when the user explicitly asks to preserve an existing source image and apply localized postprocess/editing.",
+                "enum": ["generate", "postprocess", "source_preserving_postprocess", "upscale"],
+                "description": "Optional provider operation. Use `source_preserving_postprocess` only when the user explicitly asks to preserve an existing source image and apply localized postprocess/editing. Use `upscale` only for source-image upscaling.",
                 "default": "generate",
             },
             "source_image_path": {
                 "type": "string",
-                "description": "Optional absolute local source image path for source-preserving ComfyUI postprocess workflows. Requires operation=`source_preserving_postprocess` or a provider-specific postprocess_preset.",
+                "description": "Optional absolute local source image path for source-preserving ComfyUI postprocess or upscale workflows.",
             },
             "postprocess_preset": {
                 "type": "string",
                 "enum": ["face8m_d035_hand9c_d025"],
                 "description": "Optional ComfyUI source-preserving postprocess preset. `face8m_d035_hand9c_d025` applies FaceDetailer face_yolov8m denoise 0.35 plus hand_yolov9c denoise 0.25.",
+            },
+            "upscale_model": {
+                "type": "string",
+                "description": "Optional ComfyUI upscale model for operation=`upscale`, for example `4x-UltraSharp.pth`.",
             },
         },
         "required": ["prompt"],
@@ -1224,6 +1228,7 @@ def _dispatch_to_plugin_provider(
     operation: str | None = None,
     source_image_path: str | None = None,
     postprocess_preset: str | None = None,
+    upscale_model: str | None = None,
 ):
     """Route the call to a plugin-registered provider when one is selected.
 
@@ -1345,6 +1350,8 @@ def _dispatch_to_plugin_provider(
             kwargs["source_image_path"] = source_image_path
         if postprocess_preset is not None:
             kwargs["postprocess_preset"] = postprocess_preset
+        if upscale_model is not None:
+            kwargs["upscale_model"] = upscale_model
         if configured_model:
             kwargs["model"] = configured_model
         result = provider.generate(**kwargs)
@@ -1402,6 +1409,7 @@ def _handle_image_generate(args, **kw):
     operation = args.get("operation")
     source_image_path = args.get("source_image_path")
     postprocess_preset = args.get("postprocess_preset")
+    upscale_model = args.get("upscale_model")
     task_id = kw.get("task_id")
 
     task_project_name, task_artifact_name = _consume_image_task_metadata(task_id)
@@ -1443,6 +1451,7 @@ def _handle_image_generate(args, **kw):
         operation=str(operation).strip() if isinstance(operation, str) and operation.strip() else None,
         source_image_path=str(source_image_path).strip() if isinstance(source_image_path, str) and source_image_path.strip() else None,
         postprocess_preset=str(postprocess_preset).strip() if isinstance(postprocess_preset, str) and postprocess_preset.strip() else None,
+        upscale_model=str(upscale_model).strip() if isinstance(upscale_model, str) and upscale_model.strip() else None,
     )
     if dispatched is not None:
         return dispatched
