@@ -426,6 +426,8 @@ class TestComfyLocalImageGenProviderGenerate:
             "actual_width": 1,
             "actual_height": 1,
         }
+        metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
+        assert metadata["report_evidence"] == result["report_evidence"]
         assert Path(result["image"]).exists()
 
     def test_generate_local_retouch_alias_uses_source_preserving_detailer_workflow(self, monkeypatch, tmp_path):
@@ -512,6 +514,8 @@ class TestComfyLocalImageGenProviderGenerate:
         assert result["canonical_operation"] == "source_preserving_postprocess"
         assert result["report_evidence"]["operation"] == "local_retouch"
         assert result["report_evidence"]["canonical_operation"] == "source_preserving_postprocess"
+        metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
+        assert metadata["report_evidence"] == result["report_evidence"]
 
     def test_generate_source_image_upscale_uses_upscale_model_workflow(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
@@ -729,6 +733,8 @@ class TestComfyLocalImageGenProviderGenerate:
             "actual_width": 1,
             "actual_height": 1,
         }
+        metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
+        assert metadata["report_evidence"] == result["report_evidence"]
         assert Path(result["image"]).exists()
 
     def test_generate_masked_inpaint_local_hand_uses_safer_defaults(self, monkeypatch, tmp_path):

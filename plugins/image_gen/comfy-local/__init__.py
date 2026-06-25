@@ -10,6 +10,7 @@ before queueing the existing NAS sync hook.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import logging
 import os
 import re
@@ -1370,6 +1371,17 @@ def _read_png_dimensions(path: Path) -> tuple[int | None, int | None]:
     return None, None
 
 
+def _update_metadata_report_evidence(metadata_path: Path, report_evidence: Dict[str, Any]) -> None:
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["report_evidence"] = report_evidence
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not update Comfy metadata report_evidence: %s", exc)
+
+
 class ComfyLocalImageGenProvider(ImageGenProvider):
     @property
     def name(self) -> str:
@@ -2290,6 +2302,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "actual_width": actual_width,
                 "actual_height": actual_height,
             }
+            _update_metadata_report_evidence(bundle["metadata_path"], report_evidence)
             nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
             if mask_path is not None:
                 try:
@@ -2605,6 +2618,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "actual_width": actual_width,
                 "actual_height": actual_height,
             }
+            _update_metadata_report_evidence(bundle["metadata_path"], report_evidence)
             nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
             return success_response(
                 image=str(bundle["primary_image_path"]),
