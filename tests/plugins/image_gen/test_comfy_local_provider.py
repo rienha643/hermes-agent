@@ -430,7 +430,7 @@ class TestComfyLocalImageGenProviderGenerate:
         assert metadata["report_evidence"] == result["report_evidence"]
         assert Path(result["image"]).exists()
 
-    def test_generate_local_retouch_alias_uses_source_preserving_detailer_workflow(self, monkeypatch, tmp_path):
+    def test_generate_source_preserving_detailer_normalizes_operation_typo(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
         monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
         monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
@@ -501,7 +501,7 @@ class TestComfyLocalImageGenProviderGenerate:
             model="pornmasterAnime_ilV5.safetensors",
             project_name="angelica_local_retouch_test",
             artifact_name="local_retouch",
-            operation="local_retouch",
+            operation="local_retress",
             source_image_path=str(source_image),
         )
 
@@ -511,10 +511,13 @@ class TestComfyLocalImageGenProviderGenerate:
         assert result["success"] is True
         assert result["workflow_key"] == "source_preserving_face8m_hand9c_v1"
         assert result["requested_operation"] == "local_retouch"
+        assert result["raw_requested_operation"] == "local_retress"
         assert result["canonical_operation"] == "source_preserving_postprocess"
         assert result["report_evidence"]["operation"] == "local_retouch"
         assert result["report_evidence"]["canonical_operation"] == "source_preserving_postprocess"
         metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
+        assert metadata["requested_operation"] == "local_retouch"
+        assert metadata["raw_requested_operation"] == "local_retress"
         assert metadata["report_evidence"] == result["report_evidence"]
 
     def test_generate_source_image_upscale_uses_upscale_model_workflow(self, monkeypatch, tmp_path):

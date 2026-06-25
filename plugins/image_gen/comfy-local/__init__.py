@@ -1491,6 +1491,13 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             or postprocess_preset == FACE8M_HAND9C_POSTPROCESS_PRESET
             or (bool(source_image_path) and not source_image_upscale and not masked_inpaint)
         )
+        source_preserving_operation = operation
+        if source_preserving_postprocess and operation not in {
+            "postprocess",
+            SOURCE_PRESERVING_POSTPROCESS_OPERATION,
+            LOCAL_RETOUCH_OPERATION,
+        }:
+            source_preserving_operation = LOCAL_RETOUCH_OPERATION
         runtime_preset: Optional[Dict[str, Any]] = None
         try:
             runtime_preset = _build_character_production_runtime(
@@ -2517,7 +2524,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "negative_prompt": negative_prompt,
                 "source_image_path": str(source_input_path),
                 "uploaded_source": uploaded_source,
-                "requested_operation": operation or SOURCE_PRESERVING_POSTPROCESS_OPERATION,
+                "requested_operation": source_preserving_operation,
+                "raw_requested_operation": operation or None,
                 "runtime_preset": preset_name,
                 "workflow_key": workflow_key,
                 "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
@@ -2540,7 +2548,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "prompt_id": prompt_id,
                 "api_base_url": base_url,
                 "workflow_key": workflow_key,
-                "requested_operation": operation or SOURCE_PRESERVING_POSTPROCESS_OPERATION,
+                "requested_operation": source_preserving_operation,
+                "raw_requested_operation": operation or None,
                 "checkpoint": checkpoint,
                 "requested_checkpoint": checkpoint_resolution.get("requested_checkpoint", requested_checkpoint),
                 "resolved_checkpoint": checkpoint,
@@ -2588,7 +2597,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "workflow_key": workflow_key,
                 "workflow_path": str(bundle["workflow_path"]),
                 "prompt_id": prompt_id,
-                "requested_operation": operation or SOURCE_PRESERVING_POSTPROCESS_OPERATION,
+                "requested_operation": source_preserving_operation,
+                "raw_requested_operation": operation or None,
                 "source_image": str(source_input_path),
                 "uploaded_source": uploaded_source,
                 "seed": None,
@@ -2605,7 +2615,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "output_resolution": output_resolution,
             }
             report_evidence = {
-                "operation": operation or SOURCE_PRESERVING_POSTPROCESS_OPERATION,
+                "operation": source_preserving_operation,
                 "canonical_operation": SOURCE_PRESERVING_POSTPROCESS_OPERATION,
                 "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
                 "workflow_key": workflow_key,
@@ -2629,7 +2639,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 extra={
                     "base_url": base_url,
                     "preset": preset_name,
-                    "requested_operation": operation or SOURCE_PRESERVING_POSTPROCESS_OPERATION,
+                    "requested_operation": source_preserving_operation,
+                    "raw_requested_operation": operation or None,
                     "canonical_operation": SOURCE_PRESERVING_POSTPROCESS_OPERATION,
                     "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
                     "workflow_key": workflow_key,
