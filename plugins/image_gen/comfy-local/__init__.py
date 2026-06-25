@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -95,6 +96,8 @@ CHARACTER_PRODUCTION_PRESET = "character_production"
 PORTRAIT_PRODUCTION_PRESET = "portrait_production"
 V8_STYLE_WORKFLOW_PRESET = "v8_style_workflow"
 SOURCE_PRESERVING_POSTPROCESS_OPERATION = "source_preserving_postprocess"
+LOCAL_RETOUCH_OPERATION = "local_retouch"
+MASKED_INPAINT_OPERATION = "masked_inpaint"
 UPSCALE_OPERATION = "upscale"
 FACE8M_HAND9C_POSTPROCESS_PRESET = "face8m_d035_hand9c_d025"
 DEFAULT_UPSCALE_MODEL = "4x-UltraSharp.pth"
@@ -102,7 +105,25 @@ DEFAULT_WORKFLOW_KEY = "txt2img_minimal_v1"
 CHARACTER_KEY_VISUAL_WORKFLOW_KEY = "character_key_visual_txt2img_v1"
 PORTRAIT_WORKFLOW_KEY = "portrait_round_v1_txt2img_v1"
 SOURCE_PRESERVING_FACE_HAND_WORKFLOW_KEY = "source_preserving_face8m_hand9c_v1"
+SOURCE_MASKED_INPAINT_WORKFLOW_KEY = "source_masked_inpaint_v1"
+SOURCE_DETAILER_BBOX_MASKED_INPAINT_WORKFLOW_KEY = "source_detailer_bbox_masked_inpaint_v1"
 SOURCE_IMAGE_UPSCALE_WORKFLOW_KEY = "source_image_4x_ultrasharp_v1"
+LOCALIZED_RETOUCH_TARGET_KEYWORDS: Tuple[str, ...] = (
+    "hand",
+    "finger",
+    "wrist",
+    "face",
+    "eye",
+    "mouth",
+    "left_hand",
+    "right_hand",
+    "손",
+    "손가락",
+    "손목",
+    "얼굴",
+    "눈",
+    "입",
+)
 CHARACTER_PRODUCTION_STEPS = 28
 CHARACTER_PRODUCTION_CFG = 5.0
 CHARACTER_PRODUCTION_SAMPLER = "dpmpp_2m"
@@ -540,6 +561,276 @@ def _build_source_image_upscale_workflow(
         "3": {"inputs": {"upscale_model": ["2", 0], "image": ["1", 0]}, "class_type": "ImageUpscaleWithModel"},
         "99": {"inputs": {"images": ["3", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
     }
+
+
+def _parse_mask_box(mask_box: Any) -> Tuple[float, float, float, float]:
+    if isinstance(mask_box, dict):
+        raw = (
+            mask_box.get("x"),
+            mask_box.get("y"),
+            mask_box.get("w", mask_box.get("width")),
+            mask_box.get("h", mask_box.get("height")),
+        )
+    elif isinstance(mask_box, (list, tuple)) and len(mask_box) == 4:
+        raw = tuple(mask_box)
+    elif isinstance(mask_box, str) and mask_box.strip():
+        parts = [part.strip() for part in re.split(r"[\s,]+", mask_box.strip()) if part.strip()]
+        if len(parts) != 4:
+            raise ValueError("mask_box string must contain exactly 4 numbers: x,y,w,h")
+        raw = tuple(parts)
+    else:
+        raise ValueError("mask_box is required and must be dict, list, tuple, or 'x,y,w,h' string")
+
+    try:
+        x, y, w, h = (float(value) for value in raw)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Invalid mask_box values: {mask_box!r}") from exc
+
+    if x < 0 or y < 0 or w <= 0 or h <= 0:
+        raise ValueError("mask_box values must satisfy x>=0, y>=0, w>0, h>0")
+    if x >= 1 or y >= 1 or w > 1 or h > 1:
+        raise ValueError("mask_box values must be normalized ratios between 0 and 1")
+    if x + w > 1 or y + h > 1:
+        raise ValueError("mask_box must stay within the image bounds when using normalized ratios")
+    return x, y, w, h
+
+
+def _normalized_mask_box_to_pixels(
+    mask_box: Tuple[float, float, float, float],
+    *,
+    image_width: int,
+    image_height: int,
+) -> Tuple[int, int, int, int]:
+    x, y, w, h = mask_box
+    left = max(0, min(image_width - 1, int(round(x * image_width))))
+    top = max(0, min(image_height - 1, int(round(y * image_height))))
+    right = max(left + 1, min(image_width, int(round((x + w) * image_width))))
+    bottom = max(top + 1, min(image_height, int(round((y + h) * image_height))))
+    return left, top, right, bottom
+
+
+def _create_mask_image_for_box(
+    *,
+    source_image_path: Path,
+    mask_box: Tuple[float, float, float, float],
+    feather_px: int,
+    temp_prefix: str,
+) -> Tuple[Path, Dict[str, Any]]:
+    try:
+        from PIL import Image, ImageDraw, ImageFilter
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("Pillow is required to build a local mask image") from exc
+
+    with Image.open(source_image_path) as source_image:
+        width, height = source_image.size
+
+    left, top, right, bottom = _normalized_mask_box_to_pixels(mask_box, image_width=width, image_height=height)
+    mask = Image.new("L", (width, height), 0)
+    ImageDraw.Draw(mask).rectangle((left, top, right - 1, bottom - 1), fill=255)
+    if feather_px > 0:
+        mask = mask.filter(ImageFilter.GaussianBlur(radius=feather_px))
+
+    fd, temp_path = tempfile.mkstemp(prefix=f"{temp_prefix}_", suffix="_mask.png")
+    os.close(fd)
+    mask_path = Path(temp_path)
+    mask.save(mask_path, "PNG")
+    return mask_path, {
+        "normalized": {"x": mask_box[0], "y": mask_box[1], "w": mask_box[2], "h": mask_box[3]},
+        "pixel_box": {"left": left, "top": top, "right": right, "bottom": bottom},
+        "image_size": {"width": width, "height": height},
+        "feather_px": feather_px,
+        "mask_shape": "rectangle",
+        "mask_coverage_ratio": round(((right - left) * (bottom - top)) / max(1, width * height), 6),
+    }
+
+
+def _is_localized_retouch_target(mask_target: Optional[str]) -> bool:
+    lowered = str(mask_target or "").casefold()
+    return bool(lowered) and any(keyword.casefold() in lowered for keyword in LOCALIZED_RETOUCH_TARGET_KEYWORDS)
+
+
+def _apply_masked_inpaint_safety_defaults(
+    *,
+    mask_target: Optional[str],
+    kwargs: Dict[str, Any],
+    denoise: float,
+    feather_px: int,
+    grow_mask_by: int,
+) -> Tuple[float, int, int, Dict[str, Any]]:
+    localized_target = _is_localized_retouch_target(mask_target)
+    adjustments: List[str] = []
+    denoise_was_explicit = isinstance(kwargs.get("denoise"), (int, float))
+    feather_was_explicit = "mask_feather_px" in kwargs
+    grow_was_explicit = "grow_mask_by" in kwargs
+
+    if localized_target:
+        if not grow_was_explicit and grow_mask_by != 0:
+            grow_mask_by = 0
+            adjustments.append("localized_target_default_grow_mask_by_0")
+        if not feather_was_explicit:
+            feather_px = 6
+            adjustments.append("localized_target_default_mask_feather_px_6")
+        if not denoise_was_explicit:
+            denoise = min(denoise, 0.55)
+            adjustments.append("localized_target_default_denoise_max_0_55")
+        elif denoise > 0.65 and not bool(kwargs.get("allow_high_denoise")):
+            denoise = 0.65
+            adjustments.append("localized_target_capped_high_denoise_0_65")
+
+    safety = {
+        "localized_target": localized_target,
+        "adjustments": adjustments,
+        "requires_visual_review": localized_target,
+        "visual_review_checks": [
+            "masked region only changed",
+            "no rectangular seam or patch boundary",
+            "no background/outfit/forearm drift outside intended local area",
+        ]
+        if localized_target
+        else [],
+    }
+    return denoise, max(0, feather_px), max(0, grow_mask_by), safety
+
+
+def _build_masked_inpaint_workflow(
+    *,
+    checkpoint: str,
+    source_image_name: str,
+    mask_image_name: str,
+    positive_prompt: str,
+    negative_prompt: str,
+    filename_prefix: str,
+    seed: int,
+    steps: int,
+    cfg: float,
+    sampler_name: str,
+    scheduler: str,
+    denoise: float,
+    grow_mask_by: int,
+) -> Dict[str, Any]:
+    return {
+        "1": {"inputs": {"image": source_image_name}, "class_type": "LoadImage"},
+        "2": {"inputs": {"image": mask_image_name, "channel": "red"}, "class_type": "LoadImageMask"},
+        "3": {
+            "inputs": {
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
+                "model": ["4", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["12", 0],
+            },
+            "class_type": "KSampler",
+        },
+        "4": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
+        "6": {"inputs": {"text": positive_prompt, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
+        "7": {"inputs": {"text": negative_prompt, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
+        "8": {"inputs": {"samples": ["3", 0], "vae": ["4", 2]}, "class_type": "VAEDecode"},
+        "12": {
+            "inputs": {"pixels": ["1", 0], "mask": ["2", 0], "vae": ["4", 2], "grow_mask_by": grow_mask_by},
+            "class_type": "VAEEncodeForInpaint",
+        },
+        "99": {"inputs": {"images": ["8", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
+    }
+
+
+def _detailer_bbox_detector_for_target(mask_target: Optional[str]) -> Dict[str, Any]:
+    lowered = str(mask_target or "").casefold()
+    if any(keyword in lowered for keyword in ("face", "eye", "mouth", "얼굴", "눈", "입")):
+        return {
+            "model_name": "bbox/face_yolov8m.pt",
+            "threshold": 0.45,
+            "dilation": 8,
+            "crop_factor": 3.0,
+            "drop_size": 10,
+        }
+    return {
+        "model_name": "bbox/hand_yolov9c.pt",
+        "threshold": 0.35,
+        "dilation": 10,
+        "crop_factor": 3.0,
+        "drop_size": 12,
+    }
+
+
+def _build_detailer_bbox_masked_inpaint_workflow(
+    *,
+    checkpoint: str,
+    source_image_name: str,
+    positive_prompt: str,
+    negative_prompt: str,
+    filename_prefix: str,
+    seed: int,
+    steps: int,
+    cfg: float,
+    sampler_name: str,
+    scheduler: str,
+    denoise: float,
+    grow_mask_by: int,
+    feather_px: int,
+    mask_target: Optional[str],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    detector = _detailer_bbox_detector_for_target(mask_target)
+    workflow = {
+        "1": {"inputs": {"image": source_image_name}, "class_type": "LoadImage"},
+        "3": {
+            "inputs": {
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
+                "model": ["4", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["12", 0],
+            },
+            "class_type": "KSampler",
+        },
+        "4": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
+        "5": {"inputs": {"model_name": detector["model_name"]}, "class_type": "UltralyticsDetectorProvider"},
+        "6": {"inputs": {"text": positive_prompt, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
+        "7": {"inputs": {"text": negative_prompt, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
+        "8": {"inputs": {"samples": ["3", 0], "vae": ["4", 2]}, "class_type": "VAEDecode"},
+        "9": {
+            "inputs": {
+                "bbox_detector": ["5", 0],
+                "image": ["1", 0],
+                "threshold": detector["threshold"],
+                "dilation": detector["dilation"],
+                "crop_factor": detector["crop_factor"],
+                "drop_size": detector["drop_size"],
+                "labels": "all",
+            },
+            "class_type": "BboxDetectorSEGS",
+        },
+        "10": {"inputs": {"segs": ["9", 0]}, "class_type": "SegsToCombinedMask"},
+        "11": {
+            "inputs": {"mask": ["10", 0], "expand": grow_mask_by, "tapered_corners": True},
+            "class_type": "GrowMask",
+        },
+        "12": {
+            "inputs": {"pixels": ["1", 0], "mask": ["13", 0], "vae": ["4", 2], "grow_mask_by": 0},
+            "class_type": "VAEEncodeForInpaint",
+        },
+        "13": {
+            "inputs": {
+                "mask": ["11", 0],
+                "left": feather_px,
+                "top": feather_px,
+                "right": feather_px,
+                "bottom": feather_px,
+            },
+            "class_type": "FeatherMask",
+        },
+        "99": {"inputs": {"images": ["8", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
+    }
+    return workflow, detector
 
 
 def _resolve_model() -> str:
@@ -1181,11 +1472,12 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         operation = str(kwargs.get("operation") or "").strip()
         source_image_path = str(kwargs.get("source_image_path") or kwargs.get("source_image") or "").strip()
         postprocess_preset = str(kwargs.get("postprocess_preset") or "").strip()
+        masked_inpaint = operation == MASKED_INPAINT_OPERATION
         source_image_upscale = operation == UPSCALE_OPERATION
         source_preserving_postprocess = (
-            operation in {"postprocess", SOURCE_PRESERVING_POSTPROCESS_OPERATION}
+            operation in {"postprocess", SOURCE_PRESERVING_POSTPROCESS_OPERATION, LOCAL_RETOUCH_OPERATION}
             or postprocess_preset == FACE8M_HAND9C_POSTPROCESS_PRESET
-            or (bool(source_image_path) and not source_image_upscale)
+            or (bool(source_image_path) and not source_image_upscale and not masked_inpaint)
         )
         runtime_preset: Optional[Dict[str, Any]] = None
         try:
@@ -1575,6 +1867,493 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     aspect_ratio=aspect,
                 )
 
+        if masked_inpaint:
+            if not source_image_path:
+                return error_response(
+                    error="source_image_path is required for masked inpaint",
+                    error_type="invalid_argument",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            source_input_path = Path(source_image_path).expanduser()
+            feather_px = int(kwargs.get("mask_feather_px") or 10)
+            grow_mask_by = int(kwargs.get("grow_mask_by") or 8)
+            inpaint_target = str(kwargs.get("mask_target") or kwargs.get("mask_label") or "").strip() or None
+            mask_source = str(kwargs.get("mask_source") or kwargs.get("mask_mode") or "").strip()
+            if not mask_source:
+                mask_source = "rectangle"
+            if mask_source not in {"rectangle", "detailer_bbox"}:
+                return error_response(
+                    error=f"Unsupported mask_source for masked inpaint: {mask_source}",
+                    error_type="invalid_argument",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            mask_box: Optional[Tuple[float, float, float, float]] = None
+            if mask_source == "rectangle":
+                try:
+                    mask_box = _parse_mask_box(kwargs.get("mask_box"))
+                except ValueError as exc:
+                    return error_response(
+                        error=str(exc),
+                        error_type="invalid_argument",
+                        provider=self.name,
+                        model=checkpoint,
+                        prompt=prompt,
+                        aspect_ratio=aspect,
+                    )
+            denoise, feather_px, grow_mask_by, mask_safety = _apply_masked_inpaint_safety_defaults(
+                mask_target=inpaint_target,
+                kwargs=kwargs,
+                denoise=denoise,
+                feather_px=feather_px,
+                grow_mask_by=grow_mask_by,
+            )
+            mask_safety["mask_source"] = mask_source
+            if mask_source == "detailer_bbox":
+                mask_safety.setdefault("warnings", []).append(
+                    "experimental_detailer_bbox_mask_source_requires_visual_review"
+                )
+            mask_path: Optional[Path] = None
+            mask_info: Dict[str, Any]
+            uploaded_mask: Optional[Dict[str, Any]] = None
+            detailer_detector: Optional[Dict[str, Any]] = None
+            try:
+                uploaded_source = _upload_comfy_input_file(base_url, source_input_path)
+                if mask_source == "rectangle":
+                    if mask_box is None:
+                        raise ValueError("mask_box is required for rectangle masked inpaint")
+                    mask_path, mask_info = _create_mask_image_for_box(
+                        source_image_path=source_input_path,
+                        mask_box=mask_box,
+                        feather_px=feather_px,
+                        temp_prefix=filename_prefix,
+                    )
+                    coverage_ratio = mask_info.get("mask_coverage_ratio")
+                    mask_safety["mask_shape"] = mask_info.get("mask_shape")
+                    mask_safety["mask_coverage_ratio"] = coverage_ratio
+                    if mask_safety["localized_target"] and isinstance(coverage_ratio, (int, float)) and coverage_ratio > 0.04:
+                        mask_safety.setdefault("warnings", []).append("localized_target_large_rectangular_mask")
+                    uploaded_mask = _upload_comfy_input_file(base_url, mask_path)
+                else:
+                    detailer_detector = _detailer_bbox_detector_for_target(inpaint_target)
+                    mask_info = {
+                        "normalized": None,
+                        "pixel_box": None,
+                        "image_size": None,
+                        "feather_px": feather_px,
+                        "mask_shape": "detailer_bbox_segs",
+                        "mask_coverage_ratio": None,
+                    }
+                    mask_safety["mask_shape"] = "detailer_bbox_segs"
+                    mask_safety["mask_coverage_ratio"] = None
+                    mask_safety["detailer_detector"] = detailer_detector
+            except Exception as exc:  # noqa: BLE001
+                if mask_path is not None:
+                    try:
+                        mask_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return error_response(
+                    error=f"ComfyUI masked inpaint setup failed: {exc}",
+                    error_type="api_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            workflow_key = (
+                SOURCE_DETAILER_BBOX_MASKED_INPAINT_WORKFLOW_KEY
+                if mask_source == "detailer_bbox"
+                else SOURCE_MASKED_INPAINT_WORKFLOW_KEY
+            )
+            if not negative_prompt:
+                negative_prompt = (
+                    "low quality, blurry, bad anatomy, extra fingers, missing fingers, malformed hands, "
+                    "distorted face, identity drift, changing outfit outside mask, changing background outside mask"
+                )
+            if mask_source == "detailer_bbox":
+                workflow, detailer_detector = _build_detailer_bbox_masked_inpaint_workflow(
+                    checkpoint=checkpoint,
+                    source_image_name=str(uploaded_source["name"]),
+                    positive_prompt=prompt_for_generation,
+                    negative_prompt=negative_prompt,
+                    filename_prefix=filename_prefix,
+                    seed=seed,
+                    steps=steps,
+                    cfg=cfg,
+                    sampler_name=sampler_name,
+                    scheduler=scheduler,
+                    denoise=denoise,
+                    grow_mask_by=max(0, grow_mask_by),
+                    feather_px=feather_px,
+                    mask_target=inpaint_target,
+                )
+            else:
+                if uploaded_mask is None:
+                    return error_response(
+                        error="ComfyUI masked inpaint setup failed: rectangle mask upload missing",
+                        error_type="api_error",
+                        provider=self.name,
+                        model=checkpoint,
+                        prompt=prompt,
+                        aspect_ratio=aspect,
+                    )
+                workflow = _build_masked_inpaint_workflow(
+                    checkpoint=checkpoint,
+                    source_image_name=str(uploaded_source["name"]),
+                    mask_image_name=str(uploaded_mask["name"]),
+                    positive_prompt=prompt_for_generation,
+                    negative_prompt=negative_prompt,
+                    filename_prefix=filename_prefix,
+                    seed=seed,
+                    steps=steps,
+                    cfg=cfg,
+                    sampler_name=sampler_name,
+                    scheduler=scheduler,
+                    denoise=denoise,
+                    grow_mask_by=max(0, grow_mask_by),
+                )
+            payload = {"prompt": workflow}
+
+            try:
+                response = requests.post(f"{base_url}/prompt", json=payload, timeout=30)
+                response.raise_for_status()
+                submit = response.json()
+            except Exception as exc:  # noqa: BLE001
+                if mask_path is not None:
+                    try:
+                        mask_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return error_response(
+                    error=f"ComfyUI masked inpaint prompt submission failed: {exc}",
+                    error_type="api_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            prompt_id = str(submit.get("prompt_id") or "").strip()
+            if not prompt_id:
+                if mask_path is not None:
+                    try:
+                        mask_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return error_response(
+                    error="ComfyUI masked inpaint prompt response did not include prompt_id",
+                    error_type="invalid_response",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            history_payload: Optional[Dict[str, Any]] = None
+            deadline = time.monotonic() + 300
+            while time.monotonic() < deadline:
+                try:
+                    history_response = requests.get(_history_url(base_url, prompt_id), timeout=15)
+                    history_response.raise_for_status()
+                    history_payload = history_response.json()
+                except Exception as exc:  # noqa: BLE001
+                    if mask_path is not None:
+                        try:
+                            mask_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                    return error_response(
+                        error=f"ComfyUI masked inpaint history lookup failed: {exc}",
+                        error_type="api_error",
+                        provider=self.name,
+                        model=checkpoint,
+                        prompt=prompt,
+                        aspect_ratio=aspect,
+                    )
+                if isinstance(history_payload, dict) and _history_completed_successfully(history_payload, prompt_id):
+                    break
+                time.sleep(1)
+            else:
+                if mask_path is not None:
+                    try:
+                        mask_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return error_response(
+                    error=f"ComfyUI masked inpaint history timed out before success for prompt_id={prompt_id}",
+                    error_type="timeout",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            output_image = _first_output_image(history_payload or {}, prompt_id)
+            if not output_image:
+                if mask_path is not None:
+                    try:
+                        mask_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return error_response(
+                    error="ComfyUI masked inpaint history success did not contain an output image",
+                    error_type="invalid_response",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            output_source_path = _find_comfy_output_file(output_image)
+            source_origin = "local_output_dir"
+            if output_source_path is None:
+                output_source_path = _download_comfy_output_file(base_url, output_image, prompt_id)
+                source_origin = "remote_view_download" if output_source_path is not None else "missing"
+            if output_source_path is None:
+                if mask_path is not None:
+                    try:
+                        mask_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return error_response(
+                    error="ComfyUI masked inpaint output file not found after history success",
+                    error_type="io_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+            if not wait_for_file_stable(output_source_path, checks=2, delay_seconds=0.1):
+                if mask_path is not None:
+                    try:
+                        mask_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return error_response(
+                    error=f"ComfyUI masked inpaint output file did not stabilize: {output_source_path}",
+                    error_type="io_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            actual_width, actual_height = _read_png_dimensions(output_source_path)
+            output_resolution = (
+                f"{actual_width}x{actual_height}"
+                if actual_width is not None and actual_height is not None
+                else None
+            )
+            created_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            prompt_payload = {
+                "prompt": prompt_for_generation,
+                "source_prompt": source_prompt,
+                "negative_prompt": negative_prompt,
+                "source_image_path": str(source_input_path),
+                "mask_path": str(mask_path) if mask_path is not None else None,
+                "uploaded_source": uploaded_source,
+                "uploaded_mask": uploaded_mask,
+                "runtime_preset": "masked_inpaint",
+                "workflow_key": workflow_key,
+                "mask_target": inpaint_target,
+                "mask_box": mask_info["normalized"],
+                "mask_box_px": mask_info["pixel_box"],
+                "mask_feather_px": mask_info["feather_px"],
+                "mask_shape": mask_info["mask_shape"],
+                "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
+                "grow_mask_by": max(0, grow_mask_by),
+                "masked_inpaint_safety": mask_safety,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+                "output_resolution": output_resolution,
+                "raw_prompt_payload": {
+                    "submit_payload": payload,
+                    "submit_response": submit,
+                    "history_status": (history_payload or {}).get(prompt_id, {}).get("status", {}),
+                    "output_image": output_image,
+                    "system_stats": system_payload,
+                    "workflow_key": workflow_key,
+                },
+            }
+            metadata = {
+                "provider": self.name,
+                "prompt_id": prompt_id,
+                "api_base_url": base_url,
+                "workflow_key": workflow_key,
+                "checkpoint": checkpoint,
+                "requested_checkpoint": checkpoint_resolution.get("requested_checkpoint", requested_checkpoint),
+                "resolved_checkpoint": checkpoint,
+                "preset": "masked_inpaint",
+                "source_image_path": str(source_input_path),
+                "mask_target": inpaint_target,
+                "mask_box": mask_info["normalized"],
+                "mask_box_px": mask_info["pixel_box"],
+                "mask_feather_px": mask_info["feather_px"],
+                "mask_shape": mask_info["mask_shape"],
+                "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
+                "grow_mask_by": max(0, grow_mask_by),
+                "masked_inpaint_safety": mask_safety,
+                "uploaded_source": uploaded_source,
+                "uploaded_mask": uploaded_mask,
+                "negative_prompt": negative_prompt,
+                "vae": None,
+                "loras": [],
+                "controlnet_used": False,
+                "created_at": created_at,
+                "category": POSTPROCESS_CATEGORY,
+                "output_source_path": str(output_source_path),
+                "output_source_origin": source_origin,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+                "output_resolution": output_resolution,
+                "local_status": "국소 인페인트 완료",
+                "publish_status": "HermesWork publish 완료",
+                "slack_status": "primary image 준비됨",
+            }
+            try:
+                bundle = publish_filesystem_image_bundle(
+                    output_source_path,
+                    prefix=filename_prefix,
+                    project_name=project_name,
+                    artifact_name=artifact_name or filename_prefix,
+                    category=POSTPROCESS_CATEGORY,
+                    workflow_json=workflow,
+                    prompt_payload=prompt_payload,
+                    metadata=metadata,
+                )
+            except Exception as exc:  # noqa: BLE001
+                if mask_path is not None:
+                    try:
+                        mask_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return error_response(
+                    error=f"Could not publish ComfyUI masked inpaint bundle to HermesWork: {exc}",
+                    error_type="io_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                )
+
+            evidence = {
+                "workflow_key": workflow_key,
+                "workflow_path": str(bundle["workflow_path"]),
+                "prompt_id": prompt_id,
+                "source_image": str(source_input_path),
+                "mask_image": str(mask_path) if mask_path is not None else None,
+                "uploaded_source": uploaded_source,
+                "uploaded_mask": uploaded_mask,
+                "mask_target": inpaint_target,
+                "mask_box": mask_info["normalized"],
+                "mask_box_px": mask_info["pixel_box"],
+                "mask_feather_px": mask_info["feather_px"],
+                "mask_shape": mask_info["mask_shape"],
+                "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
+                "grow_mask_by": max(0, grow_mask_by),
+                "masked_inpaint_safety": mask_safety,
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
+                "output_image": output_image,
+                "artifact_path": str(bundle["primary_image_path"]),
+                "output_source_origin": source_origin,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+                "output_resolution": output_resolution,
+            }
+            report_evidence = {
+                "operation": MASKED_INPAINT_OPERATION,
+                "workflow_key": workflow_key,
+                "workflow_path": str(bundle["workflow_path"]),
+                "prompt_id": prompt_id,
+                "source_image_path": str(source_input_path),
+                "mask_target": inpaint_target,
+                "mask_box": mask_info["normalized"],
+                "mask_box_px": mask_info["pixel_box"],
+                "mask_shape": mask_info["mask_shape"],
+                "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
+                "masked_inpaint_requires_visual_review": mask_safety["requires_visual_review"],
+                "output_image": bundle["primary_image"],
+                "artifact_path": str(bundle["primary_image_path"]),
+                "output_resolution": output_resolution,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+            }
+            nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
+            if mask_path is not None:
+                try:
+                    mask_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return success_response(
+                image=str(bundle["primary_image_path"]),
+                model=checkpoint,
+                prompt=prompt_for_generation,
+                aspect_ratio=aspect,
+                provider=self.name,
+                extra={
+                    "base_url": base_url,
+                    "preset": "masked_inpaint",
+                    "workflow_key": workflow_key,
+                    "evidence": evidence,
+                    "report_evidence": report_evidence,
+                    "source_image": str(source_input_path),
+                    "mask_target": inpaint_target,
+                    "mask_box": mask_info["normalized"],
+                    "mask_box_px": mask_info["pixel_box"],
+                    "mask_feather_px": mask_info["feather_px"],
+                    "mask_shape": mask_info["mask_shape"],
+                    "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
+                    "grow_mask_by": max(0, grow_mask_by),
+                    "masked_inpaint_safety": mask_safety,
+                    "masked_inpaint_requires_visual_review": mask_safety["requires_visual_review"],
+                    "local_status": "국소 인페인트 완료",
+                    "publish_status": "HermesWork publish 완료",
+                    "nas_status": nas_status,
+                    "slack_status": "primary image 준비됨",
+                    "workflow_path": str(bundle["workflow_path"]),
+                    "prompt_path": str(bundle["prompt_path"]),
+                    "metadata_path": str(bundle["metadata_path"]),
+                    "manifest_path": str(bundle["manifest_path"]),
+                    "artifact_path": str(bundle["primary_image_path"]),
+                    "primary_image": bundle["primary_image"],
+                    "media_files": [str(bundle["primary_image_path"])],
+                    "sidecars": bundle["sidecars"],
+                    "artifact_files": [
+                        str(bundle["primary_image_path"]),
+                        str(bundle["workflow_path"]),
+                        str(bundle["prompt_path"]),
+                        str(bundle["metadata_path"]),
+                        str(bundle["manifest_path"]),
+                        str(bundle["integrity_path"]),
+                    ],
+                    "file_sha256": bundle.get("file_sha256"),
+                    "integrity_path": str(bundle["integrity_path"]),
+                    "nas_hook_requested": bundle["nas_hook_requested"],
+                    "nas_evidence": bundle.get("nas_evidence"),
+                    "slack_upload_evidence": False,
+                    "output_source_origin": source_origin,
+                    "output_image": output_image,
+                    "prompt_id": prompt_id,
+                    "category": POSTPROCESS_CATEGORY,
+                    "api_base_url": base_url,
+                    "actual_width": actual_width,
+                    "actual_height": actual_height,
+                    "output_resolution": output_resolution,
+                },
+            )
+
         if source_preserving_postprocess:
             if postprocess_preset and postprocess_preset != FACE8M_HAND9C_POSTPROCESS_PRESET:
                 return error_response(
@@ -1725,6 +2504,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "negative_prompt": negative_prompt,
                 "source_image_path": str(source_input_path),
                 "uploaded_source": uploaded_source,
+                "requested_operation": operation or SOURCE_PRESERVING_POSTPROCESS_OPERATION,
                 "runtime_preset": preset_name,
                 "workflow_key": workflow_key,
                 "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
@@ -1747,6 +2527,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "prompt_id": prompt_id,
                 "api_base_url": base_url,
                 "workflow_key": workflow_key,
+                "requested_operation": operation or SOURCE_PRESERVING_POSTPROCESS_OPERATION,
                 "checkpoint": checkpoint,
                 "requested_checkpoint": checkpoint_resolution.get("requested_checkpoint", requested_checkpoint),
                 "resolved_checkpoint": checkpoint,
@@ -1794,6 +2575,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "workflow_key": workflow_key,
                 "workflow_path": str(bundle["workflow_path"]),
                 "prompt_id": prompt_id,
+                "requested_operation": operation or SOURCE_PRESERVING_POSTPROCESS_OPERATION,
                 "source_image": str(source_input_path),
                 "uploaded_source": uploaded_source,
                 "seed": None,
@@ -1810,7 +2592,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "output_resolution": output_resolution,
             }
             report_evidence = {
-                "operation": SOURCE_PRESERVING_POSTPROCESS_OPERATION,
+                "operation": operation or SOURCE_PRESERVING_POSTPROCESS_OPERATION,
+                "canonical_operation": SOURCE_PRESERVING_POSTPROCESS_OPERATION,
                 "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
                 "workflow_key": workflow_key,
                 "workflow_path": str(bundle["workflow_path"]),
@@ -1832,6 +2615,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 extra={
                     "base_url": base_url,
                     "preset": preset_name,
+                    "requested_operation": operation or SOURCE_PRESERVING_POSTPROCESS_OPERATION,
+                    "canonical_operation": SOURCE_PRESERVING_POSTPROCESS_OPERATION,
                     "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
                     "workflow_key": workflow_key,
                     "evidence": evidence,
