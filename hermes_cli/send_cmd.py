@@ -36,6 +36,7 @@ from typing import Optional
 _USAGE_EXIT = 2
 _FAILURE_EXIT = 1
 _SUCCESS_EXIT = 0
+_COMMANDER_DISPATCH_MARKER = "[COMMANDER_DISPATCH]"
 
 
 def _read_message_body(
@@ -79,6 +80,22 @@ def _resolve_target(arg_to: Optional[str]) -> Optional[str]:
     if arg_to and arg_to.strip():
         return arg_to.strip()
     return None
+
+
+def _is_slack_target(target: str | None) -> bool:
+    return bool(str(target or "").strip().lower().startswith("slack"))
+
+
+def _refuse_commander_dispatch_via_generic_send(target: str | None, message: str) -> None:
+    """Keep worker handoffs on the dedicated Zenith dispatcher path."""
+    if _is_slack_target(target) and _COMMANDER_DISPATCH_MARKER in str(message or ""):
+        print(
+            "hermes send: refusing COMMANDER_DISPATCH over generic Slack send. "
+            "Use scripts/commander_worker_dispatcher.py so the message is sent by "
+            "verified Zenith/Commander identity.",
+            file=sys.stderr,
+        )
+        sys.exit(_FAILURE_EXIT)
 
 
 def _emit_result(
@@ -313,6 +330,7 @@ def cmd_send(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
         sys.exit(_USAGE_EXIT)
+    _refuse_commander_dispatch_via_generic_send(target, message)
 
     # Optional: prepend a subject line. Useful for alerting scripts that
     # want a consistent header without inlining it into every call.
