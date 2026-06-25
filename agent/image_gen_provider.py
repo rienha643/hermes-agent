@@ -1160,9 +1160,10 @@ def error_response(
     model: str = "",
     prompt: str = "",
     aspect_ratio: str = DEFAULT_ASPECT_RATIO,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a uniform error response dict."""
-    return {
+    payload: Dict[str, Any] = {
         "success": False,
         "image": None,
         "error": error,
@@ -1171,4 +1172,10 @@ def error_response(
         "prompt": prompt,
         "aspect_ratio": aspect_ratio,
         "provider": provider,
+        "final_report_allowed": False,
+        "completion_report_forbidden": True,
+        "message": "이미지 생성/후보정 실패: 실제 산출물과 Slack 업로드 근거 없이 완료로 보고하지 마세요.",
     }
+    if extra:
+        payload.update(extra)
+    return payload

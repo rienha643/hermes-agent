@@ -1575,10 +1575,10 @@ _COMMANDER_IMAGE_SUCCESS_CLAIM_RE = re.compile(
 _COMMANDER_IMAGE_PROJECT_NAME_RE = re.compile(r"(?im)^\s*-\s*project_name\s*값\s*=\s*([^\r\n`]+?)\s*$")
 _COMMANDER_IMAGE_ARTIFACT_NAME_RE = re.compile(r"(?im)^\s*-\s*artifact_name\s*값\s*=\s*([^\r\n`]+?)\s*$")
 _COMMANDER_OUTPUT_ROOT_RE = re.compile(
-    r"(?im)^\s*-\s*(?:출력\s*루트|output\s+project\s+root)\s*:\s*`?([^\r\n`]+?)`?\s*$"
+    r"(?im)^\s*-\s*(?:출력\s*루트|output\s+(?:project\s+)?root(?:\s+hint)?)\s*:\s*`?([^\r\n`]+?)`?\s*$"
 )
 _COMMANDER_OUTPUT_BASENAME_RE = re.compile(
-    r"(?im)^\s*-\s*(?:출력\s*basename|output\s+basename)\s*:\s*`?([^\r\n`]+?)`?\s*$"
+    r"(?im)^\s*-\s*(?:출력\s*basename|output\s+basename(?:\s+hint)?)\s*:\s*`?([^\r\n`]+?)`?\s*$"
 )
 
 
@@ -14038,6 +14038,64 @@ class GatewayRunner:
                     image_paths.append(file_path)
                 else:
                     non_image_local.append(file_path)
+
+            if getattr(adapter, "platform", None) == Platform.SLACK:
+                raw_image_candidates = list(image_paths)
+                raw_other_candidates = [path for path, _ in non_image_media] + list(non_image_local)
+                allowed_images, blocked_images = adapter.validate_slack_delivery_paths(
+                    raw_image_candidates,
+                    image_only=True,
+                )
+                allowed_other, blocked_other = adapter.validate_slack_delivery_paths(
+                    raw_other_candidates,
+                    image_only=False,
+                )
+                expected_count = len(raw_image_candidates) + len(raw_other_candidates)
+                actual_count = len(allowed_images) + len(allowed_other)
+                if blocked_images or blocked_other or actual_count != expected_count:
+                    logger.warning(
+                        "[Slack] Post-stream media delivery filtered batch: expected=%d actual=%d blocked=%d",
+                        expected_count,
+                        actual_count,
+                        len(blocked_images) + len(blocked_other),
+                    )
+                    try:
+                        missing_count = max(expected_count - actual_count, 0)
+                        blocked_names = [
+                            Path(item.get("path", "")).name
+                            for item in (blocked_images + blocked_other)
+                            if item.get("path")
+                        ]
+                        details = []
+                        if missing_count:
+                            details.append(f"누락 {missing_count}개")
+                        if blocked_names:
+                            details.append("차단 파일: " + ", ".join(blocked_names[:6]))
+                        detail_text = f" ({'; '.join(details)})" if details else ""
+                        await adapter.send(
+                            chat_id=event.source.chat_id,
+                            content=(
+                                "⚠️ Slack 첨부 검증 실패: 생성/보고 대상 파일 수와 실제 업로드 후보 수가 "
+                                f"일치하지 않습니다. expected={expected_count}, actual={actual_count}{detail_text}"
+                            ),
+                            metadata=_thread_meta,
+                        )
+                    except Exception:
+                        logger.warning("[Slack] Failed to send post-stream delivery mismatch warning", exc_info=True)
+                if actual_count == 0:
+                    image_paths = []
+                    non_image_media = []
+                    non_image_local = []
+                else:
+                    allowed_image_set = set(allowed_images)
+                    allowed_other_set = set(allowed_other)
+                    image_paths = [path for path in image_paths if path in allowed_image_set]
+                    non_image_media = [
+                        (path, is_voice)
+                        for path, is_voice in non_image_media
+                        if path in allowed_other_set
+                    ]
+                    non_image_local = [path for path in non_image_local if path in allowed_other_set]
 
             if image_paths:
                 try:

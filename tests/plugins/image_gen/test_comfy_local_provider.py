@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import unicodedata
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -26,6 +27,70 @@ class TestComfyLocalImageGenProviderSurface:
 
     def test_display_name(self):
         assert ComfyLocalImageGenProvider().display_name == "Comfy Local"
+
+
+class TestComfyLocalSourceImageResolution:
+    def test_resolves_korean_artifact_typo_by_unique_date_version(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        actual_dir = tmp_path / "HermesWork" / "Image" / "260624_이미지"
+        actual_dir.mkdir(parents=True)
+        actual = actual_dir / "이미지_v19.png"
+        actual.write_bytes(PNG_1PX)
+
+        requested = tmp_path / "HermesWork" / "Image" / "260624_이피치" / "이피치_v19.png"
+        resolved, evidence = COMFY_MOD._resolve_existing_source_image_path(requested)
+
+        assert resolved == actual
+        assert evidence["source_path_resolution"] == "unique_date_version_match"
+        assert evidence["requested_source_image_path"] == str(requested)
+        assert evidence["resolved_source_image_path"] == str(actual)
+
+    def test_resolves_unicode_decomposed_filename_variant(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        actual_dir = tmp_path / "HermesWork" / "Image" / "260624_이미지"
+        actual_dir.mkdir(parents=True)
+        actual = actual_dir / "이미지_v21.png"
+        actual.write_bytes(PNG_1PX)
+
+        requested = actual_dir / "이미지_v21.png"
+        resolved, evidence = COMFY_MOD._resolve_existing_source_image_path(requested)
+
+        assert resolved is not None
+        assert resolved.is_file()
+        assert unicodedata.normalize("NFC", resolved.name) == "이미지_v21.png"
+        assert evidence["source_path_resolution"] in {
+            "exact",
+            "unicode_normalized",
+            "sibling_unicode_normalized",
+            "unique_date_version_match",
+        }
+
+
+class TestComfyLocalSourceTaskPromptGuard:
+    def test_rejects_source_image_task_text_as_plain_txt2img_prompt(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+
+        def fail_get(*_args, **_kwargs):
+            raise AssertionError("source-image prompt-only guard should run before ComfyUI GET")
+
+        def fail_post(*_args, **_kwargs):
+            raise AssertionError("source-image prompt-only guard should run before ComfyUI POST")
+
+        monkeypatch.setattr(comfy_mod.requests, "get", fail_get)
+        monkeypatch.setattr(comfy_mod.requests, "post", fail_post)
+
+        result = ComfyLocalImageGenProvider().generate(
+            'source_image_path: /Volumes/SSD_Hermes/HermesWork/Image/260624_이피치/이피치_v19.png, '
+            'operation: "source_preserving_postprocess", title: "restore v19"',
+            aspect_ratio="portrait",
+        )
+
+        assert result["success"] is False
+        assert result["error_type"] == "source_image_task_prompt_only"
+        assert result["detected_source_image_task_prompt_only"] is True
+        assert result["completion_report_forbidden"] is True
 
 
 class TestComfyLocalCheckpointResolution:
@@ -420,6 +485,9 @@ class TestComfyLocalImageGenProviderGenerate:
             "workflow_path": str(result["workflow_path"]),
             "prompt_id": "pid-post",
             "source_image_path": str(source_image),
+            "requested_source_image_path": str(source_image),
+            "resolved_source_image_path": str(source_image),
+            "source_path_resolution": "exact",
             "output_image": result["primary_image"],
             "artifact_path": result["artifact_path"],
             "output_resolution": "1x1",
@@ -428,6 +496,120 @@ class TestComfyLocalImageGenProviderGenerate:
         }
         metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
         assert metadata["report_evidence"] == result["report_evidence"]
+        assert Path(result["image"]).exists()
+
+    def test_generate_source_preserving_depth_canny_postprocess_uses_promoted_workflow(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
+        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "comfy-output"))
+
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        source_image = tmp_path / "source.png"
+        source_image.write_bytes(PNG_1PX)
+        output_dir = Path(tmp_path / "comfy-output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / "depth_canny_postprocess_00001_.png"
+        output_file.write_bytes(PNG_1PX)
+
+        calls = {"post": [], "get": []}
+
+        class Response:
+            def __init__(self, payload, content=b""):
+                self._payload = payload
+                self.content = content
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, timeout=None):
+            calls["get"].append(url)
+            if url.endswith("/system_stats"):
+                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
+            if url.endswith("/models/checkpoints"):
+                return Response(["waiIllustriousSDXL_v170.safetensors"])
+            if "/history/" in url:
+                return Response(
+                    {
+                        "pid-depth-canny-post": {
+                            "status": {"completed": True, "status_str": "success"},
+                            "outputs": {
+                                "99": {
+                                    "images": [
+                                        {
+                                            "filename": "depth_canny_postprocess_00001_.png",
+                                            "subfolder": "",
+                                            "type": "output",
+                                        }
+                                    ]
+                                }
+                            },
+                        }
+                    }
+                )
+            raise AssertionError(f"unexpected GET {url}")
+
+        def fake_post(url, json=None, files=None, data=None, timeout=None):
+            calls["post"].append((url, json, files, data, timeout))
+            if url.endswith("/upload/image"):
+                assert files and "image" in files
+                assert data == {"overwrite": "true", "type": "input"}
+                return Response({"name": "source.png", "subfolder": "", "type": "input"})
+            if url.endswith("/prompt"):
+                return Response({"prompt_id": "pid-depth-canny-post", "number": 0, "node_errors": {}})
+            raise AssertionError(f"unexpected POST {url}")
+
+        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
+        monkeypatch.setattr(comfy_mod.requests, "post", fake_post)
+        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
+        import agent.image_gen_provider as provider_mod
+        monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
+
+        result = ComfyLocalImageGenProvider().generate(
+            "preserve pose and silhouette, convert to elegant black dress key visual",
+            aspect_ratio="portrait",
+            model="pornmasterAnime_ilV5.safetensors",
+            project_name="angelica_depth_canny_postprocess_test",
+            artifact_name="depth_canny_postprocess",
+            operation="source_preserving_postprocess",
+            source_image_path=str(source_image),
+            postprocess_preset="depth50_canny100_face8m_hand9c_v1",
+        )
+
+        prompt_calls = [call for call in calls["post"] if call[0].endswith("/prompt")]
+        assert len(prompt_calls) == 1
+        workflow = prompt_calls[0][1]["prompt"]
+        assert workflow["2"]["class_type"] == "VAELoader"
+        assert workflow["2"]["inputs"]["vae_name"] == "Anime SDXL VAE DPipe Prototype.safetensors"
+        assert workflow["3"]["class_type"] == "LoraLoader"
+        assert workflow["4"]["class_type"] == "LoraLoader"
+        assert workflow["21"]["class_type"] == "Zoe_DepthAnythingPreprocessor"
+        assert workflow["22"]["class_type"] == "CannyEdgePreprocessor"
+        assert workflow["25"]["class_type"] == "ControlNetLoader"
+        assert workflow["26"]["class_type"] == "ControlNetApplyAdvanced"
+        assert workflow["27"]["class_type"] == "ControlNetLoader"
+        assert workflow["28"]["class_type"] == "ControlNetApplyAdvanced"
+        assert workflow["31"]["class_type"] == "FaceDetailer"
+        assert workflow["34"]["class_type"] == "DetailerForEach"
+        assert result["success"] is True
+        assert result["model"] == "waiIllustriousSDXL_v170.safetensors"
+        assert result["workflow_key"] == "source_preserving_depth50_canny100_face8m_hand9c_v1"
+        assert result["postprocess_preset"] == "depth50_canny100_face8m_hand9c_v1"
+        assert result["vae"] == "Anime SDXL VAE DPipe Prototype.safetensors"
+        assert result["controlnet_used"] is True
+        assert len(result["controlnet_stack"]) == 2
+        assert result["evidence"]["vae"] == "Anime SDXL VAE DPipe Prototype.safetensors"
+        assert result["evidence"]["controlnet_used"] is True
+        assert result["evidence"]["controlnet_stack"][0]["name"] == "controlnet_zoe_depth_sdxl_1_0.safetensors"
+        assert result["evidence"]["controlnet_stack"][1]["name"] == "illustriousXLCanny_v10.safetensors"
+        assert result["report_evidence"]["postprocess_preset"] == "depth50_canny100_face8m_hand9c_v1"
+        metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
+        assert metadata["resolved_checkpoint"] == "waiIllustriousSDXL_v170.safetensors"
+        assert metadata["vae"] == "Anime SDXL VAE DPipe Prototype.safetensors"
+        assert metadata["controlnet_used"] is True
         assert Path(result["image"]).exists()
 
     def test_generate_source_preserving_detailer_normalizes_operation_typo(self, monkeypatch, tmp_path):

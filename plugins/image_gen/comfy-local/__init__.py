@@ -17,6 +17,7 @@ import re
 import subprocess
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -101,14 +102,24 @@ LOCAL_RETOUCH_OPERATION = "local_retouch"
 MASKED_INPAINT_OPERATION = "masked_inpaint"
 UPSCALE_OPERATION = "upscale"
 FACE8M_HAND9C_POSTPROCESS_PRESET = "face8m_d035_hand9c_d025"
+DEPTH50_CANNY100_FACE8M_HAND9C_POSTPROCESS_PRESET = "depth50_canny100_face8m_hand9c_v1"
 DEFAULT_UPSCALE_MODEL = "4x-UltraSharp.pth"
 DEFAULT_WORKFLOW_KEY = "txt2img_minimal_v1"
 CHARACTER_KEY_VISUAL_WORKFLOW_KEY = "character_key_visual_txt2img_v1"
 PORTRAIT_WORKFLOW_KEY = "portrait_round_v1_txt2img_v1"
 SOURCE_PRESERVING_FACE_HAND_WORKFLOW_KEY = "source_preserving_face8m_hand9c_v1"
+SOURCE_PRESERVING_DEPTH50_CANNY100_FACE_HAND_WORKFLOW_KEY = "source_preserving_depth50_canny100_face8m_hand9c_v1"
 SOURCE_MASKED_INPAINT_WORKFLOW_KEY = "source_masked_inpaint_v1"
 SOURCE_DETAILER_BBOX_MASKED_INPAINT_WORKFLOW_KEY = "source_detailer_bbox_masked_inpaint_v1"
 SOURCE_IMAGE_UPSCALE_WORKFLOW_KEY = "source_image_4x_ultrasharp_v1"
+SOURCE_PRESERVING_DEPTH_CANNY_CHECKPOINT = "waiIllustriousSDXL_v170.safetensors"
+SOURCE_PRESERVING_DEPTH_CANNY_VAE = "Anime SDXL VAE DPipe Prototype.safetensors"
+SOURCE_PRESERVING_DEPTH_CANNY_STYLE_LORA = r"00_illustrious_style_candidates\K NAI Style.safetensors"
+SOURCE_PRESERVING_DEPTH_CANNY_STYLE_LORA_WEIGHT = 0.65
+SOURCE_PRESERVING_DEPTH_CANNY_UTILITY_LORA = r"03_utility_detail_enhancer\AddMicroDetails_Illustrious_v6.safetensors"
+SOURCE_PRESERVING_DEPTH_CANNY_UTILITY_LORA_WEIGHT = 0.20
+SOURCE_PRESERVING_DEPTH_CONTROLNET = "controlnet_zoe_depth_sdxl_1_0.safetensors"
+SOURCE_PRESERVING_CANNY_CONTROLNET = "illustriousXLCanny_v10.safetensors"
 LOCALIZED_RETOUCH_TARGET_KEYWORDS: Tuple[str, ...] = (
     "hand",
     "finger",
@@ -435,6 +446,123 @@ def _upload_comfy_input_file(base_url: str, source_path: Path) -> Dict[str, Any]
     }
 
 
+def _image_work_root_from_source(source_path: Path) -> Optional[Path]:
+    parts = source_path.parts
+    for idx, part in enumerate(parts):
+        if part == "Image" and idx > 0:
+            return Path(*parts[: idx + 1])
+    env_root = os.getenv("HERMES_WORK_ROOT", "").strip()
+    if env_root:
+        candidate = Path(env_root).expanduser() / "Image"
+        if candidate.is_dir():
+            return candidate
+    fallback = Path("/Volumes/SSD_Hermes/HermesWork/Image")
+    return fallback if fallback.is_dir() else None
+
+
+def _candidate_normalized_paths(path: Path) -> List[Path]:
+    raw = str(path)
+    candidates = [path]
+    for form in ("NFC", "NFD"):
+        normalized = Path(unicodedata.normalize(form, raw)).expanduser()
+        if normalized not in candidates:
+            candidates.append(normalized)
+    return candidates
+
+
+def _find_unique_source_by_project_version(source_path: Path) -> Optional[Path]:
+    image_root = _image_work_root_from_source(source_path)
+    if image_root is None or not image_root.is_dir():
+        return None
+    parent_name = unicodedata.normalize("NFC", source_path.parent.name)
+    date_match = re.match(r"^(\d{6})[_-]", parent_name)
+    version_match = re.search(
+        r"(_v\d+)(\.(?:png|jpg|jpeg|webp))$",
+        unicodedata.normalize("NFC", source_path.name),
+        re.IGNORECASE,
+    )
+    if not date_match or not version_match:
+        return None
+    date_prefix = date_match.group(1)
+    version_suffix = version_match.group(1).casefold()
+    extension = version_match.group(2).casefold()
+    matches: List[Path] = []
+    for project_dir in image_root.glob(f"{date_prefix}*"):
+        if not project_dir.is_dir():
+            continue
+        for candidate in project_dir.rglob("*"):
+            if not candidate.is_file():
+                continue
+            name = unicodedata.normalize("NFC", candidate.name).casefold()
+            if name.endswith(f"{version_suffix}{extension}"):
+                matches.append(candidate)
+    unique: List[Path] = []
+    seen: set[str] = set()
+    for candidate in matches:
+        key = str(candidate.resolve())
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique[0] if len(unique) == 1 else None
+
+
+def _resolve_existing_source_image_path(source_image_path: str | Path) -> Tuple[Optional[Path], Dict[str, Any]]:
+    requested = Path(source_image_path).expanduser()
+    attempts: List[str] = []
+    for candidate in _candidate_normalized_paths(requested):
+        attempts.append(str(candidate))
+        if candidate.is_file():
+            return candidate, {
+                "requested_source_image_path": str(requested),
+                "resolved_source_image_path": str(candidate),
+                "source_path_resolution": "exact" if candidate == requested else "unicode_normalized",
+                "source_path_resolution_attempts": attempts,
+            }
+        parent = candidate.parent
+        if parent.is_dir():
+            wanted = unicodedata.normalize("NFC", candidate.name)
+            sibling_matches = [
+                item for item in parent.iterdir()
+                if item.is_file() and unicodedata.normalize("NFC", item.name) == wanted
+            ]
+            if len(sibling_matches) == 1:
+                resolved = sibling_matches[0]
+                return resolved, {
+                    "requested_source_image_path": str(requested),
+                    "resolved_source_image_path": str(resolved),
+                    "source_path_resolution": "sibling_unicode_normalized",
+                    "source_path_resolution_attempts": attempts,
+                }
+    project_version_match = _find_unique_source_by_project_version(requested)
+    if project_version_match is not None:
+        return project_version_match, {
+            "requested_source_image_path": str(requested),
+            "resolved_source_image_path": str(project_version_match),
+            "source_path_resolution": "unique_date_version_match",
+            "source_path_resolution_attempts": attempts,
+        }
+    return None, {
+        "requested_source_image_path": str(requested),
+        "resolved_source_image_path": None,
+        "source_path_resolution": "not_found",
+        "source_path_resolution_attempts": attempts,
+    }
+
+
+_SOURCE_IMAGE_PROMPT_ONLY_RE = re.compile(
+    r"(source_image_path\s*:|source_image\s*:|operation\s*:\s*[\"']?(?:source_preserving_postprocess|postprocess|local_retouch|masked_inpaint|upscale)|"
+    r"source[-_ ]preserving[-_ ]postprocess)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_source_image_task_prompt_without_args(prompt: str, *, source_image_path: str, operation: str) -> bool:
+    """Detect source-image jobs that were accidentally passed as txt2img prose."""
+    if source_image_path or operation:
+        return False
+    return bool(_SOURCE_IMAGE_PROMPT_ONLY_RE.search(str(prompt or "")))
+
+
 def _build_face8m_hand9c_postprocess_workflow(
     *,
     checkpoint: str,
@@ -547,6 +675,196 @@ def _build_face8m_hand9c_postprocess_workflow(
             "class_type": "DetailerForEach",
         },
         "99": {"inputs": {"images": ["11", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
+    }
+
+
+def _build_depth50_canny100_face8m_hand9c_postprocess_workflow(
+    *,
+    checkpoint: str,
+    source_image_name: str,
+    positive_prompt: str,
+    negative_prompt: str,
+    filename_prefix: str,
+    seed: int,
+) -> Dict[str, Any]:
+    return {
+        "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
+        "2": {"inputs": {"vae_name": SOURCE_PRESERVING_DEPTH_CANNY_VAE}, "class_type": "VAELoader"},
+        "3": {
+            "inputs": {
+                "model": ["1", 0],
+                "clip": ["1", 1],
+                "lora_name": SOURCE_PRESERVING_DEPTH_CANNY_STYLE_LORA,
+                "strength_model": SOURCE_PRESERVING_DEPTH_CANNY_STYLE_LORA_WEIGHT,
+                "strength_clip": SOURCE_PRESERVING_DEPTH_CANNY_STYLE_LORA_WEIGHT,
+            },
+            "class_type": "LoraLoader",
+        },
+        "4": {
+            "inputs": {
+                "model": ["3", 0],
+                "clip": ["3", 1],
+                "lora_name": SOURCE_PRESERVING_DEPTH_CANNY_UTILITY_LORA,
+                "strength_model": SOURCE_PRESERVING_DEPTH_CANNY_UTILITY_LORA_WEIGHT,
+                "strength_clip": SOURCE_PRESERVING_DEPTH_CANNY_UTILITY_LORA_WEIGHT,
+            },
+            "class_type": "LoraLoader",
+        },
+        "5": {"inputs": {"text": positive_prompt, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
+        "6": {"inputs": {"text": negative_prompt, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
+        "7": {"inputs": {"width": 1024, "height": 1536, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+        "20": {"inputs": {"image": source_image_name}, "class_type": "LoadImage"},
+        "21": {"inputs": {"image": ["20", 0], "resolution": 1024}, "class_type": "Zoe_DepthAnythingPreprocessor"},
+        "22": {
+            "inputs": {
+                "image": ["20", 0],
+                "low_threshold": 100,
+                "high_threshold": 200,
+                "resolution": 1024,
+            },
+            "class_type": "CannyEdgePreprocessor",
+        },
+        "25": {"inputs": {"control_net_name": SOURCE_PRESERVING_DEPTH_CONTROLNET}, "class_type": "ControlNetLoader"},
+        "26": {
+            "inputs": {
+                "positive": ["5", 0],
+                "negative": ["6", 0],
+                "control_net": ["25", 0],
+                "image": ["21", 0],
+                "strength": 0.5,
+                "start_percent": 0.0,
+                "end_percent": 0.5,
+            },
+            "class_type": "ControlNetApplyAdvanced",
+        },
+        "27": {"inputs": {"control_net_name": SOURCE_PRESERVING_CANNY_CONTROLNET}, "class_type": "ControlNetLoader"},
+        "28": {
+            "inputs": {
+                "positive": ["26", 0],
+                "negative": ["26", 1],
+                "control_net": ["27", 0],
+                "image": ["22", 0],
+                "strength": 1.0,
+                "start_percent": 0.0,
+                "end_percent": 0.4,
+            },
+            "class_type": "ControlNetApplyAdvanced",
+        },
+        "8": {
+            "inputs": {
+                "seed": seed,
+                "steps": 28,
+                "cfg": 5.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 1.0,
+                "model": ["4", 0],
+                "positive": ["28", 0],
+                "negative": ["28", 1],
+                "latent_image": ["7", 0],
+            },
+            "class_type": "KSampler",
+        },
+        "9": {"inputs": {"samples": ["8", 0], "vae": ["2", 0]}, "class_type": "VAEDecode"},
+        "10": {
+            "inputs": {
+                "text": (
+                    "masterpiece, best quality, high quality, anime illustration, clean hand anatomy, "
+                    "elegant fingers, natural hand pose, five fingers, clean lineart, polished cel shading, "
+                    "consistent character art style, preserve original character identity and lighting"
+                ),
+                "clip": ["4", 1],
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "11": {
+            "inputs": {
+                "text": (
+                    "low quality, blurry, bad hands, malformed hands, extra fingers, missing fingers, "
+                    "fused fingers, broken fingers, mutated fingers, deformed palm, distorted hand, "
+                    "photorealistic, 3d render, changing pose, changing character identity"
+                ),
+                "clip": ["4", 1],
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "30": {"inputs": {"model_name": "bbox/face_yolov8m.pt"}, "class_type": "UltralyticsDetectorProvider"},
+        "31": {
+            "inputs": {
+                "image": ["9", 0],
+                "model": ["4", 0],
+                "clip": ["4", 1],
+                "vae": ["2", 0],
+                "guide_size": 512,
+                "guide_size_for": True,
+                "max_size": 1024,
+                "seed": seed + 17,
+                "steps": 16,
+                "cfg": 5.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "positive": ["5", 0],
+                "negative": ["6", 0],
+                "denoise": 0.35,
+                "feather": 6,
+                "noise_mask": True,
+                "force_inpaint": True,
+                "bbox_threshold": 0.45,
+                "bbox_dilation": 8,
+                "bbox_crop_factor": 3.0,
+                "sam_detection_hint": "center-1",
+                "sam_dilation": 0,
+                "sam_threshold": 0.93,
+                "sam_bbox_expansion": 0,
+                "sam_mask_hint_threshold": 0.7,
+                "sam_mask_hint_use_negative": "False",
+                "drop_size": 10,
+                "bbox_detector": ["30", 0],
+                "wildcard": "",
+                "cycle": 1,
+            },
+            "class_type": "FaceDetailer",
+        },
+        "32": {"inputs": {"model_name": "bbox/hand_yolov9c.pt"}, "class_type": "UltralyticsDetectorProvider"},
+        "33": {
+            "inputs": {
+                "bbox_detector": ["32", 0],
+                "image": ["31", 0],
+                "threshold": 0.35,
+                "dilation": 10,
+                "crop_factor": 3.0,
+                "drop_size": 12,
+                "labels": "all",
+            },
+            "class_type": "BboxDetectorSEGS",
+        },
+        "34": {
+            "inputs": {
+                "image": ["31", 0],
+                "segs": ["33", 0],
+                "model": ["4", 0],
+                "clip": ["4", 1],
+                "vae": ["2", 0],
+                "guide_size": 384,
+                "guide_size_for": True,
+                "max_size": 768,
+                "seed": seed + 71,
+                "steps": 14,
+                "cfg": 5.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "positive": ["10", 0],
+                "negative": ["11", 0],
+                "denoise": 0.25,
+                "feather": 5,
+                "noise_mask": True,
+                "force_inpaint": True,
+                "wildcard": "",
+                "cycle": 1,
+            },
+            "class_type": "DetailerForEach",
+        },
+        "99": {"inputs": {"images": ["34", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
     }
 
 
@@ -1483,12 +1801,37 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         subject_dominance = kwargs.get("subject_dominance")
         operation = str(kwargs.get("operation") or "").strip()
         source_image_path = str(kwargs.get("source_image_path") or kwargs.get("source_image") or "").strip()
+        if _looks_like_source_image_task_prompt_without_args(
+            prompt,
+            source_image_path=source_image_path,
+            operation=operation,
+        ):
+            return error_response(
+                error=(
+                    "source-image task text was passed as a plain prompt. "
+                    "Call image_generate with explicit operation and source_image_path instead of txt2img."
+                ),
+                error_type="source_image_task_prompt_only",
+                provider=self.name,
+                model=checkpoint,
+                prompt=prompt,
+                aspect_ratio=aspect,
+                extra={
+                    "detected_source_image_task_prompt_only": True,
+                    "required_arguments": ["operation", "source_image_path"],
+                    "final_report_allowed": False,
+                    "completion_report_forbidden": True,
+                },
+            )
         postprocess_preset = str(kwargs.get("postprocess_preset") or "").strip()
         masked_inpaint = operation == MASKED_INPAINT_OPERATION
         source_image_upscale = operation == UPSCALE_OPERATION
         source_preserving_postprocess = (
             operation in {"postprocess", SOURCE_PRESERVING_POSTPROCESS_OPERATION, LOCAL_RETOUCH_OPERATION}
-            or postprocess_preset == FACE8M_HAND9C_POSTPROCESS_PRESET
+            or postprocess_preset in {
+                FACE8M_HAND9C_POSTPROCESS_PRESET,
+                DEPTH50_CANNY100_FACE8M_HAND9C_POSTPROCESS_PRESET,
+            }
             or (bool(source_image_path) and not source_image_upscale and not masked_inpaint)
         )
         source_preserving_operation = operation
@@ -1594,6 +1937,20 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             task_context="\n".join(part for part in task_context_parts if part),
             allow_smoke_default=runtime_preset is None,
         )
+        if (
+            not checkpoint_resolution.get("ok")
+            and postprocess_preset == DEPTH50_CANNY100_FACE8M_HAND9C_POSTPROCESS_PRESET
+            and SOURCE_PRESERVING_DEPTH_CANNY_CHECKPOINT in checkpoints
+        ):
+            checkpoint_resolution = _resolution_payload(
+                base=checkpoint_resolution,
+                ok=True,
+                mode="preset_override",
+                candidates=[],
+                resolved_checkpoint=SOURCE_PRESERVING_DEPTH_CANNY_CHECKPOINT,
+            )
+            checkpoint_resolution["source_model_rejected"] = checkpoint
+            checkpoint_resolution["resolution_reason"] = "source_preserving_depth_canny_promoted_preset"
         if not checkpoint_resolution.get("ok"):
             result = error_response(
                 error=str(checkpoint_resolution.get("error") or f"Requested checkpoint not found in remote ComfyUI model list: {checkpoint}"),
@@ -1628,7 +1985,17 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     prompt=prompt,
                     aspect_ratio=aspect,
                 )
-            source_input_path = Path(source_image_path).expanduser()
+            source_input_path, source_resolution = _resolve_existing_source_image_path(source_image_path)
+            if source_input_path is None:
+                return error_response(
+                    error=f"source_image_path not found for ComfyUI source-image upscale: {source_image_path}",
+                    error_type="source_image_not_found",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                    extra=source_resolution,
+                )
             upscale_model = str(kwargs.get("upscale_model") or DEFAULT_UPSCALE_MODEL).strip() or DEFAULT_UPSCALE_MODEL
             try:
                 uploaded_source = _upload_comfy_input_file(base_url, source_input_path)
@@ -1640,6 +2007,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     model=checkpoint,
                     prompt=prompt,
                     aspect_ratio=aspect,
+                    extra=source_resolution,
                 )
 
             workflow_key = SOURCE_IMAGE_UPSCALE_WORKFLOW_KEY
@@ -1896,7 +2264,17 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     prompt=prompt,
                     aspect_ratio=aspect,
                 )
-            source_input_path = Path(source_image_path).expanduser()
+            source_input_path, source_resolution = _resolve_existing_source_image_path(source_image_path)
+            if source_input_path is None:
+                return error_response(
+                    error=f"source_image_path not found for masked inpaint: {source_image_path}",
+                    error_type="source_image_not_found",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                    extra=source_resolution,
+                )
             feather_px = int(kwargs.get("mask_feather_px") or 10)
             grow_mask_by = int(kwargs.get("grow_mask_by") or 8)
             inpaint_target = str(kwargs.get("mask_target") or kwargs.get("mask_label") or "").strip() or None
@@ -1984,6 +2362,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     model=checkpoint,
                     prompt=prompt,
                     aspect_ratio=aspect,
+                    extra=source_resolution,
                 )
 
             workflow_key = (
@@ -2375,7 +2754,11 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             )
 
         if source_preserving_postprocess:
-            if postprocess_preset and postprocess_preset != FACE8M_HAND9C_POSTPROCESS_PRESET:
+            supported_postprocess_presets = {
+                FACE8M_HAND9C_POSTPROCESS_PRESET,
+                DEPTH50_CANNY100_FACE8M_HAND9C_POSTPROCESS_PRESET,
+            }
+            if postprocess_preset and postprocess_preset not in supported_postprocess_presets:
                 return error_response(
                     error=f"Unsupported ComfyUI postprocess preset: {postprocess_preset}",
                     error_type="invalid_argument",
@@ -2393,7 +2776,17 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     prompt=prompt,
                     aspect_ratio=aspect,
                 )
-            source_input_path = Path(source_image_path).expanduser()
+            source_input_path, source_resolution = _resolve_existing_source_image_path(source_image_path)
+            if source_input_path is None:
+                return error_response(
+                    error=f"source_image_path not found for source-preserving postprocess: {source_image_path}",
+                    error_type="source_image_not_found",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                    extra=source_resolution,
+                )
             try:
                 uploaded_source = _upload_comfy_input_file(base_url, source_input_path)
             except Exception as exc:  # noqa: BLE001
@@ -2404,22 +2797,78 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     model=checkpoint,
                     prompt=prompt,
                     aspect_ratio=aspect,
+                    extra=source_resolution,
                 )
 
-            preset_name = FACE8M_HAND9C_POSTPROCESS_PRESET
+            preset_name = postprocess_preset or FACE8M_HAND9C_POSTPROCESS_PRESET
             workflow_key = SOURCE_PRESERVING_FACE_HAND_WORKFLOW_KEY
-            if not negative_prompt:
-                negative_prompt = (
-                    "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, "
-                    "missing fingers, distorted face, text, watermark, changing pose, changing character identity"
+            effective_checkpoint = checkpoint
+            effective_vae: Optional[str] = None
+            effective_loras: List[Dict[str, Any]] = []
+            controlnet_used = False
+            controlnet_stack: List[Dict[str, Any]] = []
+            if preset_name == DEPTH50_CANNY100_FACE8M_HAND9C_POSTPROCESS_PRESET:
+                workflow_key = SOURCE_PRESERVING_DEPTH50_CANNY100_FACE_HAND_WORKFLOW_KEY
+                effective_checkpoint = SOURCE_PRESERVING_DEPTH_CANNY_CHECKPOINT
+                effective_vae = SOURCE_PRESERVING_DEPTH_CANNY_VAE
+                effective_loras = [
+                    {
+                        "name": SOURCE_PRESERVING_DEPTH_CANNY_STYLE_LORA,
+                        "weight": SOURCE_PRESERVING_DEPTH_CANNY_STYLE_LORA_WEIGHT,
+                    },
+                    {
+                        "name": SOURCE_PRESERVING_DEPTH_CANNY_UTILITY_LORA,
+                        "weight": SOURCE_PRESERVING_DEPTH_CANNY_UTILITY_LORA_WEIGHT,
+                    },
+                ]
+                controlnet_used = True
+                controlnet_stack = [
+                    {
+                        "name": SOURCE_PRESERVING_DEPTH_CONTROLNET,
+                        "preprocessor": "Zoe_DepthAnythingPreprocessor",
+                        "strength": 0.5,
+                        "start_percent": 0.0,
+                        "end_percent": 0.5,
+                    },
+                    {
+                        "name": SOURCE_PRESERVING_CANNY_CONTROLNET,
+                        "preprocessor": "CannyEdgePreprocessor",
+                        "strength": 1.0,
+                        "start_percent": 0.0,
+                        "end_percent": 0.4,
+                    },
+                ]
+                if not negative_prompt:
+                    negative_prompt = (
+                        "low quality, worst quality, normal quality, lowres, blurry, jpeg artifacts, watermark, "
+                        "text, logo, signature, card, trading card, card frame, ornate frame, border, UI, title area, "
+                        "textbox, stats panel, multiple characters, cropped body, cropped legs, feet out of frame, "
+                        "tiny face, unreadable face, black face, shadowed face, bad face, extra arms, extra hands, "
+                        "bad anatomy, bad hands, malformed hands, extra fingers, missing fingers, fused fingers, "
+                        "bad legs, bad feet, broken silhouette, distorted costume, photorealistic, 3d render, "
+                        "realistic skin texture, plastic skin, over-sharpened, crunchy details, noisy texture, muddy colors"
+                    )
+                workflow = _build_depth50_canny100_face8m_hand9c_postprocess_workflow(
+                    checkpoint=effective_checkpoint,
+                    source_image_name=str(uploaded_source["name"]),
+                    positive_prompt=prompt_for_generation,
+                    negative_prompt=negative_prompt,
+                    filename_prefix=filename_prefix,
+                    seed=DEFAULT_SEED,
                 )
-            workflow = _build_face8m_hand9c_postprocess_workflow(
-                checkpoint=checkpoint,
-                source_image_name=str(uploaded_source["name"]),
-                positive_prompt=prompt_for_generation,
-                negative_prompt=negative_prompt,
-                filename_prefix=filename_prefix,
-            )
+            else:
+                if not negative_prompt:
+                    negative_prompt = (
+                        "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, "
+                        "missing fingers, distorted face, text, watermark, changing pose, changing character identity"
+                    )
+                workflow = _build_face8m_hand9c_postprocess_workflow(
+                    checkpoint=effective_checkpoint,
+                    source_image_name=str(uploaded_source["name"]),
+                    positive_prompt=prompt_for_generation,
+                    negative_prompt=negative_prompt,
+                    filename_prefix=filename_prefix,
+                )
             payload = {"prompt": workflow}
 
             try:
@@ -2528,12 +2977,17 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "raw_requested_operation": operation or None,
                 "runtime_preset": preset_name,
                 "workflow_key": workflow_key,
-                "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
+                "postprocess_preset": preset_name,
+                "source_path_resolution": source_resolution,
                 "actual_width": actual_width,
                 "actual_height": actual_height,
                 "output_resolution": output_resolution,
                 "face_detailer": {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5},
                 "hand_detailer": {"model": "bbox/hand_yolov9c.pt", "denoise": 0.25, "steps": 14, "cfg": 5.5},
+                "vae": effective_vae,
+                "loras": effective_loras,
+                "controlnet_used": controlnet_used,
+                "controlnet_stack": controlnet_stack,
                 "raw_prompt_payload": {
                     "submit_payload": payload,
                     "submit_response": submit,
@@ -2550,17 +3004,19 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "workflow_key": workflow_key,
                 "requested_operation": source_preserving_operation,
                 "raw_requested_operation": operation or None,
-                "checkpoint": checkpoint,
+                "checkpoint": effective_checkpoint,
                 "requested_checkpoint": checkpoint_resolution.get("requested_checkpoint", requested_checkpoint),
-                "resolved_checkpoint": checkpoint,
+                "resolved_checkpoint": effective_checkpoint,
                 "preset": preset_name,
-                "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
+                "postprocess_preset": preset_name,
                 "source_image_path": str(source_input_path),
+                "source_path_resolution": source_resolution,
                 "uploaded_source": uploaded_source,
                 "negative_prompt": negative_prompt,
-                "vae": None,
-                "loras": [],
-                "controlnet_used": False,
+                "vae": effective_vae,
+                "loras": effective_loras,
+                "controlnet_used": controlnet_used,
+                "controlnet_stack": controlnet_stack,
                 "created_at": created_at,
                 "category": POSTPROCESS_CATEGORY,
                 "output_source_path": str(output_source_path),
@@ -2600,11 +3056,16 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "requested_operation": source_preserving_operation,
                 "raw_requested_operation": operation or None,
                 "source_image": str(source_input_path),
+                "requested_source_image_path": source_resolution.get("requested_source_image_path"),
+                "resolved_source_image_path": source_resolution.get("resolved_source_image_path"),
+                "source_path_resolution": source_resolution.get("source_path_resolution"),
                 "uploaded_source": uploaded_source,
                 "seed": None,
-                "vae": None,
-                "vae_report_value": "checkpoint_builtin_vae",
-                "loras": [],
+                "vae": effective_vae,
+                "vae_report_value": effective_vae or "checkpoint_builtin_vae",
+                "loras": effective_loras,
+                "controlnet_used": controlnet_used,
+                "controlnet_stack": controlnet_stack,
                 "face_detailer": {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5},
                 "hand_detailer": {"model": "bbox/hand_yolov9c.pt", "denoise": 0.25, "steps": 14, "cfg": 5.5},
                 "output_image": output_image,
@@ -2617,11 +3078,14 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             report_evidence = {
                 "operation": source_preserving_operation,
                 "canonical_operation": SOURCE_PRESERVING_POSTPROCESS_OPERATION,
-                "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
+                "postprocess_preset": preset_name,
                 "workflow_key": workflow_key,
                 "workflow_path": str(bundle["workflow_path"]),
                 "prompt_id": prompt_id,
                 "source_image_path": str(source_input_path),
+                "requested_source_image_path": source_resolution.get("requested_source_image_path"),
+                "resolved_source_image_path": source_resolution.get("resolved_source_image_path"),
+                "source_path_resolution": source_resolution.get("source_path_resolution"),
                 "output_image": bundle["primary_image"],
                 "artifact_path": str(bundle["primary_image_path"]),
                 "output_resolution": output_resolution,
@@ -2632,7 +3096,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
             return success_response(
                 image=str(bundle["primary_image_path"]),
-                model=checkpoint,
+                model=effective_checkpoint,
                 prompt=prompt_for_generation,
                 aspect_ratio=aspect,
                 provider=self.name,
@@ -2642,14 +3106,19 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     "requested_operation": source_preserving_operation,
                     "raw_requested_operation": operation or None,
                     "canonical_operation": SOURCE_PRESERVING_POSTPROCESS_OPERATION,
-                    "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
+                    "postprocess_preset": preset_name,
                     "workflow_key": workflow_key,
                     "evidence": evidence,
                     "report_evidence": report_evidence,
                     "source_image": str(source_input_path),
-                    "vae": None,
-                    "vae_report_value": "checkpoint_builtin_vae",
-                    "loras": [],
+                    "requested_source_image_path": source_resolution.get("requested_source_image_path"),
+                    "resolved_source_image_path": source_resolution.get("resolved_source_image_path"),
+                    "source_path_resolution": source_resolution.get("source_path_resolution"),
+                    "vae": effective_vae,
+                    "vae_report_value": effective_vae or "checkpoint_builtin_vae",
+                    "loras": effective_loras,
+                    "controlnet_used": controlnet_used,
+                    "controlnet_stack": controlnet_stack,
                     "local_status": "후보정 완료",
                     "publish_status": "HermesWork publish 완료",
                     "nas_status": nas_status,

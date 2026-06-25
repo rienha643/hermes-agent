@@ -4373,6 +4373,29 @@ class BasePlatformAdapter(ABC):
                             actual_count,
                             len(blocked_images) + len(blocked_other),
                         )
+                        try:
+                            missing_count = max(expected_count - actual_count, 0)
+                            blocked_names = [
+                                Path(item.get("path", "")).name
+                                for item in (blocked_images + blocked_other)
+                                if item.get("path")
+                            ]
+                            details = []
+                            if missing_count:
+                                details.append(f"누락 {missing_count}개")
+                            if blocked_names:
+                                details.append("차단 파일: " + ", ".join(blocked_names[:6]))
+                            detail_text = f" ({'; '.join(details)})" if details else ""
+                            await self.send(
+                                chat_id=event.source.chat_id,
+                                content=(
+                                    "⚠️ Slack 첨부 검증 실패: 생성/보고 대상 파일 수와 실제 업로드 후보 수가 "
+                                    f"일치하지 않습니다. expected={expected_count}, actual={actual_count}{detail_text}"
+                                ),
+                                metadata=_thread_metadata,
+                            )
+                        except Exception:
+                            logger.warning("[Slack] Failed to send auto-delivery mismatch warning", exc_info=True)
                     if actual_count == 0:
                         _image_paths = []
                         _non_image_media = []
