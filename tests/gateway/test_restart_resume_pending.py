@@ -238,6 +238,25 @@ class TestSessionEntryResumeFields:
         assert restored.resume_reason == "restart_timeout"
         assert restored.last_resume_marked_at is None
 
+    def test_from_dict_normalizes_aware_timestamps_to_naive_local(self):
+        data = {
+            "session_key": "agent:main:slack:group:C123:1782404455.272289",
+            "session_id": "sid",
+            "created_at": "2026-06-25T16:20:55+00:00",
+            "updated_at": "2026-06-25T16:20:55+00:00",
+            "chat_type": "group",
+            "resume_pending": True,
+            "resume_reason": "restart_interrupted",
+            "last_resume_marked_at": "2026-06-25T16:21:00+00:00",
+        }
+
+        restored = SessionEntry.from_dict(data)
+
+        assert restored.created_at.tzinfo is None
+        assert restored.updated_at.tzinfo is None
+        assert restored.last_resume_marked_at is not None
+        assert restored.last_resume_marked_at.tzinfo is None
+
 
 # ---------------------------------------------------------------------------
 # SessionStore.mark_resume_pending / clear_resume_pending

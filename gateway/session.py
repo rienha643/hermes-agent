@@ -27,6 +27,14 @@ def _now() -> datetime:
     return datetime.now()
 
 
+def _parse_session_datetime(value: Any) -> datetime:
+    """Parse stored session timestamps into the store's naive local timeline."""
+    parsed = datetime.fromisoformat(str(value))
+    if parsed.tzinfo is not None:
+        return parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
 # ---------------------------------------------------------------------------
 # PII redaction helpers
 # ---------------------------------------------------------------------------
@@ -543,15 +551,15 @@ class SessionEntry:
         _lrma = data.get("last_resume_marked_at")
         if _lrma:
             try:
-                last_resume_marked_at = datetime.fromisoformat(_lrma)
+                last_resume_marked_at = _parse_session_datetime(_lrma)
             except (TypeError, ValueError):
                 last_resume_marked_at = None
 
         return cls(
             session_key=data["session_key"],
             session_id=data["session_id"],
-            created_at=datetime.fromisoformat(data["created_at"]),
-            updated_at=datetime.fromisoformat(data["updated_at"]),
+            created_at=_parse_session_datetime(data["created_at"]),
+            updated_at=_parse_session_datetime(data["updated_at"]),
             origin=origin,
             display_name=data.get("display_name"),
             platform=platform,
