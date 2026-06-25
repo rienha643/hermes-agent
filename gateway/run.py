@@ -1554,7 +1554,7 @@ _SEIR_GENERATION_SUCCESS_CLAIM_RE = re.compile(
 _SEIR_PLACEHOLDER_ARTIFACT_REPORT_RE = re.compile(
     r"(\[여기에\s*실제\s*artifact_path|실제\s*artifact_path(?:를)?\s*삽입|"
     r"\((?:사용된|설정된|실행된)\s*(?:VAE|LoRA|Sampler|CFG|Step|Seed|해상도|명칭|값|수)[^)]*\)|"
-    r"\[(?:해당\s*경로|Seed\s*번호|seed\s*number|실제\s*artifact_path)\]|"
+    r"\[(?:해당\s*경로|Seed\s*번호|seed\s*number|실제\s*artifact_path|생성된\s*64자리\s*hex\s*값|새로\s*생성된\s*고유\s*ID|확인된\s*해상도(?:,\s*예:\s*[^\]]+)?)\]|"
     r"_path_to_generated_image_)",
     re.IGNORECASE,
 )
@@ -1562,6 +1562,14 @@ _SEIR_BLOCKER_RE = re.compile(
     r"(생성하지\s*않|생성할\s*수\s*없|실행하지\s*않|도구\s*호출.*없|"
     r"blocker|blocked|unavailable|approval_required|requires_approval|"
     r"no\s+image\s+was\s+generated)",
+    re.IGNORECASE,
+)
+_COMMANDER_IMAGE_TASK_HINT_RE = re.compile(
+    r"(image_generate|source\s+image|artifact_path|output\s+artifact\s+path|slack\s*업로드|upscale|prompt\s*id|workflow\s*key|file\s*sha)",
+    re.IGNORECASE,
+)
+_COMMANDER_IMAGE_SUCCESS_CLAIM_RE = re.compile(
+    r"(완료하였|완료했습니다|완료하였습|성공|artifact\s*path|output\s*artifact\s*path|file\s*sha|slack\s*업로드|prompt\s*id|해상도)",
     re.IGNORECASE,
 )
 
@@ -1581,6 +1589,7 @@ def _guard_unverified_image_generation_claim(
     *,
     active_profile: str = "",
     turn_tool_names: list[str] | tuple[str, ...] | set[str] | None = None,
+    inbound_message_text: str = "",
 ) -> tuple[str, bool]:
     """Block image-worker progress/success prose when no image tool ran this turn."""
     body = str(text or "")
@@ -1597,10 +1606,15 @@ def _guard_unverified_image_generation_claim(
         return body, False
     if _SEIR_BLOCKER_RE.search(body):
         return body, False
+    commander_image_dispatch = (
+        "[COMMANDER_DISPATCH]" in str(inbound_message_text or "")
+        and _COMMANDER_IMAGE_TASK_HINT_RE.search(str(inbound_message_text or "")) is not None
+    )
     if not (
         _SEIR_GENERATION_PROGRESS_CLAIM_RE.search(body)
         or _SEIR_GENERATION_SUCCESS_CLAIM_RE.search(body)
         or _SEIR_PLACEHOLDER_ARTIFACT_REPORT_RE.search(body)
+        or (commander_image_dispatch and _COMMANDER_IMAGE_SUCCESS_CLAIM_RE.search(body))
     ):
         return body, False
     return _render_no_artifact_generation_guard(guarded_profiles[profile]), True
@@ -11101,6 +11115,7 @@ class GatewayRunner:
                 response,
                 active_profile=_active_profile,
                 turn_tool_names=_turn_tool_names,
+                inbound_message_text=message_text,
             )
             if _seir_no_artifact_blocked:
                 logger.warning(

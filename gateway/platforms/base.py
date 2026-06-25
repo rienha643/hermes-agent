@@ -69,9 +69,38 @@ _EVALUATION_REPORT_MARKERS = (
     *_VALIDATION_REPORT_MARKERS,
 )
 
+_COMMANDER_DISPATCH_SESSION_RE = re.compile(
+    r"^\[COMMANDER_DISPATCH\]\s.*?^dispatch_event_id:\s*([A-Za-z0-9_.:-]+)\s*$",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+
 
 def _looks_like_evaluation_report(text: str) -> bool:
     return should_preserve_report_body(text)
+
+
+def _override_session_key_for_internal_dispatch(event, session_key: str) -> str:
+    """Split internal Slack Commander dispatch runs by dispatch_event_id."""
+    if not session_key:
+        return session_key
+    if not getattr(event, "internal", False):
+        return session_key
+    source = getattr(event, "source", None)
+    platform = _platform_name(getattr(source, "platform", None))
+    if platform != "slack":
+        return session_key
+    body = str(getattr(event, "text", "") or "")
+    match = _COMMANDER_DISPATCH_SESSION_RE.search(body)
+    if not match:
+        return session_key
+    dispatch_id = str(match.group(1) or "").strip()
+    if not dispatch_id:
+        return session_key
+    if f":dispatch:{dispatch_id}" in session_key:
+        return session_key
+    return f"{session_key}:dispatch:{dispatch_id}"
+
+
 _POST_UPLOAD_REPORT_MARKERS = (
     "slack upload",
     "slack 전달 완료",
@@ -146,8 +175,14 @@ def _thread_metadata_for_source(source, reply_to_message_id: str | None = None) 
     thread_id = getattr(source, "thread_id", None)
     if thread_id is None:
         return None
+    platform_name = _platform_name(getattr(source, "platform", None))
+    if platform_name == "slack":
+        thread_text = str(thread_id)
+        m = re.match(r"^(?P<thread>\d+\.\d+):dispatch:[A-Za-z0-9_.:-]+$", thread_text)
+        if m:
+            thread_id = m.group("thread")
     metadata = {"thread_id": thread_id}
-    if _platform_name(getattr(source, "platform", None)) == "telegram" and getattr(source, "chat_type", None) == "dm":
+    if platform_name == "telegram" and getattr(source, "chat_type", None) == "dm":
         metadata["telegram_dm_topic_reply_fallback"] = True
         tid = str(thread_id)
         if tid and tid not in {"", "1"}:
@@ -3798,6 +3833,7 @@ class BasePlatformAdapter(ABC):
             group_sessions_per_user=self.config.extra.get("group_sessions_per_user", True),
             thread_sessions_per_user=self.config.extra.get("thread_sessions_per_user", False),
         )
+        session_key = _override_session_key_for_internal_dispatch(event, session_key)
 
         # On-entry self-heal: if the adapter still has an _active_sessions
         # entry for this key but the owner task has already exited (done or

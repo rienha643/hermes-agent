@@ -103,6 +103,23 @@ def test_negative_kickoff_intent_rejects_document_workflow():
     assert _extract_project_name_from_kickoff_message(message) is None
 
 
+def test_negative_kickoff_intent_rejects_commander_dispatch_tool_hints():
+    message = (
+        "[COMMANDER_DISPATCH]\n"
+        "schema: commander_dispatch_v1\n"
+        "dispatch_event_id: d1\n"
+        "[/COMMANDER_DISPATCH]\n\n"
+        "image_generate 도구 인자 힌트:\n"
+        "- project_name 값 = angelica_v16_upscale_compact_slack_verify\n"
+        "- operation 값 = upscale\n"
+        "게임 프로젝트 생성이 아니라 이미지 업스케일 작업이야."
+    )
+
+    assert _has_project_kickoff_intent(message) is False
+    assert _extract_project_name_from_kickoff_message(message) is None
+    assert _bootstrap_games_project_kickoff(message) is None
+
+
 def test_boundary_case_requires_explicit_project_name_even_with_game_start_intent():
     message = "신규 게임 프로젝트를 시작합니다"
 

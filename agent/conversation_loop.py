@@ -560,6 +560,9 @@ def _strip_trailing_project_instruction(candidate: str) -> str:
 
 
 def _has_project_kickoff_intent(user_message: str) -> bool:
+    if "[COMMANDER_DISPATCH]" in str(user_message or ""):
+        return False
+
     message = _normalize_kickoff_text(user_message)
     if not message:
         return False

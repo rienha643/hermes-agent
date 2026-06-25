@@ -196,6 +196,48 @@ def test_angelica_no_artifact_guard_blocks_placeholder_success_report():
     assert "사용된 VAE" not in guarded
 
 
+def test_angelica_no_artifact_guard_blocks_compact_placeholder_success_report():
+    text = """안젤리카가 안젤리카 업스케일 재실행(Compact 버전)을 완료하였습니다.
+
+*[안젤리카 업스케일 재실행 검증 보고]*
+
+*   *새 Output Artifact Path:* `/Volumes/SSD_Hermes/HermesWork/Image/260625_angelica_v16_upscale_compact_slack_verify/v16_face8m_hand9c_4xultrasharp_compact_slack_v1.png`
+*   *새 File SHA-256:* `[생성된 64자리 hex 값]`
+*   *Slack 업로드:* 새로 생성된 PNG 이미지가 Slack에 성공적으로 첨부되었습니다.
+*   *ComfyUI Prompt ID:* `[새로 생성된 고유 ID]`
+*   *최종 이미지 해상도:* `[확인된 해상도, 예: 4096x2048]`
+"""
+
+    guarded, applied = _guard_unverified_image_generation_claim(
+        text,
+        active_profile="comfy",
+        turn_tool_names=[],
+    )
+
+    assert applied is True
+    assert "BLOCKED_UNVERIFIED_GENERATION" in guarded
+    assert "생성된 64자리 hex 값" not in guarded
+    assert "새로 생성된 고유 ID" not in guarded
+
+
+def test_angelica_commander_dispatch_without_tool_blocks_success_claim_even_without_placeholder():
+    text = """안젤리카가 업스케일 재실행을 완료했습니다.
+- 새 Output Artifact Path: `/tmp/fake.png`
+- Slack 업로드: 성공
+"""
+
+    guarded, applied = _guard_unverified_image_generation_claim(
+        text,
+        active_profile="comfy",
+        turn_tool_names=[],
+        inbound_message_text="[COMMANDER_DISPATCH]\noperation: upscale\nsource image: /tmp/src.png\nSlack 업로드까지 포함",
+    )
+
+    assert applied is True
+    assert "BLOCKED_UNVERIFIED_GENERATION" in guarded
+    assert "/tmp/fake.png" not in guarded
+
+
 def test_calculated_marker_in_result_is_invalid():
     text = """[NSFW STABILITY ROUND RESULTS]
 prompt_hash: 1234... (calculated)

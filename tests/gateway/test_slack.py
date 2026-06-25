@@ -135,6 +135,49 @@ class TestSlashCommandSessionIsolation:
 # TestAppMentionHandler
 # ---------------------------------------------------------------------------
 
+
+@pytest.mark.asyncio
+async def test_commander_dispatch_thread_skip_auto_thread_context(adapter):
+    adapter._slack_allowed_channels = MagicMock(return_value=set())
+    adapter._slack_free_response_channels = MagicMock(return_value={"C123"})
+    adapter._slack_require_mention = MagicMock(return_value=True)
+    adapter._slack_strict_mention = MagicMock(return_value=False)
+    adapter._slack_thread_is_ignored = MagicMock(return_value=False)
+    adapter._has_active_session_for_thread = MagicMock(return_value=False)
+    adapter._fetch_thread_context = AsyncMock(return_value="[Thread context ...]\n")
+    adapter._lookup_assistant_thread_metadata = MagicMock(return_value={})
+    adapter._team_bot_user_ids = {}
+    adapter._dm_top_level_threads_as_sessions = MagicMock(return_value=True)
+    adapter._download_slack_file = AsyncMock()
+    adapter._resolve_user_name = AsyncMock(return_value="Zenith")
+    adapter._fetch_thread_parent_text = AsyncMock(return_value="parent")
+
+    event = {
+        "type": "message",
+        "channel": "C123",
+        "channel_type": "channel",
+        "user": "U0BBJCF3RS7",
+        "bot_id": "B0BBQP11GSW",
+        "ts": "1782360517.076999",
+        "thread_ts": "1782333585.570739",
+        "text": "[COMMANDER_DISPATCH]\nschema: commander_dispatch_v1\nqueue_id: q1\ndispatch_event_id: d1\ntarget_slack_user_id: U_BOT\n[/COMMANDER_DISPATCH]\n\n<@U_BOT> 작업 요청",
+    }
+
+    await adapter._handle_slack_message(event)
+
+    adapter._fetch_thread_context.assert_not_awaited()
+    adapter.handle_message.assert_awaited_once()
+    handled = adapter.handle_message.await_args.args[0]
+    assert handled.source.thread_id == "1782333585.570739:dispatch:d1"
+
+
+def test_resolve_thread_ts_strips_commander_dispatch_suffix(adapter):
+    assert (
+        adapter._resolve_thread_ts(metadata={"thread_id": "1782333585.570739:dispatch:d1"})
+        == "1782333585.570739"
+    )
+
+
 class TestAppMentionHandler:
     """Verify that the app_mention event handler is registered."""
 

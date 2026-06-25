@@ -56,6 +56,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_COMMANDER_DISPATCH_USER_IDS = {"U0BBJCF3RS7"}
 DEFAULT_COMMANDER_DISPATCH_BOT_IDS = {"B0BBQP11GSW"}
+_COMMANDER_DISPATCH_ID_RE = re.compile(r"^dispatch_event_id:\s*([A-Za-z0-9_.:-]+)\s*$", re.MULTILINE)
+_COMMANDER_SESSION_SUFFIX_RE = re.compile(r"^(?P<thread>\d+\.\d+):dispatch:(?P<dispatch>[A-Za-z0-9_.:-]+)$")
 
 # ContextVar carrying the user_id of the slash-command invoker.
 # Set in _handle_slash_command, read in send() to match the correct
@@ -1153,18 +1155,25 @@ class SlackAdapter(BasePlatformAdapter):
         # top-level message. reply_to is the incoming message's own id, so
         # when thread_id == reply_to the "thread" is synthetic and we reply
         # directly in the channel instead.
+        def _canonical_thread_ts(value: Any) -> Any:
+            text = str(value or "")
+            match = _COMMANDER_SESSION_SUFFIX_RE.match(text)
+            if match:
+                return match.group("thread")
+            return value
+
         if not self.config.extra.get("reply_in_thread", True):
             md = metadata or {}
-            existing_thread = md.get("thread_id") or md.get("thread_ts")
+            existing_thread = _canonical_thread_ts(md.get("thread_id") or md.get("thread_ts"))
             if existing_thread and reply_to and existing_thread == reply_to:
                 existing_thread = None
             return existing_thread or None
 
         if metadata:
             if metadata.get("thread_id"):
-                return metadata["thread_id"]
+                return _canonical_thread_ts(metadata["thread_id"])
             if metadata.get("thread_ts"):
-                return metadata["thread_ts"]
+                return _canonical_thread_ts(metadata["thread_ts"])
         return reply_to
 
     async def _upload_file(
@@ -2207,6 +2216,15 @@ class SlackAdapter(BasePlatformAdapter):
         else:
             thread_ts = event.get("thread_ts") or ts  # ts fallback for channels
 
+        commander_dispatch_id = None
+        if is_commander_dispatch:
+            dispatch_match = _COMMANDER_DISPATCH_ID_RE.search(str(event.get("text") or ""))
+            if dispatch_match:
+                commander_dispatch_id = str(dispatch_match.group(1) or "").strip() or None
+        session_thread_ts = thread_ts
+        if commander_dispatch_id and thread_ts:
+            session_thread_ts = f"{thread_ts}:dispatch:{commander_dispatch_id}"
+
         # In channels, respond if:
         #   0. Channel is in free_response_channels, OR require_mention is
         #      disabled — always process regardless of mention.
@@ -2285,10 +2303,15 @@ class SlackAdapter(BasePlatformAdapter):
 
         # When entering a thread for the first time (no existing session),
         # fetch thread context so the agent understands the conversation.
-        if msg_type != MessageType.COMMAND and is_thread_reply and not self._has_active_session_for_thread(
-            channel_id=channel_id,
-            thread_ts=event_thread_ts,
-            user_id=user_id,
+        if (
+            msg_type != MessageType.COMMAND
+            and is_thread_reply
+            and not is_commander_dispatch
+            and not self._has_active_session_for_thread(
+                channel_id=channel_id,
+                thread_ts=event_thread_ts,
+                user_id=user_id,
+            )
         ):
             thread_context = await self._fetch_thread_context(
                 channel_id=channel_id,
@@ -2456,7 +2479,7 @@ class SlackAdapter(BasePlatformAdapter):
             chat_type="dm" if is_dm else "group",
             user_id=user_id,
             user_name=user_name,
-            thread_id=thread_ts,
+            thread_id=session_thread_ts,
             is_bot=bool(event.get("bot_id") or event.get("subtype") == "bot_message"),
         )
 

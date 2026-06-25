@@ -10,10 +10,13 @@ from gateway.platforms.base import (
     BasePlatformAdapter,
     GATEWAY_SECRET_CAPTURE_UNSUPPORTED_MESSAGE,
     MessageEvent,
+    _override_session_key_for_internal_dispatch,
     safe_url_for_log,
     utf16_len,
     _prefix_within_utf16_limit,
 )
+from gateway.session import SessionSource
+from gateway.config import Platform
 
 
 class TestSecretCaptureGuidance:
@@ -117,6 +120,56 @@ class TestMessageEventGetCommandArgs:
     def test_not_a_command_returns_full_text(self):
         event = MessageEvent(text="hello world")
         assert event.get_command_args() == "hello world"
+
+
+class TestCommanderDispatchSessionIsolation:
+    def test_internal_slack_commander_dispatch_uses_dispatch_scoped_session_key(self):
+        event = MessageEvent(
+            text=(
+                "[COMMANDER_DISPATCH]\n"
+                "schema: commander_dispatch_v1\n"
+                "dispatch_event_id: abc123\n"
+                "queue_id: q1\n"
+                "[/COMMANDER_DISPATCH]\n"
+                "\n"
+                "<@U_BOT> 작업 요청이야."
+            ),
+            source=SessionSource(
+                platform=Platform.SLACK,
+                chat_id="C123",
+                chat_type="group",
+                thread_id="1782333585.570739",
+                user_id="U0BBJCF3RS7",
+            ),
+            internal=True,
+        )
+
+        key = _override_session_key_for_internal_dispatch(
+            event,
+            "agent:main:slack:group:C123:1782333585.570739",
+        )
+
+        assert key == "agent:main:slack:group:C123:1782333585.570739:dispatch:abc123"
+
+    def test_non_internal_or_non_dispatch_keeps_original_session_key(self):
+        event = MessageEvent(
+            text="일반 메시지",
+            source=SessionSource(
+                platform=Platform.SLACK,
+                chat_id="C123",
+                chat_type="group",
+                thread_id="1782333585.570739",
+                user_id="U0BBJCF3RS7",
+            ),
+            internal=False,
+        )
+
+        key = _override_session_key_for_internal_dispatch(
+            event,
+            "agent:main:slack:group:C123:1782333585.570739",
+        )
+
+        assert key == "agent:main:slack:group:C123:1782333585.570739"
 
 
 # ---------------------------------------------------------------------------
