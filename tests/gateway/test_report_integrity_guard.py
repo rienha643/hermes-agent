@@ -8,6 +8,7 @@ from gateway.run import (
     _apply_post_delivery_evidence_overlay,
     _collect_gateway_nas_mirror_evidence,
     _compact_gateway_final_response,
+    _extract_commander_image_task_metadata,
     _evaluate_gateway_delivery_governance,
     _evaluate_gateway_user_report_governance,
     _gateway_report_language,
@@ -88,6 +89,55 @@ def test_seir_no_artifact_guard_blocks_generation_progress_without_tool_call():
     assert applied is True
     assert "BLOCKED_UNVERIFIED_GENERATION" in guarded
     assert "생성 중" not in guarded
+
+
+def test_extract_commander_image_task_metadata_prefers_explicit_hint_values():
+    message = """[COMMANDER_DISPATCH]
+schema: commander_dispatch_v1
+dispatch_event_id: d1
+[/COMMANDER_DISPATCH]
+
+image_generate 도구 인자 힌트:
+- project_name 값 = angelica_v16_upscale_rerun2_slack_verify
+- artifact_name 값 = v16_face8m_hand9c_4xultrasharp_rerun2_slack_v1
+"""
+
+    assert _extract_commander_image_task_metadata(message) == (
+        "angelica_v16_upscale_rerun2_slack_verify",
+        "v16_face8m_hand9c_4xultrasharp_rerun2_slack_v1",
+    )
+
+
+def test_extract_commander_image_task_metadata_falls_back_to_output_lines():
+    message = """[COMMANDER_DISPATCH]
+schema: commander_dispatch_v1
+dispatch_event_id: d2
+[/COMMANDER_DISPATCH]
+
+- 출력 루트: /Volumes/SSD_Hermes/HermesWork/Image/260625_angelica_v16_upscale_rerun2_slack_verify
+- 출력 basename: v16_face8m_hand9c_4xultrasharp_rerun2_slack_v1
+"""
+
+    assert _extract_commander_image_task_metadata(message) == (
+        "angelica_v16_upscale_rerun2_slack_verify",
+        "v16_face8m_hand9c_4xultrasharp_rerun2_slack_v1",
+    )
+
+
+def test_extract_commander_image_task_metadata_accepts_backtick_wrapped_output_lines():
+    message = """[COMMANDER_DISPATCH]
+schema: commander_dispatch_v1
+dispatch_event_id: d3
+[/COMMANDER_DISPATCH]
+
+- output project root: `/Volumes/SSD_Hermes/HermesWork/Image/260625_angelica_v16_upscale_rerun2_slack_verify`
+- output basename: `v16_face8m_hand9c_4xultrasharp_rerun2_slack_v1`
+"""
+
+    assert _extract_commander_image_task_metadata(message) == (
+        "angelica_v16_upscale_rerun2_slack_verify",
+        "v16_face8m_hand9c_4xultrasharp_rerun2_slack_v1",
+    )
 
 
 def test_seir_no_artifact_guard_allows_real_image_generate_tool_call():

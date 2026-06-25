@@ -1413,9 +1413,9 @@ def _handle_image_generate(args, **kw):
     task_id = kw.get("task_id")
 
     task_project_name, task_artifact_name = _consume_image_task_metadata(task_id)
-    if task_project_name and not project_name:
+    if task_project_name:
         project_name = task_project_name
-    if task_artifact_name and not artifact_name:
+    if task_artifact_name:
         artifact_name = task_artifact_name
 
     project_name, artifact_name = _infer_image_project_metadata(

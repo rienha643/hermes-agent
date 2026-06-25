@@ -1572,6 +1572,14 @@ _COMMANDER_IMAGE_SUCCESS_CLAIM_RE = re.compile(
     r"(완료하였|완료했습니다|완료하였습|성공|artifact\s*path|output\s*artifact\s*path|file\s*sha|slack\s*업로드|prompt\s*id|해상도)",
     re.IGNORECASE,
 )
+_COMMANDER_IMAGE_PROJECT_NAME_RE = re.compile(r"(?im)^\s*-\s*project_name\s*값\s*=\s*([^\r\n`]+?)\s*$")
+_COMMANDER_IMAGE_ARTIFACT_NAME_RE = re.compile(r"(?im)^\s*-\s*artifact_name\s*값\s*=\s*([^\r\n`]+?)\s*$")
+_COMMANDER_OUTPUT_ROOT_RE = re.compile(
+    r"(?im)^\s*-\s*(?:출력\s*루트|output\s+project\s+root)\s*:\s*`?([^\r\n`]+?)`?\s*$"
+)
+_COMMANDER_OUTPUT_BASENAME_RE = re.compile(
+    r"(?im)^\s*-\s*(?:출력\s*basename|output\s+basename)\s*:\s*`?([^\r\n`]+?)`?\s*$"
+)
 
 
 def _render_no_artifact_generation_guard(profile_label: str = "Worker") -> str:
@@ -1582,6 +1590,43 @@ def _render_no_artifact_generation_guard(profile_label: str = "Worker") -> str:
         "No image was generated or delivered in this turn.\n"
         "Required Action: rerun the task with a real `image_generate` tool call, or report the exact blocker instead of progress."
     ).strip()
+
+
+def _normalize_commander_image_value(value: str) -> str:
+    return str(value or "").strip().strip("`").strip()
+
+
+def _strip_commander_date_project_prefix(value: str) -> str:
+    text = _normalize_commander_image_value(value)
+    return re.sub(r"^\d{6}[_-]", "", text)
+
+
+def _extract_commander_image_task_metadata(message_text: str) -> tuple[str | None, str | None]:
+    body = str(message_text or "")
+    if "[COMMANDER_DISPATCH]" not in body:
+        return None, None
+
+    project_name = None
+    artifact_name = None
+
+    project_match = _COMMANDER_IMAGE_PROJECT_NAME_RE.search(body)
+    if project_match:
+        project_name = _normalize_commander_image_value(project_match.group(1))
+    else:
+        root_match = _COMMANDER_OUTPUT_ROOT_RE.search(body)
+        if root_match:
+            root_name = Path(_normalize_commander_image_value(root_match.group(1))).name
+            project_name = _strip_commander_date_project_prefix(root_name)
+
+    artifact_match = _COMMANDER_IMAGE_ARTIFACT_NAME_RE.search(body)
+    if artifact_match:
+        artifact_name = _normalize_commander_image_value(artifact_match.group(1))
+    else:
+        basename_match = _COMMANDER_OUTPUT_BASENAME_RE.search(body)
+        if basename_match:
+            artifact_name = _normalize_commander_image_value(basename_match.group(1))
+
+    return (project_name or None, artifact_name or None)
 
 
 def _guard_unverified_image_generation_claim(
@@ -19680,6 +19725,18 @@ class GatewayRunner:
                         "conversation_history": agent_history,
                         "task_id": session_id,
                     }
+                    _commander_project_name, _commander_artifact_name = _extract_commander_image_task_metadata(message)
+                    if _commander_project_name or _commander_artifact_name:
+                        try:
+                            from tools.image_generation_tool import register_image_task_metadata
+
+                            register_image_task_metadata(
+                                session_id,
+                                project_name=_commander_project_name,
+                                artifact_name=_commander_artifact_name,
+                            )
+                        except Exception:
+                            logger.debug("Could not register Commander image task metadata", exc_info=True)
                     if observed_group_context:
                         _conversation_kwargs["persist_user_message"] = message
                     result = agent.run_conversation(_api_run_message, **_conversation_kwargs)

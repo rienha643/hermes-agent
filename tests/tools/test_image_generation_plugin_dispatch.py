@@ -358,6 +358,55 @@ class TestPluginDispatch:
             "height": None,
         }
 
+    def test_handle_image_generate_task_metadata_overrides_explicit_args(self, monkeypatch, tmp_path):
+        from tools import image_generation_tool
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        captured = {}
+
+        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None, width=None, height=None, **kwargs):
+            captured.update(
+                {
+                    "prompt": prompt,
+                    "aspect_ratio": aspect_ratio,
+                    "task_id": task_id,
+                    "project_name": project_name,
+                    "artifact_name": artifact_name,
+                    "width": width,
+                    "height": height,
+                }
+            )
+            return json.dumps({"success": True, "image": "/tmp/result.png"})
+
+        monkeypatch.setattr(image_generation_tool, "_dispatch_to_plugin_provider", fake_dispatch)
+        image_generation_tool.register_image_task_metadata(
+            "child-task-override",
+            project_name="angelica_forced_project",
+            artifact_name="angelica_forced_artifact",
+        )
+
+        result = image_generation_tool._handle_image_generate(
+            {
+                "prompt": "source-image upscale task",
+                "aspect_ratio": "portrait",
+                "project_name": "model_supplied_project",
+                "artifact_name": "model_supplied_artifact",
+            },
+            task_id="child-task-override",
+        )
+
+        assert json.loads(result)["success"] is True
+        assert captured == {
+            "prompt": "source-image upscale task",
+            "aspect_ratio": "portrait",
+            "task_id": "child-task-override",
+            "project_name": "angelica_forced_project",
+            "artifact_name": "angelica_forced_artifact",
+            "width": None,
+            "height": None,
+        }
+
     def test_dispatch_single_output_mode_reuses_cached_result_for_non_forge_provider(self, monkeypatch, tmp_path):
         from tools import image_generation_tool
         from agent import image_gen_registry as registry_module
