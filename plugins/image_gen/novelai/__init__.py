@@ -900,6 +900,17 @@ def _sha256_path(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _read_png_dimensions(path: Path) -> tuple[int | None, int | None]:
+    try:
+        with path.open("rb") as fh:
+            header = fh.read(24)
+        if len(header) >= 24 and header[:8] == b"\x89PNG\r\n\x1a\n" and header[12:16] == b"IHDR":
+            return int.from_bytes(header[16:20], "big"), int.from_bytes(header[20:24], "big")
+    except Exception:  # noqa: BLE001
+        return None, None
+    return None, None
+
+
 def _assert_png(path: Path) -> None:
     if not path.is_file():
         raise FileNotFoundError(f"NovelAI source PNG not found: {path}")
@@ -1014,6 +1025,21 @@ def _write_metadata_raw_flag(published_sidecar_dir: Path, *, raw_response_saved:
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _write_metadata_report_fields(
+    published_sidecar_dir: Path,
+    *,
+    actual_width: int | None,
+    actual_height: int | None,
+    output_resolution: str | None,
+) -> None:
+    metadata_path = published_sidecar_dir / "metadata.json"
+    metadata = _load_json(metadata_path)
+    metadata["actual_width"] = actual_width
+    metadata["actual_height"] = actual_height
+    metadata["output_resolution"] = output_resolution
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _write_extended_manifest(
     *,
     source_png: Path,
@@ -1107,6 +1133,12 @@ def publish_existing_generation(
     published_dir.mkdir(parents=True, exist_ok=True)
     published_png = published_dir / artifact_name
     shutil.copy2(source, published_png)
+    actual_width, actual_height = _read_png_dimensions(published_png)
+    output_resolution = (
+        f"{actual_width}x{actual_height}"
+        if actual_width is not None and actual_height is not None
+        else None
+    )
 
     published_sidecar_dir = published_dir / "sidecar"
     raw_response_saved = _env_truthy("HERMES_NAI_SAVE_RAW_RESPONSE") if save_raw_response is None else save_raw_response
@@ -1123,6 +1155,12 @@ def publish_existing_generation(
         raw_response_saved=raw_response_saved,
     )
     _write_metadata_raw_flag(published_sidecar_dir, raw_response_saved=raw_response_saved)
+    _write_metadata_report_fields(
+        published_sidecar_dir,
+        actual_width=actual_width,
+        actual_height=actual_height,
+        output_resolution=output_resolution,
+    )
 
     nas_hook_requested = queue_nas_sync_hook(
         category="image",
@@ -1138,6 +1176,20 @@ def publish_existing_generation(
         nas_hook_requested=nas_hook_requested,
         response_metadata=response_metadata,
     )
+    report_evidence = {
+        "provider": "novelai",
+        "model": model,
+        "run_id": run_id,
+        "prompt": prompt,
+        "seed": _load_json(published_sidecar_dir / "metadata.json").get("seed"),
+        "source_path": str(source),
+        "output_image": published_png.name,
+        "artifact_path": str(published_png),
+        "sidecar_dir": str(published_sidecar_dir),
+        "output_resolution": output_resolution,
+        "actual_width": actual_width,
+        "actual_height": actual_height,
+    }
 
     return success_response(
         image=str(published_png),
@@ -1152,6 +1204,10 @@ def publish_existing_generation(
             "sidecar_dir": str(published_sidecar_dir),
             "nas_hook_requested": nas_hook_requested,
             "raw_response_saved": raw_response_saved,
+            "actual_width": actual_width,
+            "actual_height": actual_height,
+            "output_resolution": output_resolution,
+            "report_evidence": report_evidence,
         },
     )
 

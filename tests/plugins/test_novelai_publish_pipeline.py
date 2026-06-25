@@ -417,6 +417,17 @@ def test_novelai_publish_existing_generation_creates_hermeswork_bundle_and_contr
     assert result["image"] == str(published)
     assert result["media_files"] == [str(published)]
     assert result["nas_hook_requested"] is True
+    assert result["actual_width"] == 1
+    assert result["actual_height"] == 1
+    assert result["output_resolution"] == "1x1"
+    assert result["report_evidence"]["provider"] == "novelai"
+    assert result["report_evidence"]["model"] == "nai-diffusion-4-5-curated"
+    assert result["report_evidence"]["run_id"] == "run-001"
+    assert result["report_evidence"]["source_path"] == str(source_png.resolve())
+    assert result["report_evidence"]["output_image"] == "image_000.png"
+    assert result["report_evidence"]["artifact_path"] == str(published)
+    assert result["report_evidence"]["sidecar_dir"] == str(published.parent / "sidecar")
+    assert result["report_evidence"]["output_resolution"] == "1x1"
     assert published.read_bytes() == source_png.read_bytes()
 
     published_sidecar = published.parent / "sidecar"
@@ -442,6 +453,10 @@ def test_novelai_publish_existing_generation_creates_hermeswork_bundle_and_contr
     assert response["normalized_artifacts"]["count"] == 1
     assert not (published_sidecar / "response.bin").exists()
     assert not (published_sidecar / "response.zip").exists()
+    metadata = json.loads((published_sidecar / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["actual_width"] == 1
+    assert metadata["actual_height"] == 1
+    assert metadata["output_resolution"] == "1x1"
 
     assert calls
     assert calls[0]["category"] == "image"
@@ -606,6 +621,8 @@ def test_novelai_live_generation_uses_mocked_endpoint_and_publishes_zip_png(
     assert result["success"] is True
     assert result["image"] == str(published)
     assert result["media_files"] == [str(published)]
+    assert result["output_resolution"] == "1x1"
+    assert result["report_evidence"]["output_resolution"] == "1x1"
     assert published.read_bytes() == response_png.read_bytes()
     assert seen["api_key_present"] is True
     assert seen["payload"]["parameters"]["sampler"] == novelai.NAI_SAMPLER

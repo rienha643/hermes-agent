@@ -408,6 +408,23 @@ class TestComfyLocalImageGenProviderGenerate:
         assert result["evidence"]["source_image"] == str(source_image)
         assert result["evidence"]["face_detailer"]["model"] == "bbox/face_yolov8m.pt"
         assert result["evidence"]["hand_detailer"]["model"] == "bbox/hand_yolov9c.pt"
+        assert result["actual_width"] == 1
+        assert result["actual_height"] == 1
+        assert result["output_resolution"] == "1x1"
+        assert result["evidence"]["output_resolution"] == "1x1"
+        assert result["report_evidence"] == {
+            "operation": "source_preserving_postprocess",
+            "postprocess_preset": "face8m_d035_hand9c_d025",
+            "workflow_key": "source_preserving_face8m_hand9c_v1",
+            "workflow_path": str(result["workflow_path"]),
+            "prompt_id": "pid-post",
+            "source_image_path": str(source_image),
+            "output_image": result["primary_image"],
+            "artifact_path": result["artifact_path"],
+            "output_resolution": "1x1",
+            "actual_width": 1,
+            "actual_height": 1,
+        }
         assert Path(result["image"]).exists()
 
     def test_generate_source_image_upscale_uses_upscale_model_workflow(self, monkeypatch, tmp_path):

@@ -1068,6 +1068,17 @@ def _history_completed_successfully(history_payload: Dict[str, Any], prompt_id: 
     return bool(status.get("completed")) and str(status.get("status_str") or "").lower() == "success"
 
 
+def _read_png_dimensions(path: Path) -> tuple[int | None, int | None]:
+    try:
+        with path.open("rb") as fh:
+            header = fh.read(24)
+        if len(header) >= 24 and header[:8] == b"\x89PNG\r\n\x1a\n" and header[12:16] == b"IHDR":
+            return int.from_bytes(header[16:20], "big"), int.from_bytes(header[20:24], "big")
+    except Exception:  # noqa: BLE001
+        return None, None
+    return None, None
+
+
 class ComfyLocalImageGenProvider(ImageGenProvider):
     @property
     def name(self) -> str:
@@ -1700,6 +1711,12 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     prompt=prompt,
                     aspect_ratio=aspect,
                 )
+            actual_width, actual_height = _read_png_dimensions(output_source_path)
+            output_resolution = (
+                f"{actual_width}x{actual_height}"
+                if actual_width is not None and actual_height is not None
+                else None
+            )
 
             created_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
             prompt_payload = {
@@ -1711,6 +1728,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "runtime_preset": preset_name,
                 "workflow_key": workflow_key,
                 "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+                "output_resolution": output_resolution,
                 "face_detailer": {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5},
                 "hand_detailer": {"model": "bbox/hand_yolov9c.pt", "denoise": 0.25, "steps": 14, "cfg": 5.5},
                 "raw_prompt_payload": {
@@ -1742,6 +1762,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "category": POSTPROCESS_CATEGORY,
                 "output_source_path": str(output_source_path),
                 "output_source_origin": source_origin,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+                "output_resolution": output_resolution,
                 "local_status": "후보정 완료",
                 "publish_status": "HermesWork publish 완료",
                 "slack_status": "primary image 준비됨",
@@ -1782,6 +1805,22 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "output_image": output_image,
                 "artifact_path": str(bundle["primary_image_path"]),
                 "output_source_origin": source_origin,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+                "output_resolution": output_resolution,
+            }
+            report_evidence = {
+                "operation": SOURCE_PRESERVING_POSTPROCESS_OPERATION,
+                "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
+                "workflow_key": workflow_key,
+                "workflow_path": str(bundle["workflow_path"]),
+                "prompt_id": prompt_id,
+                "source_image_path": str(source_input_path),
+                "output_image": bundle["primary_image"],
+                "artifact_path": str(bundle["primary_image_path"]),
+                "output_resolution": output_resolution,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
             }
             nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
             return success_response(
@@ -1796,6 +1835,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     "postprocess_preset": FACE8M_HAND9C_POSTPROCESS_PRESET,
                     "workflow_key": workflow_key,
                     "evidence": evidence,
+                    "report_evidence": report_evidence,
                     "source_image": str(source_input_path),
                     "vae": None,
                     "vae_report_value": "checkpoint_builtin_vae",
@@ -1827,6 +1867,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     "slack_upload_evidence": False,
                     "output_source_origin": source_origin,
                     "output_image": output_image,
+                    "actual_width": actual_width,
+                    "actual_height": actual_height,
+                    "output_resolution": output_resolution,
                     "prompt_id": prompt_id,
                     "category": POSTPROCESS_CATEGORY,
                     "api_base_url": base_url,
