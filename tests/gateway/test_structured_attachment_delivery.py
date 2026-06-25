@@ -127,6 +127,28 @@ async def test_structured_attachment_without_media_tag_is_uploaded_once_with_thr
 
 
 @pytest.mark.asyncio
+async def test_slack_structured_sidecar_does_not_block_primary_image(allow_tmp_delivery):
+    image_path = allow_tmp_delivery / "HermesWork" / "Image" / "run" / "report_evidence_sidecar_verify_v1.png"
+    sidecar_path = image_path.parent / "sidecar" / "metadata.json"
+    image_path.parent.mkdir(parents=True)
+    sidecar_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"png")
+    sidecar_path.write_text("{}", encoding="utf-8")
+
+    adapter = _make_adapter("완료했습니다.")
+    event = _make_event(thread_id="1782404455.272289")
+    event._structured_attachment_paths = [str(image_path), str(sidecar_path)]
+
+    await adapter._process_message_background(event, build_session_key(event.source))
+
+    assert len(adapter.sent_images) == 1
+    batch_urls = [item[0] for item in adapter.sent_images[0]["images"]]
+    assert len(batch_urls) == 1
+    assert str(image_path) in batch_urls[0]
+    assert all(str(sidecar_path) not in url for url in batch_urls)
+
+
+@pytest.mark.asyncio
 async def test_structured_attachment_and_media_tag_are_deduped(allow_tmp_delivery):
     image_path = allow_tmp_delivery / "avatar.png"
     image_path.write_bytes(b"png")

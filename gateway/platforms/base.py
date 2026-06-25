@@ -1188,15 +1188,15 @@ def _delivery_path_is_sidecar(path: Path) -> bool:
     return (
         "sidecar" in parts
         or "_sidecars" in parts
-        or "sidecar" in lower_name
-        or "tmp" in lower_name
-        or "intermediate" in lower_name
-        or "metadata" in lower_name
-        or "manifest" in lower_name
-        or "workflow.json" in lower_name
-        or "prompt.json" in lower_name
-        or "metadata.json" in lower_name
-        or "manifest.json" in lower_name
+        or lower_name
+        in {
+            "workflow.json",
+            "prompt.json",
+            "metadata.json",
+            "manifest.json",
+            "integrity.json",
+            "run.json",
+        }
     )
 
 
@@ -1310,7 +1310,13 @@ def _slack_delivery_path_block_reason(path: Path, *, image_only: bool = False) -
         if suffix not in _SLACK_PNG_ONLY_EXTENSIONS:
             return f"forbidden_extension:{suffix or '<none>'}"
         allow_roots = tuple(_media_delivery_allowed_roots()) + tuple(Path(root) for root in _SLACK_ALLOWED_PUBLISH_ROOTS)
-        if not any(_path_is_within(path, root) for root in allow_roots):
+        resolved_allow_roots: list[Path] = []
+        for root in allow_roots:
+            try:
+                resolved_allow_roots.append(root.expanduser().resolve(strict=False))
+            except (OSError, RuntimeError, ValueError):
+                continue
+        if not any(_path_is_within(path, root) for root in resolved_allow_roots):
             return "outside_allowed_publish_roots"
     elif suffix in _SLACK_DOCUMENT_BLOCKED_SUFFIXES:
         return f"forbidden_extension:{suffix}"
@@ -2818,25 +2824,19 @@ class BasePlatformAdapter(ABC):
         suffix = path.suffix.lower()
         name = path.name.lower()
         if suffix in _IMAGE_DELIVERY_EXTENSIONS:
-            image_intermediate_re = (
-                r"(?:page[_-]?\d+|ocr|render|tmp|extracted|image|sidecar|metadata|manifest|integrity)"
+            parts = [part.lower() for part in path.parts]
+            is_published_image_artifact = any(
+                parts[idx] == "hermeswork" and idx + 1 < len(parts) and parts[idx + 1] == "image"
+                for idx in range(len(parts))
             )
-            if re.search(image_intermediate_re, name):
-                parts = [part.lower() for part in path.parts]
-                is_published_image_artifact = any(
-                    parts[idx] == "hermeswork" and idx + 1 < len(parts) and parts[idx + 1] == "image"
-                    for idx in range(len(parts))
-                )
-                # NovelAI/published image artifacts use stable names such as
-                # image_000.png.  Treat generic "image" as document-intermediate
-                # only outside HermesWork/Image; keep explicit markers like
-                # page/ocr/render/tmp/extracted/sidecar/metadata suppressed.
-                if is_published_image_artifact and not re.search(
-                    r"(?:page[_-]?\d+|ocr|render|tmp|extracted|sidecar|metadata|manifest|integrity)",
-                    name,
-                ):
-                    return False
+            explicit_intermediate_re = (
+                r"(?:^|[._-])(?:page[_-]?\d+|ocr|render|tmp|extracted|metadata|manifest|integrity)(?:$|[._-])"
+            )
+            if re.search(explicit_intermediate_re, name):
                 return True
+            generic_image_re = r"(?:^|[._-])image(?:$|[._-])"
+            if re.search(generic_image_re, name):
+                return not is_published_image_artifact
             return False
         if suffix in _TEXT_SIDECAR_EXTENSIONS:
             return bool(re.search(r"(?:ocr|page[_-]?\d+|extract|render|debug|manifest|sidecar|metadata|integrity)", name))
@@ -4368,11 +4368,12 @@ class BasePlatformAdapter(ABC):
                     logger.info("[Slack] delivery preview: %s", preview)
                     if blocked_images or blocked_other or actual_count != expected_count:
                         logger.warning(
-                            "[Slack] Slack auto-delivery blocked media batch: expected=%d actual=%d blocked=%d",
+                            "[Slack] Slack auto-delivery filtered media batch: expected=%d actual=%d blocked=%d",
                             expected_count,
                             actual_count,
                             len(blocked_images) + len(blocked_other),
                         )
+                    if actual_count == 0:
                         _image_paths = []
                         _non_image_media = []
                         _non_image_local = []
