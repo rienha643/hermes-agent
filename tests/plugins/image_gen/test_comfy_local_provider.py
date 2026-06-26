@@ -233,7 +233,7 @@ class TestComfyLocalLoraPresetResolution:
             }
         ]
 
-    def test_matte_skin_style_preset_uses_matte_production_lora(self):
+    def test_matte_skin_style_preset_is_retained_as_deprecated_review_lora(self):
         stack = COMFY_MOD._resolve_lora_stack({"style_preset": "matte_skin"}, runtime_preset=None)
 
         assert stack == [
@@ -241,10 +241,76 @@ class TestComfyLocalLoraPresetResolution:
                 "preset": "matte_skin",
                 "name": COMFY_MOD.DEFAULT_MATTE_PRODUCTION_LORA,
                 "weight": COMFY_MOD.DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
-                "use_case": "matte clean skin/clothing for LD/SD standing image production",
+                "use_case": "deprecated/review: matte lighting may remove too much illumination",
                 "clip_weight": COMFY_MOD.DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
             }
         ]
+
+    def test_selected_lora_style_presets_resolve_user_verdict_candidates(self):
+        cases = [
+            (
+                "eye_detail",
+                "eye_detail",
+                COMFY_MOD.DEFAULT_EYE_DETAIL_LORA,
+                COMFY_MOD.DEFAULT_EYE_DETAIL_LORA_WEIGHT,
+                "best eye/face detail candidate; avoid Eye_Enhancer spacing drift",
+            ),
+            (
+                "detail_smooth",
+                "detail_smooth",
+                COMFY_MOD.DEFAULT_DETAIL_SMOOTH_LORA,
+                COMFY_MOD.DEFAULT_DETAIL_SMOOTH_LORA_WEIGHT,
+                "best bodyline/detail candidate; verify character identity before default use",
+            ),
+            (
+                "detail_enhancer",
+                "detail_enhancer",
+                COMFY_MOD.DEFAULT_DETAIL_ENHANCER_LORA,
+                COMFY_MOD.DEFAULT_DETAIL_ENHANCER_LORA_WEIGHT,
+                "best detail enhancer candidate with strong visual quality",
+            ),
+            (
+                "glossy_skin",
+                "glossy_skin",
+                COMFY_MOD.DEFAULT_GLOSSY_SKIN_LORA,
+                COMFY_MOD.DEFAULT_GLOSSY_SKIN_LORA_WEIGHT,
+                "best skin/outfit gloss candidate",
+            ),
+            (
+                "video_source",
+                "video_source",
+                COMFY_MOD.DEFAULT_VIDEO_SOURCE_STYLE_LORA,
+                COMFY_MOD.DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT,
+                "stable style candidate for image-to-video source material",
+            ),
+            (
+                "k_nai",
+                "video_source",
+                COMFY_MOD.DEFAULT_VIDEO_SOURCE_STYLE_LORA,
+                COMFY_MOD.DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT,
+                "stable style candidate for image-to-video source material",
+            ),
+            (
+                "dnf_anima_experimental",
+                "dnf_anima_experimental",
+                COMFY_MOD.DEFAULT_DNF_ANIMA_EXPERIMENTAL_LORA,
+                COMFY_MOD.DEFAULT_DNF_ANIMA_EXPERIMENTAL_LORA_WEIGHT,
+                "experimental alternate taste; not a default preset",
+            ),
+        ]
+
+        for requested, preset, name, weight, use_case in cases:
+            stack = COMFY_MOD._resolve_lora_stack({"style_preset": requested}, runtime_preset=None)
+
+            assert stack == [
+                {
+                    "preset": preset,
+                    "name": name,
+                    "weight": weight,
+                    "use_case": use_case,
+                    "clip_weight": weight,
+                }
+            ]
 
     def test_explicit_lora_name_overrides_style_preset(self):
         stack = COMFY_MOD._resolve_lora_stack(

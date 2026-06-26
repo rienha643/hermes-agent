@@ -63,6 +63,18 @@ DEFAULT_KEY_ART_LORA = r"00_illustrious_style_candidates\pornmaster-Aesthetics-v
 DEFAULT_KEY_ART_LORA_WEIGHT = 0.20
 DEFAULT_MATTE_PRODUCTION_LORA = r"04_utility_skin_gloss\Matte_Skin_Illustrious_v4.safetensors"
 DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT = 0.35
+DEFAULT_EYE_DETAIL_LORA = r"02_utility_eyes\EyeDetail_Z_Turbo.safetensors"
+DEFAULT_EYE_DETAIL_LORA_WEIGHT = 0.25
+DEFAULT_DETAIL_SMOOTH_LORA = r"03_utility_detail_enhancer\Smooth_Booster_v5.safetensors"
+DEFAULT_DETAIL_SMOOTH_LORA_WEIGHT = 0.20
+DEFAULT_DETAIL_ENHANCER_LORA = r"03_utility_detail_enhancer\Detail_enhancer_IL_v2.safetensors"
+DEFAULT_DETAIL_ENHANCER_LORA_WEIGHT = 0.20
+DEFAULT_GLOSSY_SKIN_LORA = r"04_utility_skin_gloss\shiny_nai_ilxl_goofy_remade.safetensors"
+DEFAULT_GLOSSY_SKIN_LORA_WEIGHT = 0.20
+DEFAULT_VIDEO_SOURCE_STYLE_LORA = r"00_illustrious_style_candidates\K NAI Style.safetensors"
+DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT = 0.65
+DEFAULT_DNF_ANIMA_EXPERIMENTAL_LORA = r"90_compatibility_review_non_illustrious_or_anima\DNF Anima-v2.safetensors"
+DEFAULT_DNF_ANIMA_EXPERIMENTAL_LORA_WEIGHT = 0.45
 STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
     "stable": {
         "preset": "stable",
@@ -98,19 +110,61 @@ STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
         "preset": "matte_skin",
         "name": DEFAULT_MATTE_PRODUCTION_LORA,
         "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
-        "use_case": "matte clean skin/clothing for LD/SD standing image production",
+        "use_case": "deprecated/review: matte lighting may remove too much illumination",
     },
     "matte": {
         "preset": "matte_skin",
         "name": DEFAULT_MATTE_PRODUCTION_LORA,
         "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
-        "use_case": "matte clean skin/clothing for LD/SD standing image production",
+        "use_case": "deprecated/review: matte lighting may remove too much illumination",
     },
     "standing_matte": {
         "preset": "matte_skin",
         "name": DEFAULT_MATTE_PRODUCTION_LORA,
         "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
-        "use_case": "matte clean skin/clothing for LD/SD standing image production",
+        "use_case": "deprecated/review: matte lighting may remove too much illumination",
+    },
+    "eye_detail": {
+        "preset": "eye_detail",
+        "name": DEFAULT_EYE_DETAIL_LORA,
+        "weight": DEFAULT_EYE_DETAIL_LORA_WEIGHT,
+        "use_case": "best eye/face detail candidate; avoid Eye_Enhancer spacing drift",
+    },
+    "detail_smooth": {
+        "preset": "detail_smooth",
+        "name": DEFAULT_DETAIL_SMOOTH_LORA,
+        "weight": DEFAULT_DETAIL_SMOOTH_LORA_WEIGHT,
+        "use_case": "best bodyline/detail candidate; verify character identity before default use",
+    },
+    "detail_enhancer": {
+        "preset": "detail_enhancer",
+        "name": DEFAULT_DETAIL_ENHANCER_LORA,
+        "weight": DEFAULT_DETAIL_ENHANCER_LORA_WEIGHT,
+        "use_case": "best detail enhancer candidate with strong visual quality",
+    },
+    "glossy_skin": {
+        "preset": "glossy_skin",
+        "name": DEFAULT_GLOSSY_SKIN_LORA,
+        "weight": DEFAULT_GLOSSY_SKIN_LORA_WEIGHT,
+        "use_case": "best skin/outfit gloss candidate",
+    },
+    "video_source": {
+        "preset": "video_source",
+        "name": DEFAULT_VIDEO_SOURCE_STYLE_LORA,
+        "weight": DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT,
+        "use_case": "stable style candidate for image-to-video source material",
+    },
+    "k_nai": {
+        "preset": "video_source",
+        "name": DEFAULT_VIDEO_SOURCE_STYLE_LORA,
+        "weight": DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT,
+        "use_case": "stable style candidate for image-to-video source material",
+    },
+    "dnf_anima_experimental": {
+        "preset": "dnf_anima_experimental",
+        "name": DEFAULT_DNF_ANIMA_EXPERIMENTAL_LORA,
+        "weight": DEFAULT_DNF_ANIMA_EXPERIMENTAL_LORA_WEIGHT,
+        "use_case": "experimental alternate taste; not a default preset",
     },
 }
 
