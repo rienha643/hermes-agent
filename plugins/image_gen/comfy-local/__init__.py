@@ -2112,16 +2112,28 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     prompt=prompt,
                     aspect_ratio=aspect,
                 )
+            actual_width, actual_height = _read_png_dimensions(output_source_path)
+            output_resolution = (
+                f"{actual_width}x{actual_height}"
+                if actual_width is not None and actual_height is not None
+                else None
+            )
 
             created_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
             prompt_payload = {
                 "prompt": prompt_for_generation,
                 "source_prompt": source_prompt,
                 "source_image_path": str(source_input_path),
+                "requested_operation": UPSCALE_OPERATION,
+                "raw_requested_operation": operation or None,
+                "canonical_operation": UPSCALE_OPERATION,
                 "uploaded_source": uploaded_source,
                 "runtime_preset": "source_image_upscale",
                 "workflow_key": workflow_key,
                 "upscale_model": upscale_model,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+                "output_resolution": output_resolution,
                 "raw_prompt_payload": {
                     "submit_payload": payload,
                     "submit_response": submit,
@@ -2136,6 +2148,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "prompt_id": prompt_id,
                 "api_base_url": base_url,
                 "workflow_key": workflow_key,
+                "requested_operation": UPSCALE_OPERATION,
+                "raw_requested_operation": operation or None,
+                "canonical_operation": UPSCALE_OPERATION,
                 "checkpoint": None,
                 "source_image_path": str(source_input_path),
                 "uploaded_source": uploaded_source,
@@ -2144,6 +2159,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "category": "upscale",
                 "output_source_path": str(output_source_path),
                 "output_source_origin": source_origin,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+                "output_resolution": output_resolution,
                 "local_status": "업스케일 완료",
                 "publish_status": "HermesWork publish 완료",
                 "slack_status": "primary image 준비됨",
@@ -2173,12 +2191,18 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "workflow_key": workflow_key,
                 "workflow_path": str(bundle["workflow_path"]),
                 "prompt_id": prompt_id,
+                "requested_operation": UPSCALE_OPERATION,
+                "raw_requested_operation": operation or None,
+                "canonical_operation": UPSCALE_OPERATION,
                 "source_image": str(source_input_path),
                 "uploaded_source": uploaded_source,
                 "upscale_model": upscale_model,
                 "output_image": output_image,
                 "artifact_path": str(bundle["primary_image_path"]),
                 "output_source_origin": source_origin,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+                "output_resolution": output_resolution,
             }
             slack_preview_path = _make_slack_preview_image(bundle["primary_image_path"])
             media_files = [str(slack_preview_path or bundle["primary_image_path"])]
@@ -2194,6 +2218,21 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 evidence["slack_preview_image"] = str(slack_preview_path)
                 artifact_files.append(str(slack_preview_path))
             delivery_image_path = slack_preview_path or bundle["primary_image_path"]
+            report_evidence = {
+                "operation": UPSCALE_OPERATION,
+                "canonical_operation": UPSCALE_OPERATION,
+                "upscale_model": upscale_model,
+                "workflow_key": workflow_key,
+                "workflow_path": str(bundle["workflow_path"]),
+                "prompt_id": prompt_id,
+                "source_image_path": str(source_input_path),
+                "output_image": bundle["primary_image"],
+                "artifact_path": str(bundle["primary_image_path"]),
+                "output_resolution": output_resolution,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+            }
+            _update_metadata_report_evidence(bundle["metadata_path"], report_evidence)
             nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
             return success_response(
                 image=str(delivery_image_path),
@@ -2206,6 +2245,10 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     "preset": "source_image_upscale",
                     "workflow_key": workflow_key,
                     "evidence": evidence,
+                    "report_evidence": report_evidence,
+                    "requested_operation": UPSCALE_OPERATION,
+                    "raw_requested_operation": operation or None,
+                    "canonical_operation": UPSCALE_OPERATION,
                     "source_image": str(source_input_path),
                     "upscale_model": upscale_model,
                     "local_status": "업스케일 완료",
@@ -2232,6 +2275,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     "output_image": output_image,
                     "prompt_id": prompt_id,
                     "category": "upscale",
+                    "actual_width": actual_width,
+                    "actual_height": actual_height,
+                    "output_resolution": output_resolution,
                     "api_base_url": base_url,
                 },
             )
@@ -2971,6 +3017,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 if actual_width is not None and actual_height is not None
                 else None
             )
+            face_detailer_config = {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5}
+            hand_detailer_config = {"model": "bbox/hand_yolov9c.pt", "denoise": 0.25, "steps": 14, "cfg": 5.5}
 
             created_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
             prompt_payload = {
@@ -2988,8 +3036,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "actual_width": actual_width,
                 "actual_height": actual_height,
                 "output_resolution": output_resolution,
-                "face_detailer": {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5},
-                "hand_detailer": {"model": "bbox/hand_yolov9c.pt", "denoise": 0.25, "steps": 14, "cfg": 5.5},
+                "face_detailer": face_detailer_config,
+                "hand_detailer": hand_detailer_config,
                 "vae": effective_vae,
                 "loras": effective_loras,
                 "controlnet_used": controlnet_used,
@@ -3030,6 +3078,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "actual_width": actual_width,
                 "actual_height": actual_height,
                 "output_resolution": output_resolution,
+                "face_detailer": face_detailer_config,
+                "hand_detailer": hand_detailer_config,
                 "local_status": "후보정 완료",
                 "publish_status": "HermesWork publish 완료",
                 "slack_status": "primary image 준비됨",
@@ -3072,8 +3122,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "loras": effective_loras,
                 "controlnet_used": controlnet_used,
                 "controlnet_stack": controlnet_stack,
-                "face_detailer": {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5},
-                "hand_detailer": {"model": "bbox/hand_yolov9c.pt", "denoise": 0.25, "steps": 14, "cfg": 5.5},
+                "face_detailer": face_detailer_config,
+                "hand_detailer": hand_detailer_config,
                 "output_image": output_image,
                 "artifact_path": str(bundle["primary_image_path"]),
                 "output_source_origin": source_origin,
@@ -3097,6 +3147,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "output_resolution": output_resolution,
                 "actual_width": actual_width,
                 "actual_height": actual_height,
+                "face_detailer": face_detailer_config,
+                "hand_detailer": hand_detailer_config,
             }
             _update_metadata_report_evidence(bundle["metadata_path"], report_evidence)
             nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"

@@ -493,9 +493,13 @@ class TestComfyLocalImageGenProviderGenerate:
             "output_resolution": "1x1",
             "actual_width": 1,
             "actual_height": 1,
+            "face_detailer": {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5},
+            "hand_detailer": {"model": "bbox/hand_yolov9c.pt", "denoise": 0.25, "steps": 14, "cfg": 5.5},
         }
         metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
         assert metadata["report_evidence"] == result["report_evidence"]
+        assert metadata["face_detailer"] == result["report_evidence"]["face_detailer"]
+        assert metadata["hand_detailer"] == result["report_evidence"]["hand_detailer"]
         assert Path(result["image"]).exists()
 
     def test_generate_source_preserving_depth_canny_postprocess_uses_promoted_workflow(self, monkeypatch, tmp_path):
@@ -789,6 +793,28 @@ class TestComfyLocalImageGenProviderGenerate:
         assert result["workflow_key"] == "source_image_4x_ultrasharp_v1"
         assert result["upscale_model"] == "4x-UltraSharp.pth"
         assert result["evidence"]["source_image"] == str(source_image)
+        assert result["requested_operation"] == "upscale"
+        assert result["canonical_operation"] == "upscale"
+        assert result["output_resolution"] == "1x1"
+        assert result["report_evidence"] == {
+            "operation": "upscale",
+            "canonical_operation": "upscale",
+            "upscale_model": "4x-UltraSharp.pth",
+            "workflow_key": "source_image_4x_ultrasharp_v1",
+            "workflow_path": str(result["workflow_path"]),
+            "prompt_id": "pid-upscale",
+            "source_image_path": str(source_image),
+            "output_image": result["primary_image"],
+            "artifact_path": result["artifact_path"],
+            "output_resolution": "1x1",
+            "actual_width": 1,
+            "actual_height": 1,
+        }
+        metadata = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
+        assert metadata["requested_operation"] == "upscale"
+        assert metadata["canonical_operation"] == "upscale"
+        assert metadata["output_resolution"] == "1x1"
+        assert metadata["report_evidence"] == result["report_evidence"]
         assert Path(result["image"]).exists()
 
     def test_generate_masked_inpaint_uses_source_and_mask_uploads(self, monkeypatch, tmp_path):
