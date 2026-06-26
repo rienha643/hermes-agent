@@ -1128,12 +1128,36 @@ IMAGE_GENERATE_SCHEMA = {
             },
             "postprocess_preset": {
                 "type": "string",
-                "enum": ["face8m_d035_hand9c_d025"],
-                "description": "Optional ComfyUI source-preserving postprocess preset. `face8m_d035_hand9c_d025` applies FaceDetailer face_yolov8m denoise 0.35 plus hand_yolov9c denoise 0.25.",
+                "enum": ["face8m_d035_hand9c_d025", "depth50_canny100_face8m_hand9c_v1"],
+                "description": "Optional ComfyUI source-preserving postprocess preset. `face8m_d035_hand9c_d025` applies FaceDetailer face_yolov8m denoise 0.35 plus hand_yolov9c denoise 0.25. `depth50_canny100_face8m_hand9c_v1` adds the promoted Depth+Canny structure-preserving stack before face/hand detail correction.",
             },
             "upscale_model": {
                 "type": "string",
                 "description": "Optional ComfyUI upscale model for operation=`upscale`, for example `4x-UltraSharp.pth`.",
+            },
+            "workflow_key": {
+                "type": "string",
+                "description": "Optional ComfyUI workflow key override for evidence and provider routing.",
+            },
+            "style_preset": {
+                "type": "string",
+                "description": "Optional ComfyUI style/LoRA preset name, for example `stable`, `glossy_skin`, `video_source`, or `eye_gloss`.",
+            },
+            "lora_preset": {
+                "type": "string",
+                "description": "Optional ComfyUI LoRA preset alias. Prefer `style_preset` for user-facing style choices.",
+            },
+            "cfg_scale": {
+                "type": "number",
+                "description": "Optional ComfyUI CFG scale. This is forwarded separately from NovelAI `scale`.",
+            },
+            "sampler_name": {
+                "type": "string",
+                "description": "Optional ComfyUI sampler name, for example `dpmpp_2m`.",
+            },
+            "scheduler": {
+                "type": "string",
+                "description": "Optional ComfyUI scheduler name, for example `karras`.",
             },
         },
         "required": ["prompt"],
@@ -1257,6 +1281,12 @@ def _dispatch_to_plugin_provider(
     model: str | None = None,
     vae: str | None = None,
     loras: list[dict[str, Any]] | None = None,
+    workflow_key: str | None = None,
+    style_preset: str | None = None,
+    lora_preset: str | None = None,
+    cfg_scale: float | int | None = None,
+    sampler_name: str | None = None,
+    scheduler: str | None = None,
 ):
     """Route the call to a plugin-registered provider when one is selected.
 
@@ -1388,6 +1418,18 @@ def _dispatch_to_plugin_provider(
             kwargs["vae"] = vae
         if loras is not None:
             kwargs["loras"] = loras
+        if workflow_key is not None:
+            kwargs["workflow_key"] = workflow_key
+        if style_preset is not None:
+            kwargs["style_preset"] = style_preset
+        if lora_preset is not None:
+            kwargs["lora_preset"] = lora_preset
+        if cfg_scale is not None:
+            kwargs["cfg_scale"] = cfg_scale
+        if sampler_name is not None:
+            kwargs["sampler_name"] = sampler_name
+        if scheduler is not None:
+            kwargs["scheduler"] = scheduler
         result = provider.generate(**kwargs)
     except Exception as exc:
         logger.warning(
@@ -1447,6 +1489,12 @@ def _handle_image_generate(args, **kw):
     model = args.get("model")
     vae = args.get("vae")
     loras = args.get("loras")
+    workflow_key = args.get("workflow_key")
+    style_preset = args.get("style_preset")
+    lora_preset = args.get("lora_preset")
+    cfg_scale = args.get("cfg_scale")
+    sampler_name = args.get("sampler_name")
+    scheduler = args.get("scheduler")
     task_id = kw.get("task_id")
 
     task_project_name, task_artifact_name = _consume_image_task_metadata(task_id)
@@ -1492,6 +1540,12 @@ def _handle_image_generate(args, **kw):
         model=str(model).strip() if isinstance(model, str) and model.strip() else None,
         vae=str(vae).strip() if isinstance(vae, str) and vae.strip() else None,
         loras=loras if isinstance(loras, list) else None,
+        workflow_key=str(workflow_key).strip() if isinstance(workflow_key, str) and workflow_key.strip() else None,
+        style_preset=str(style_preset).strip() if isinstance(style_preset, str) and style_preset.strip() else None,
+        lora_preset=str(lora_preset).strip() if isinstance(lora_preset, str) and lora_preset.strip() else None,
+        cfg_scale=cfg_scale if isinstance(cfg_scale, (int, float)) and cfg_scale > 0 else None,
+        sampler_name=str(sampler_name).strip() if isinstance(sampler_name, str) and sampler_name.strip() else None,
+        scheduler=str(scheduler).strip() if isinstance(scheduler, str) and scheduler.strip() else None,
     )
     if dispatched is not None:
         return dispatched
