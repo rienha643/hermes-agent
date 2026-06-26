@@ -134,13 +134,13 @@ STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
         "preset": "detail_smooth",
         "name": DEFAULT_DETAIL_SMOOTH_LORA,
         "weight": DEFAULT_DETAIL_SMOOTH_LORA_WEIGHT,
-        "use_case": "best bodyline/detail candidate; verify character identity before default use",
+        "use_case": "optional outfit/material detail; do not default because face/character identity may drift",
     },
     "detail_enhancer": {
         "preset": "detail_enhancer",
         "name": DEFAULT_DETAIL_ENHANCER_LORA,
         "weight": DEFAULT_DETAIL_ENHANCER_LORA_WEIGHT,
-        "use_case": "best detail enhancer candidate with strong visual quality",
+        "use_case": "review/rejected for default: worst in second character recheck",
     },
     "glossy_skin": {
         "preset": "glossy_skin",

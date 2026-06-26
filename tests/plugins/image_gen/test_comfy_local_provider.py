@@ -260,14 +260,14 @@ class TestComfyLocalLoraPresetResolution:
                 "detail_smooth",
                 COMFY_MOD.DEFAULT_DETAIL_SMOOTH_LORA,
                 COMFY_MOD.DEFAULT_DETAIL_SMOOTH_LORA_WEIGHT,
-                "best bodyline/detail candidate; verify character identity before default use",
+                "optional outfit/material detail; do not default because face/character identity may drift",
             ),
             (
                 "detail_enhancer",
                 "detail_enhancer",
                 COMFY_MOD.DEFAULT_DETAIL_ENHANCER_LORA,
                 COMFY_MOD.DEFAULT_DETAIL_ENHANCER_LORA_WEIGHT,
-                "best detail enhancer candidate with strong visual quality",
+                "review/rejected for default: worst in second character recheck",
             ),
             (
                 "glossy_skin",
