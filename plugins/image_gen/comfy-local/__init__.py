@@ -75,19 +75,29 @@ DEFAULT_VIDEO_SOURCE_STYLE_LORA = r"00_illustrious_style_candidates\K NAI Style.
 DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT = 0.65
 DEFAULT_DNF_ANIMA_EXPERIMENTAL_LORA = r"90_compatibility_review_non_illustrious_or_anima\DNF Anima-v2.safetensors"
 DEFAULT_DNF_ANIMA_EXPERIMENTAL_LORA_WEIGHT = 0.45
-STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
-    "stable": {
-        "preset": "stable",
-        "name": DEFAULT_STABLE_STYLE_LORA,
-        "weight": DEFAULT_STABLE_STYLE_LORA_WEIGHT,
-        "use_case": "default user-approved subculture character illustration",
-    },
-    "default": {
-        "preset": "stable",
-        "name": DEFAULT_STABLE_STYLE_LORA,
-        "weight": DEFAULT_STABLE_STYLE_LORA_WEIGHT,
-        "use_case": "default user-approved subculture character illustration",
-    },
+
+
+def _lora_preset_entry(preset: str, name: str, weight: float, use_case: str) -> Dict[str, Any]:
+    return {
+        "preset": preset,
+        "name": name,
+        "weight": weight,
+        "use_case": use_case,
+    }
+
+
+def _stable_lora_preset_entry() -> Dict[str, Any]:
+    return _lora_preset_entry(
+        "stable",
+        DEFAULT_STABLE_STYLE_LORA,
+        DEFAULT_STABLE_STYLE_LORA_WEIGHT,
+        "default user-approved subculture character illustration",
+    )
+
+
+STYLE_PRESET_LORAS: Dict[str, Any] = {
+    "stable": _stable_lora_preset_entry(),
+    "default": _stable_lora_preset_entry(),
     "key_art": {
         "preset": "key_art",
         "name": DEFAULT_KEY_ART_LORA,
@@ -106,59 +116,110 @@ STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
         "weight": DEFAULT_KEY_ART_LORA_WEIGHT,
         "use_case": "key visual or intentional image distortion effect",
     },
-    "matte_skin": {
-        "preset": "matte_skin",
-        "name": DEFAULT_MATTE_PRODUCTION_LORA,
-        "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
-        "use_case": "deprecated/review: matte lighting may remove too much illumination",
-    },
-    "matte": {
-        "preset": "matte_skin",
-        "name": DEFAULT_MATTE_PRODUCTION_LORA,
-        "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
-        "use_case": "deprecated/review: matte lighting may remove too much illumination",
-    },
-    "standing_matte": {
-        "preset": "matte_skin",
-        "name": DEFAULT_MATTE_PRODUCTION_LORA,
-        "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
-        "use_case": "deprecated/review: matte lighting may remove too much illumination",
-    },
-    "eye_detail": {
-        "preset": "eye_detail",
-        "name": DEFAULT_EYE_DETAIL_LORA,
-        "weight": DEFAULT_EYE_DETAIL_LORA_WEIGHT,
-        "use_case": "best eye/face detail candidate; avoid Eye_Enhancer spacing drift",
-    },
-    "detail_smooth": {
-        "preset": "detail_smooth",
-        "name": DEFAULT_DETAIL_SMOOTH_LORA,
-        "weight": DEFAULT_DETAIL_SMOOTH_LORA_WEIGHT,
-        "use_case": "optional outfit/material detail; do not default because face/character identity may drift",
-    },
-    "detail_enhancer": {
-        "preset": "detail_enhancer",
-        "name": DEFAULT_DETAIL_ENHANCER_LORA,
-        "weight": DEFAULT_DETAIL_ENHANCER_LORA_WEIGHT,
-        "use_case": "review/rejected for default: worst in second character recheck",
-    },
-    "glossy_skin": {
-        "preset": "glossy_skin",
-        "name": DEFAULT_GLOSSY_SKIN_LORA,
-        "weight": DEFAULT_GLOSSY_SKIN_LORA_WEIGHT,
-        "use_case": "best skin/outfit gloss candidate",
-    },
+    "matte_skin": [
+        _stable_lora_preset_entry(),
+        {
+            "preset": "matte_skin",
+            "name": DEFAULT_MATTE_PRODUCTION_LORA,
+            "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
+            "use_case": "deprecated/review: matte lighting may remove too much illumination",
+        },
+    ],
+    "matte": [
+        _stable_lora_preset_entry(),
+        {
+            "preset": "matte_skin",
+            "name": DEFAULT_MATTE_PRODUCTION_LORA,
+            "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
+            "use_case": "deprecated/review: matte lighting may remove too much illumination",
+        },
+    ],
+    "standing_matte": [
+        _stable_lora_preset_entry(),
+        {
+            "preset": "matte_skin",
+            "name": DEFAULT_MATTE_PRODUCTION_LORA,
+            "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
+            "use_case": "deprecated/review: matte lighting may remove too much illumination",
+        },
+    ],
+    "eye_detail": [
+        _stable_lora_preset_entry(),
+        {
+            "preset": "eye_detail",
+            "name": DEFAULT_EYE_DETAIL_LORA,
+            "weight": DEFAULT_EYE_DETAIL_LORA_WEIGHT,
+            "use_case": "review/no-op alone in template check; prefer eye_gloss when eye improvement is desired",
+        },
+    ],
+    "detail_smooth": [
+        _stable_lora_preset_entry(),
+        {
+            "preset": "detail_smooth",
+            "name": DEFAULT_DETAIL_SMOOTH_LORA,
+            "weight": DEFAULT_DETAIL_SMOOTH_LORA_WEIGHT,
+            "use_case": "optional outfit/material detail; do not default because face/character identity may drift",
+        },
+    ],
+    "detail_enhancer": [
+        _stable_lora_preset_entry(),
+        {
+            "preset": "detail_enhancer",
+            "name": DEFAULT_DETAIL_ENHANCER_LORA,
+            "weight": DEFAULT_DETAIL_ENHANCER_LORA_WEIGHT,
+            "use_case": "review/rejected for default: worst in second character recheck",
+        },
+    ],
+    "glossy_skin": [
+        _stable_lora_preset_entry(),
+        {
+            "preset": "glossy_skin",
+            "name": DEFAULT_GLOSSY_SKIN_LORA,
+            "weight": DEFAULT_GLOSSY_SKIN_LORA_WEIGHT,
+            "use_case": "best skin/outfit gloss candidate",
+        },
+    ],
+    "eye_gloss": [
+        _stable_lora_preset_entry(),
+        {
+            "preset": "eye_detail",
+            "name": DEFAULT_EYE_DETAIL_LORA,
+            "weight": DEFAULT_EYE_DETAIL_LORA_WEIGHT,
+            "use_case": "eye detail component for eye_gloss composite",
+        },
+        {
+            "preset": "glossy_skin",
+            "name": DEFAULT_GLOSSY_SKIN_LORA,
+            "weight": DEFAULT_GLOSSY_SKIN_LORA_WEIGHT,
+            "use_case": "gloss/skin component for eye_gloss composite",
+        },
+    ],
+    "eye_detail_glossy": [
+        _stable_lora_preset_entry(),
+        {
+            "preset": "eye_detail",
+            "name": DEFAULT_EYE_DETAIL_LORA,
+            "weight": DEFAULT_EYE_DETAIL_LORA_WEIGHT,
+            "use_case": "eye detail component for eye_gloss composite",
+        },
+        {
+            "preset": "glossy_skin",
+            "name": DEFAULT_GLOSSY_SKIN_LORA,
+            "weight": DEFAULT_GLOSSY_SKIN_LORA_WEIGHT,
+            "use_case": "gloss/skin component for eye_gloss composite",
+        },
+    ],
     "video_source": {
         "preset": "video_source",
         "name": DEFAULT_VIDEO_SOURCE_STYLE_LORA,
         "weight": DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT,
-        "use_case": "stable style candidate for image-to-video source material",
+        "use_case": "best hand/lighting candidate; stable style candidate for image-to-video source material",
     },
     "k_nai": {
         "preset": "video_source",
         "name": DEFAULT_VIDEO_SOURCE_STYLE_LORA,
         "weight": DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT,
-        "use_case": "stable style candidate for image-to-video source material",
+        "use_case": "best hand/lighting candidate; stable style candidate for image-to-video source material",
     },
     "dnf_anima_experimental": {
         "preset": "dnf_anima_experimental",
@@ -1499,9 +1560,14 @@ def _resolve_lora_stack(kwargs: Dict[str, Any], *, runtime_preset: Optional[Dict
     if not preset_key and runtime_preset_name == CHARACTER_PRODUCTION_PRESET:
         preset_key = "stable"
     if preset_key in STYLE_PRESET_LORAS:
-        preset = dict(STYLE_PRESET_LORAS[preset_key])
-        preset["clip_weight"] = preset["weight"]
-        return [preset]
+        preset_config = STYLE_PRESET_LORAS[preset_key]
+        preset_items = preset_config if isinstance(preset_config, list) else [preset_config]
+        stack: List[Dict[str, Any]] = []
+        for item in preset_items:
+            preset = dict(item)
+            preset["clip_weight"] = preset["weight"]
+            stack.append(preset)
+        return stack
     return []
 
 
