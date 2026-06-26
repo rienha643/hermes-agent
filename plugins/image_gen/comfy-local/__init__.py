@@ -1371,13 +1371,18 @@ def _build_character_production_runtime(
 
 def _resolve_lora_stack(kwargs: Dict[str, Any], *, runtime_preset: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Resolve ComfyUI LoRA stack from explicit kwargs or Angelica defaults."""
+    def normalize_lora_name(value: str) -> str:
+        # Commander JSON/text handoffs may double-escape Windows-style separators.
+        # ComfyUI model lists use a single backslash as the relative path separator.
+        return re.sub(r"\\+", r"\\", value.strip().replace("/", "\\"))
+
     explicit_stack = kwargs.get("loras")
     if isinstance(explicit_stack, list):
         resolved: List[Dict[str, Any]] = []
         for item in explicit_stack:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name") or item.get("lora_name") or "").strip()
+            name = normalize_lora_name(str(item.get("name") or item.get("lora_name") or ""))
             if not name:
                 continue
             try:
@@ -1397,7 +1402,7 @@ def _resolve_lora_stack(kwargs: Dict[str, Any], *, runtime_preset: Optional[Dict
             })
         return resolved
 
-    explicit_name = str(kwargs.get("lora_name") or "").strip()
+    explicit_name = normalize_lora_name(str(kwargs.get("lora_name") or ""))
     if explicit_name:
         try:
             weight = float(kwargs.get("lora_weight", kwargs.get("strength_model", 1.0)))
@@ -1784,6 +1789,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         base_url = _resolve_base_url()
         checkpoint = str(kwargs.get("model") or _resolve_model()).strip() or DEFAULT_CHECKPOINT
         requested_checkpoint = checkpoint
+        explicit_vae = isinstance(kwargs.get("vae"), str) and bool(str(kwargs.get("vae")).strip())
         vae = str(kwargs.get("vae") or _resolve_vae() or "").strip() or None
         project_name = kwargs.get("project_name")
         artifact_name = kwargs.get("artifact_name")
@@ -1882,7 +1888,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 width, height = PORTRAIT_PRODUCTION_WIDTH, PORTRAIT_PRODUCTION_HEIGHT
             if not explicit_seed and isinstance(runtime_preset.get("seed"), int):
                 seed = int(runtime_preset["seed"])
-            if runtime_preset.get("use_checkpoint_vae") is True:
+            if runtime_preset.get("use_checkpoint_vae") is True and not explicit_vae:
                 vae = None
 
         lora_stack = _resolve_lora_stack(kwargs, runtime_preset=runtime_preset)
@@ -3191,7 +3197,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         model_source = ["1", 0]
         clip_source = ["1", 1]
         for index, lora in enumerate(lora_stack, start=1):
-            node_id = f"L{index}"
+            # ComfyUI's prompt API expects numeric node identifiers. Non-numeric
+            # IDs such as L1 validate poorly on some servers and can cause 400s.
+            node_id = str(20 + index)
             workflow[node_id] = {
                 "inputs": {
                     "model": model_source,
@@ -3215,8 +3223,44 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             response.raise_for_status()
             submit = response.json()
         except Exception as exc:  # noqa: BLE001
+            response_body = ""
+            response_obj = getattr(exc, "response", None)
+            if response_obj is not None:
+                try:
+                    response_body = str(response_obj.text or "").strip()
+                except Exception:  # noqa: BLE001
+                    response_body = ""
+            try:
+                debug_dir = Path(
+                    os.environ.get(
+                        "HERMES_COMFY_PROMPT_ERROR_DIR",
+                        "/Volumes/SSD_Hermes/HermesCodexControl/debug/comfy_prompt_errors",
+                    )
+                )
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                debug_path = debug_dir / f"{_dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{filename_prefix}.json"
+                debug_path.write_text(
+                    json.dumps(
+                        {
+                            "error": str(exc),
+                            "response_body": response_body,
+                            "base_url": base_url,
+                            "checkpoint": checkpoint,
+                            "vae": vae,
+                            "loras": lora_stack,
+                            "workflow": workflow,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            except Exception as debug_exc:  # noqa: BLE001
+                logger.warning("Could not write ComfyUI prompt error debug file: %s", debug_exc)
+            detail = f"; response_body={response_body[:2000]}" if response_body else ""
             return error_response(
-                error=f"ComfyUI prompt submission failed: {exc}",
+                error=f"ComfyUI prompt submission failed: {exc}{detail}",
                 error_type="api_error",
                 provider=self.name,
                 model=checkpoint,
@@ -3308,6 +3352,12 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 aspect_ratio=aspect,
             )
 
+        actual_width, actual_height = _read_png_dimensions(source_path)
+        output_resolution = (
+            f"{actual_width}x{actual_height}"
+            if actual_width is not None and actual_height is not None
+            else None
+        )
         created_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
         raw_prompt_payload = {
             "submit_payload": payload,
@@ -3329,6 +3379,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "height": height,
             "batch_size": 1,
             "seed": seed,
+            "actual_width": actual_width,
+            "actual_height": actual_height,
+            "output_resolution": output_resolution,
             "sampler": sampler_name,
             "steps": steps,
             "cfg": cfg,
@@ -3383,6 +3436,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "category": category,
             "output_source_path": str(source_path),
             "output_source_origin": source_origin,
+            "actual_width": actual_width,
+            "actual_height": actual_height,
+            "output_resolution": output_resolution,
             "local_status": "생성 완료",
             "publish_status": "HermesWork publish 완료",
             "slack_status": "primary image 준비됨",
@@ -3462,6 +3518,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "output_image": output_image,
             "artifact_path": str(bundle["primary_image_path"]),
             "output_source_origin": source_origin,
+            "actual_width": actual_width,
+            "actual_height": actual_height,
+            "output_resolution": output_resolution,
             "reporting_note": (
                 "Use evidence.workflow_key for the workflow key. "
                 "Do not substitute workflow_path when reporting workflow_key."
@@ -3499,6 +3558,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "loras": lora_stack,
                 "width": width,
                 "height": height,
+                "actual_width": actual_width,
+                "actual_height": actual_height,
+                "output_resolution": output_resolution,
                 "steps": steps,
                 "cfg_scale": cfg,
                 "sampler_name": sampler_name,

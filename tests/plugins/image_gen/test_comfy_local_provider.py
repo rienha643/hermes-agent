@@ -1703,6 +1703,7 @@ class TestComfyLocalCharacterProductionPreset:
         model="AOM3A1_orangemixs.safetensors",
         task_context="character production",
         output_filename="heroine_00001_.png",
+        **extra_kwargs,
     ):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
         monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
@@ -1733,6 +1734,8 @@ class TestComfyLocalCharacterProductionPreset:
                 return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
             if url.endswith("/models/checkpoints"):
                 return Response(["AOM3A1_orangemixs.safetensors", "animagine-xl-4.0-opt.safetensors"])
+            if url.endswith("/models/vae"):
+                return Response(["Anime SDXL VAE DPipe Prototype.safetensors"])
             if "/history/" in url:
                 return Response(
                     {
@@ -1817,6 +1820,7 @@ class TestComfyLocalCharacterProductionPreset:
             subject_dominance=subject_dominance,
             seed=seed,
             task_context=task_context,
+            **extra_kwargs,
         )
         return result, captured
 
@@ -1947,6 +1951,38 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["evidence"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["prompt_translation_policy"] == "v8-style-workflow + sfw-sanitize + composition-guard + no portrait rewrite"
+
+    def test_v8_style_preserves_explicit_vae_and_normalizes_lora_paths(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt=(
+                "v8_style_workflow, 1girl, solo, anime girl, "
+                "subculture anime game illustration, medium full shot"
+            ),
+            vae="Anime SDXL VAE DPipe Prototype.safetensors",
+            loras=[
+                {
+                    "name": r"00_illustrious_style_candidates\\K NAI Style.safetensors",
+                    "weight": 0.7,
+                    "clip_weight": 0.7,
+                },
+                {
+                    "name": r"03_utility_detail_enhancer\\AddMicroDetails_Illustrious_v6.safetensors",
+                    "weight": 0.2,
+                    "clip_weight": 0.2,
+                },
+            ],
+        )
+
+        assert result["success"] is True
+        assert captured["metadata"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
+        assert captured["metadata"]["vae"] == "Anime SDXL VAE DPipe Prototype.safetensors"
+        assert captured["workflow_json"]["6"]["class_type"] == "VAELoader"
+        assert captured["workflow_json"]["7"]["inputs"]["vae"] == ["6", 0]
+        assert captured["workflow_json"]["21"]["inputs"]["lora_name"] == r"00_illustrious_style_candidates\K NAI Style.safetensors"
+        assert captured["workflow_json"]["22"]["inputs"]["lora_name"] == r"03_utility_detail_enhancer\AddMicroDetails_Illustrious_v6.safetensors"
+        assert captured["metadata"]["loras"][0]["name"] == r"00_illustrious_style_candidates\K NAI Style.safetensors"
 
     def test_v8_style_composition_only_prompt_keeps_subject_baseline(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(

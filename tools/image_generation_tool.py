@@ -1020,6 +1020,31 @@ IMAGE_GENERATE_SCHEMA = {
                 "type": "string",
                 "description": "Optional artifact base name used for the published filename.",
             },
+            "model": {
+                "type": "string",
+                "description": "Optional provider-specific model/checkpoint name. For ComfyUI this maps to the checkpoint filename.",
+            },
+            "vae": {
+                "type": "string",
+                "description": "Optional provider-specific VAE filename. For ComfyUI this maps to models/vae.",
+            },
+            "loras": {
+                "type": "array",
+                "description": "Optional provider-specific LoRA stack. For ComfyUI items may include name, weight, and clip_weight.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "lora_name": {"type": "string"},
+                        "weight": {"type": "number"},
+                        "clip_weight": {"type": "number"},
+                        "strength_model": {"type": "number"},
+                        "strength_clip": {"type": "number"},
+                        "preset": {"type": "string"},
+                        "use_case": {"type": "string"}
+                    }
+                },
+            },
             "negative_prompt": {
                 "type": "string",
                 "description": "Optional negative prompt. Required by the ComfyUI character_production preset and merged with its negative baseline when used.",
@@ -1229,6 +1254,9 @@ def _dispatch_to_plugin_provider(
     source_image_path: str | None = None,
     postprocess_preset: str | None = None,
     upscale_model: str | None = None,
+    model: str | None = None,
+    vae: str | None = None,
+    loras: list[dict[str, Any]] | None = None,
 ):
     """Route the call to a plugin-registered provider when one is selected.
 
@@ -1352,8 +1380,14 @@ def _dispatch_to_plugin_provider(
             kwargs["postprocess_preset"] = postprocess_preset
         if upscale_model is not None:
             kwargs["upscale_model"] = upscale_model
-        if configured_model:
+        if model is not None:
+            kwargs["model"] = model
+        elif configured_model:
             kwargs["model"] = configured_model
+        if vae is not None:
+            kwargs["vae"] = vae
+        if loras is not None:
+            kwargs["loras"] = loras
         result = provider.generate(**kwargs)
     except Exception as exc:
         logger.warning(
@@ -1410,6 +1444,9 @@ def _handle_image_generate(args, **kw):
     source_image_path = args.get("source_image_path")
     postprocess_preset = args.get("postprocess_preset")
     upscale_model = args.get("upscale_model")
+    model = args.get("model")
+    vae = args.get("vae")
+    loras = args.get("loras")
     task_id = kw.get("task_id")
 
     task_project_name, task_artifact_name = _consume_image_task_metadata(task_id)
@@ -1452,6 +1489,9 @@ def _handle_image_generate(args, **kw):
         source_image_path=str(source_image_path).strip() if isinstance(source_image_path, str) and source_image_path.strip() else None,
         postprocess_preset=str(postprocess_preset).strip() if isinstance(postprocess_preset, str) and postprocess_preset.strip() else None,
         upscale_model=str(upscale_model).strip() if isinstance(upscale_model, str) and upscale_model.strip() else None,
+        model=str(model).strip() if isinstance(model, str) and model.strip() else None,
+        vae=str(vae).strip() if isinstance(vae, str) and vae.strip() else None,
+        loras=loras if isinstance(loras, list) else None,
     )
     if dispatched is not None:
         return dispatched
