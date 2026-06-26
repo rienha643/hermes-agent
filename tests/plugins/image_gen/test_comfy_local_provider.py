@@ -2010,6 +2010,55 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["sampler_name"] == "dpmpp_2m"
         assert result["scheduler"] == "karras"
 
+    def test_generate_routes_key_visual_workflow_to_v8_style_anchors_only(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt=(
+                "masterpiece, polished mobile game promotional poster, "
+                "three stacked cinematic zones divided by luminous diagonal light bands, "
+                "top zone emotional close-up, middle ornate fantasy duo, bottom dynamic solo"
+            ),
+            negative_prompt=(
+                "Brown Dust II, Neowiz, text, logo, "
+                "single full-body centered portrait, one-person-only poster"
+            ),
+            workflow_key="character_key_visual_txt2img_v1",
+            output_type="key_visual",
+            cfg_scale=5.0,
+            steps=12,
+        )
+
+        assert result["success"] is True
+        assert captured["prompt_payload"]["runtime_preset"] == "key_visual_subculture_v1"
+        assert captured["prompt_payload"]["workflow_key"] == "character_key_visual_txt2img_v1"
+        assert captured["metadata"]["workflow_key"] == "character_key_visual_txt2img_v1"
+        assert captured["prompt_payload"]["steps"] == 32
+        assert captured["prompt_payload"]["cfg"] == 6.5
+        assert captured["prompt_payload"]["sampler"] == "dpmpp_2m"
+        assert captured["prompt_payload"]["scheduler"] == "karras"
+        assert captured["metadata"]["prompt_translation_policy"] == (
+            "key-visual-subculture-v1 + sfw-sanitize + v8-style-anchors-only + no subject/composition rewrite"
+        )
+        prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
+        assert "subculture anime game illustration" in prompt_text
+        assert "light novel cover art" in prompt_text
+        assert "anime key visual" in prompt_text
+        assert "three stacked cinematic zones" in prompt_text
+        assert "1girl, solo, full body" not in prompt_text
+        assert "athletic anime heroine" not in prompt_text
+        assert "gym" not in prompt_text
+        assert "medium full shot" not in prompt_text
+        assert "camera at chest height" not in prompt_text
+        assert "single character focus" not in prompt_text
+        negative_text = captured["workflow_json"]["4"]["inputs"]["text"]
+        assert "single full-body centered portrait" in negative_text
+        assert "one-person-only poster" in negative_text
+        assert "Brown Dust II" in negative_text
+        assert result["preset"] == "key_visual_subculture_v1"
+        assert result["workflow_key"] == "character_key_visual_txt2img_v1"
+        assert result["cfg_scale"] == 6.5
+
     def test_generate_routes_portrait_request_to_portrait_preset(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(
             monkeypatch,

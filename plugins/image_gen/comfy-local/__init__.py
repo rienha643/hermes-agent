@@ -232,6 +232,7 @@ STYLE_PRESET_LORAS: Dict[str, Any] = {
 CHARACTER_PRODUCTION_PRESET = "character_production"
 PORTRAIT_PRODUCTION_PRESET = "portrait_production"
 V8_STYLE_WORKFLOW_PRESET = "v8_style_workflow"
+KEY_VISUAL_SUBCULTURE_PRESET = "key_visual_subculture_v1"
 SOURCE_PRESERVING_POSTPROCESS_OPERATION = "source_preserving_postprocess"
 LOCAL_RETOUCH_OPERATION = "local_retouch"
 MASKED_INPAINT_OPERATION = "masked_inpaint"
@@ -275,6 +276,10 @@ CHARACTER_PRODUCTION_STEPS = 28
 CHARACTER_PRODUCTION_CFG = 5.0
 CHARACTER_PRODUCTION_SAMPLER = "dpmpp_2m"
 CHARACTER_PRODUCTION_SCHEDULER = "karras"
+KEY_VISUAL_SUBCULTURE_STEPS = 32
+KEY_VISUAL_SUBCULTURE_CFG = 6.5
+KEY_VISUAL_SUBCULTURE_SAMPLER = "dpmpp_2m"
+KEY_VISUAL_SUBCULTURE_SCHEDULER = "karras"
 PORTRAIT_PRODUCTION_WIDTH = 1024
 PORTRAIT_PRODUCTION_HEIGHT = 1536
 PORTRAIT_PRODUCTION_CFG = 6.0
@@ -299,6 +304,11 @@ V8_STYLE_COMPOSITION_GUARD = (
     "medium full shot, cowboy shot, standing pose, camera at chest height, "
     "character centered, full torso and upper thighs visible, balanced perspective, "
     "no first-person perspective"
+)
+KEY_VISUAL_SUBCULTURE_STYLE_BASELINE = (
+    "subculture anime game illustration, light novel cover art, anime key visual, "
+    "premium mobile game promotional art, clean lineart, polished eyes, expressive faces, "
+    "refined hair flow, rich costume detail, cinematic bloom lighting, commercial splash art finish"
 )
 CHARACTER_PRODUCTION_POSITIVE_SKELETON = (
     "1girl, solo, full body, standing, looking at viewer, character focus, centered character, "
@@ -325,6 +335,13 @@ CHARACTER_PRODUCTION_NEGATIVE_BASELINE = (
 PORTRAIT_PRODUCTION_NEGATIVE_BASELINE = (
     "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, missing fingers, "
     "distorted face, text, watermark"
+)
+KEY_VISUAL_SUBCULTURE_NEGATIVE_BASELINE = (
+    "low quality, worst quality, bad quality, normal quality, lowres, blurry, watermark, text, logo, "
+    "signature, letters, typography, UI, title, textbox, stats panel, trading card, card frame, "
+    "character sheet, turnaround sheet, copied layout, copied character design, photorealistic, 3d render, "
+    "bad anatomy, bad hands, malformed hands, extra fingers, missing fingers, "
+    "fused fingers, extra arms, cropped face, face out of frame, unreadable face, black face, asymmetrical eyes"
 )
 V8_STYLE_NEGATIVE_COMPOSITION_GUARD = (
     "extreme close-up, close-up, headshot, bust shot, cropped body, pov, first-person view, "
@@ -1313,6 +1330,30 @@ def _is_v8_style_workflow_request(prompt_text: str) -> bool:
     return any(keyword.casefold() in lowered for keyword in V8_STYLE_WORKFLOW_KEYWORDS)
 
 
+def _is_key_visual_subculture_request(prompt_text: str, *, workflow_key: Any = None, output_type: Any = None) -> bool:
+    requested_workflow = str(workflow_key or "").strip()
+    requested_output_type = str(output_type or "").strip().casefold().replace("-", "_").replace(" ", "_")
+    if requested_workflow == CHARACTER_KEY_VISUAL_WORKFLOW_KEY:
+        return True
+    if requested_output_type in {"key_visual", "keyvisual", "promotional_key_visual"}:
+        return True
+    lowered = str(prompt_text or "").casefold()
+    return any(
+        keyword in lowered
+        for keyword in (
+            "key visual",
+            "key_visual",
+            "키비주얼",
+            "promotional poster",
+            "poster artwork",
+            "multi-zone",
+            "three stacked",
+            "3구역",
+            "3개 영역",
+        )
+    )
+
+
 def _sanitize_sfw_prompt_terms(prompt_text: str) -> str:
     sanitized = NSFW_WEIGHTED_TAG_RE.sub("", str(prompt_text or ""))
     sanitized = NSFW_TEXT_TAG_RE.sub("", sanitized)
@@ -1417,6 +1458,8 @@ def _build_character_production_runtime(
     *,
     negative_prompt: str,
     subject_dominance: Any,
+    workflow_key: Any = None,
+    output_type: Any = None,
 ) -> Optional[Dict[str, Any]]:
     if _is_v8_style_workflow_request(prompt):
         negative_prompt_text = str(negative_prompt or "").strip()
@@ -1448,6 +1491,32 @@ def _build_character_production_runtime(
             "scheduler": PORTRAIT_PRODUCTION_SCHEDULER,
             "use_checkpoint_vae": True,
             "prompt_translation_policy": "v8-style-workflow + sfw-sanitize + composition-guard + no portrait rewrite",
+        }
+    if _is_key_visual_subculture_request(prompt, workflow_key=workflow_key, output_type=output_type):
+        negative_prompt_text = str(negative_prompt or "").strip()
+        source_prompt = _merge_comma_terms(
+            _sanitize_sfw_prompt_terms(prompt),
+            KEY_VISUAL_SUBCULTURE_STYLE_BASELINE,
+        )
+        final_negative_prompt = KEY_VISUAL_SUBCULTURE_NEGATIVE_BASELINE
+        if negative_prompt_text:
+            final_negative_prompt = _merge_comma_terms(final_negative_prompt, negative_prompt_text)
+        return {
+            "preset": KEY_VISUAL_SUBCULTURE_PRESET,
+            "workflow_key": CHARACTER_KEY_VISUAL_WORKFLOW_KEY,
+            "source_prompt": source_prompt,
+            "translated_prompt": source_prompt,
+            "prompt": source_prompt,
+            "negative_prompt": final_negative_prompt,
+            "negative_baseline": KEY_VISUAL_SUBCULTURE_NEGATIVE_BASELINE,
+            "subject_dominance": None,
+            "subject_dominance_ratio": None,
+            "subject_dominance_rule": None,
+            "steps": KEY_VISUAL_SUBCULTURE_STEPS,
+            "cfg": KEY_VISUAL_SUBCULTURE_CFG,
+            "sampler_name": KEY_VISUAL_SUBCULTURE_SAMPLER,
+            "scheduler": KEY_VISUAL_SUBCULTURE_SCHEDULER,
+            "prompt_translation_policy": "key-visual-subculture-v1 + sfw-sanitize + v8-style-anchors-only + no subject/composition rewrite",
         }
     if _is_portrait_production_request(prompt):
         negative_prompt_text = str(negative_prompt or "").strip()
@@ -1945,6 +2014,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         seed = int(kwargs.get("seed")) if explicit_seed else DEFAULT_SEED
         negative_prompt = str(kwargs.get("negative_prompt") or "").strip()
         subject_dominance = kwargs.get("subject_dominance")
+        requested_workflow_key = str(kwargs.get("workflow_key") or "").strip()
+        output_type = kwargs.get("output_type")
         operation = str(kwargs.get("operation") or "").strip()
         source_image_path = str(kwargs.get("source_image_path") or kwargs.get("source_image") or "").strip()
         if _looks_like_source_image_task_prompt_without_args(
@@ -1993,6 +2064,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 prompt,
                 negative_prompt=negative_prompt,
                 subject_dominance=subject_dominance,
+                workflow_key=requested_workflow_key,
+                output_type=output_type,
             )
         except ValueError as exc:
             return error_response(
@@ -2010,7 +2083,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         prompt_translation_policy = "raw"
         subject_dominance_value: Optional[float] = None
         subject_dominance_rule: Optional[str] = None
-        workflow_key = DEFAULT_WORKFLOW_KEY
+        workflow_key = requested_workflow_key or DEFAULT_WORKFLOW_KEY
         if runtime_preset is not None:
             preset_name = str(runtime_preset.get("preset") or CHARACTER_PRODUCTION_PRESET)
             source_prompt = str(runtime_preset.get("source_prompt") or source_prompt)
