@@ -215,12 +215,12 @@ class TestComfyLocalLoraPresetResolution:
                 "preset": "stable",
                 "name": COMFY_MOD.DEFAULT_STABLE_STYLE_LORA,
                 "weight": COMFY_MOD.DEFAULT_STABLE_STYLE_LORA_WEIGHT,
-                "use_case": "default stable character illustration",
+                "use_case": "default user-approved subculture character illustration",
                 "clip_weight": COMFY_MOD.DEFAULT_STABLE_STYLE_LORA_WEIGHT,
             }
         ]
 
-    def test_key_art_style_preset_uses_pornmaster_low_weight(self):
+    def test_key_art_style_preset_uses_pornmaster_key_visual_weight(self):
         stack = COMFY_MOD._resolve_lora_stack({"style_preset": "key_art"}, runtime_preset=None)
 
         assert stack == [
@@ -228,8 +228,21 @@ class TestComfyLocalLoraPresetResolution:
                 "preset": "key_art",
                 "name": COMFY_MOD.DEFAULT_KEY_ART_LORA,
                 "weight": COMFY_MOD.DEFAULT_KEY_ART_LORA_WEIGHT,
-                "use_case": "dramatic promotional key art",
+                "use_case": "key visual or intentional image distortion effect",
                 "clip_weight": COMFY_MOD.DEFAULT_KEY_ART_LORA_WEIGHT,
+            }
+        ]
+
+    def test_matte_skin_style_preset_uses_matte_production_lora(self):
+        stack = COMFY_MOD._resolve_lora_stack({"style_preset": "matte_skin"}, runtime_preset=None)
+
+        assert stack == [
+            {
+                "preset": "matte_skin",
+                "name": COMFY_MOD.DEFAULT_MATTE_PRODUCTION_LORA,
+                "weight": COMFY_MOD.DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
+                "use_case": "matte clean skin/clothing for LD/SD standing image production",
+                "clip_weight": COMFY_MOD.DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
             }
         ]
 

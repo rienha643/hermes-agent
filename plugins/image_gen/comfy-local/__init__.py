@@ -57,40 +57,60 @@ DEFAULT_SEED = 123456789
 DEFAULT_CATEGORY = "txt2img"
 POSTPROCESS_CATEGORY = "postprocess"
 
-DEFAULT_STABLE_STYLE_LORA = r"00_illustrious_style_candidates\K NAI Style.safetensors"
-DEFAULT_STABLE_STYLE_LORA_WEIGHT = 0.65
+DEFAULT_STABLE_STYLE_LORA = r"00_illustrious_style_candidates\pornmaster-Aesthetics-v2-lora.safetensors"
+DEFAULT_STABLE_STYLE_LORA_WEIGHT = 0.15
 DEFAULT_KEY_ART_LORA = r"00_illustrious_style_candidates\pornmaster-Aesthetics-v2-lora.safetensors"
-DEFAULT_KEY_ART_LORA_WEIGHT = 0.10
+DEFAULT_KEY_ART_LORA_WEIGHT = 0.20
+DEFAULT_MATTE_PRODUCTION_LORA = r"04_utility_skin_gloss\Matte_Skin_Illustrious_v4.safetensors"
+DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT = 0.35
 STYLE_PRESET_LORAS: Dict[str, Dict[str, Any]] = {
     "stable": {
         "preset": "stable",
         "name": DEFAULT_STABLE_STYLE_LORA,
         "weight": DEFAULT_STABLE_STYLE_LORA_WEIGHT,
-        "use_case": "default stable character illustration",
+        "use_case": "default user-approved subculture character illustration",
     },
     "default": {
         "preset": "stable",
         "name": DEFAULT_STABLE_STYLE_LORA,
         "weight": DEFAULT_STABLE_STYLE_LORA_WEIGHT,
-        "use_case": "default stable character illustration",
+        "use_case": "default user-approved subculture character illustration",
     },
     "key_art": {
         "preset": "key_art",
         "name": DEFAULT_KEY_ART_LORA,
         "weight": DEFAULT_KEY_ART_LORA_WEIGHT,
-        "use_case": "dramatic promotional key art",
+        "use_case": "key visual or intentional image distortion effect",
     },
     "keyart": {
         "preset": "key_art",
         "name": DEFAULT_KEY_ART_LORA,
         "weight": DEFAULT_KEY_ART_LORA_WEIGHT,
-        "use_case": "dramatic promotional key art",
+        "use_case": "key visual or intentional image distortion effect",
     },
     "dramatic": {
         "preset": "key_art",
         "name": DEFAULT_KEY_ART_LORA,
         "weight": DEFAULT_KEY_ART_LORA_WEIGHT,
-        "use_case": "dramatic promotional key art",
+        "use_case": "key visual or intentional image distortion effect",
+    },
+    "matte_skin": {
+        "preset": "matte_skin",
+        "name": DEFAULT_MATTE_PRODUCTION_LORA,
+        "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
+        "use_case": "matte clean skin/clothing for LD/SD standing image production",
+    },
+    "matte": {
+        "preset": "matte_skin",
+        "name": DEFAULT_MATTE_PRODUCTION_LORA,
+        "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
+        "use_case": "matte clean skin/clothing for LD/SD standing image production",
+    },
+    "standing_matte": {
+        "preset": "matte_skin",
+        "name": DEFAULT_MATTE_PRODUCTION_LORA,
+        "weight": DEFAULT_MATTE_PRODUCTION_LORA_WEIGHT,
+        "use_case": "matte clean skin/clothing for LD/SD standing image production",
     },
 }
 
