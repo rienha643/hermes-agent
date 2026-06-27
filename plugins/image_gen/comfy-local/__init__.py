@@ -622,6 +622,11 @@ def _candidate_normalized_paths(path: Path) -> List[Path]:
     return candidates
 
 
+def _loose_source_filename_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFC", str(value or "")).casefold()
+    return re.sub(r"[\s_-]+", "", normalized)
+
+
 def _find_unique_source_by_project_version(source_path: Path) -> Optional[Path]:
     image_root = _image_work_root_from_source(source_path)
     if image_root is None or not image_root.is_dir():
@@ -683,6 +688,19 @@ def _resolve_existing_source_image_path(source_image_path: str | Path) -> Tuple[
                     "requested_source_image_path": str(requested),
                     "resolved_source_image_path": str(resolved),
                     "source_path_resolution": "sibling_unicode_normalized",
+                    "source_path_resolution_attempts": attempts,
+                }
+            wanted_loose = _loose_source_filename_key(candidate.name)
+            loose_matches = [
+                item for item in parent.iterdir()
+                if item.is_file() and _loose_source_filename_key(item.name) == wanted_loose
+            ]
+            if len(loose_matches) == 1:
+                resolved = loose_matches[0]
+                return resolved, {
+                    "requested_source_image_path": str(requested),
+                    "resolved_source_image_path": str(resolved),
+                    "source_path_resolution": "sibling_loose_filename_match",
                     "source_path_resolution_attempts": attempts,
                 }
     project_version_match = _find_unique_source_by_project_version(requested)

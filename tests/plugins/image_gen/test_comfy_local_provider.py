@@ -65,6 +65,21 @@ class TestComfyLocalSourceImageResolution:
             "unique_date_version_match",
         }
 
+    def test_resolves_worker_inserted_underscore_filename_variant(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        actual_dir = tmp_path / "HermesWork" / "Image" / "260628_selected_candidate3_source"
+        actual_dir.mkdir(parents=True)
+        actual = actual_dir / "candidate3_source.png"
+        actual.write_bytes(PNG_1PX)
+
+        requested = actual_dir / "candidate_3_source.png"
+        resolved, evidence = COMFY_MOD._resolve_existing_source_image_path(requested)
+
+        assert resolved == actual
+        assert evidence["requested_source_image_path"] == str(requested)
+        assert evidence["resolved_source_image_path"] == str(actual)
+        assert evidence["source_path_resolution"] == "sibling_loose_filename_match"
+
 
 class TestComfyLocalSourceTaskPromptGuard:
     def test_rejects_source_image_task_text_as_plain_txt2img_prompt(self, monkeypatch, tmp_path):
