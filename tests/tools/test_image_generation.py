@@ -363,11 +363,25 @@ class TestAspectRatioNormalization:
 
 class TestRegistryIntegration:
 
-    def test_schema_exposes_only_prompt_and_aspect_ratio_to_agent(self, image_tool):
-        """The agent-facing schema must stay tight — model selection is a
-        user-level config choice, not an agent-level arg."""
+    def test_schema_exposes_current_image_control_surface_to_agent(self, image_tool):
+        """The agent-facing schema exposes the approved Hermes image controls."""
         props = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]
-        assert set(props.keys()) == {"prompt", "aspect_ratio", "project_name", "artifact_name"}
+        assert {
+            "prompt",
+            "aspect_ratio",
+            "project_name",
+            "artifact_name",
+            "operation",
+            "output_type",
+            "source_image_path",
+            "postprocess_preset",
+            "workflow_key",
+            "style_preset",
+            "lora_preset",
+            "model",
+            "vae",
+            "loras",
+        }.issubset(props.keys())
 
     def test_aspect_ratio_enum_is_three_values(self, image_tool):
         enum = image_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]["aspect_ratio"]["enum"]

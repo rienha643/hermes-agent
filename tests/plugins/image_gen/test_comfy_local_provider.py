@@ -2102,7 +2102,8 @@ class TestComfyLocalCharacterProductionPreset:
         assert "patterned ornamental backdrop" not in prompt_text
         assert "full-body character art" not in prompt_text
         assert "standing full body" not in prompt_text
-        assert captured["metadata"]["loras"] == []
+        assert captured["metadata"]["loras"][0]["preset"] == "stable"
+        assert captured["metadata"]["loras"][0]["weight"] == 0.15
         assert captured["metadata"]["vae"] is None
         assert "6" not in captured["workflow_json"]
         assert captured["workflow_json"]["7"]["inputs"]["vae"] == ["1", 2]

@@ -695,6 +695,7 @@ def image_generate_tool(
     seed: Optional[int] = None,
     project_name: Optional[str] = None,
     artifact_name: Optional[str] = None,
+    output_type: Optional[str] = None,
 ) -> str:
     """Generate an image from a text prompt using the configured FAL model.
 
@@ -720,6 +721,7 @@ def image_generate_tool(
             "seed": seed,
             "project_name": project_name,
             "artifact_name": artifact_name,
+            "output_type": output_type,
         },
         "error": None,
         "success": False,
@@ -1118,9 +1120,13 @@ IMAGE_GENERATE_SCHEMA = {
             },
             "operation": {
                 "type": "string",
-                "enum": ["generate", "postprocess", "source_preserving_postprocess", "upscale"],
+                "enum": ["generate", "txt2img", "postprocess", "source_preserving_postprocess", "upscale"],
                 "description": "Optional provider operation. Use `source_preserving_postprocess` only when the user explicitly asks to preserve an existing source image and apply localized postprocess/editing. Use `upscale` only for source-image upscaling.",
                 "default": "generate",
+            },
+            "output_type": {
+                "type": "string",
+                "description": "Optional image-router output type, for example `profile_icon`, `portrait`, `dialogue_bust`, `upper_body`, `fullbody`, `standing_sprite`, `ingame_cg`, or `key_visual`. For ComfyUI this is forwarded to provider routing and evidence metadata.",
             },
             "source_image_path": {
                 "type": "string",
@@ -1275,6 +1281,7 @@ def _dispatch_to_plugin_provider(
     live_generation_approved: bool | None = None,
     high_res_approved: bool | None = None,
     operation: str | None = None,
+    output_type: str | None = None,
     source_image_path: str | None = None,
     postprocess_preset: str | None = None,
     upscale_model: str | None = None,
@@ -1404,6 +1411,8 @@ def _dispatch_to_plugin_provider(
             kwargs["high_res_approved"] = high_res_approved
         if operation is not None:
             kwargs["operation"] = operation
+        if output_type is not None:
+            kwargs["output_type"] = output_type
         if source_image_path is not None:
             kwargs["source_image_path"] = source_image_path
         if postprocess_preset is not None:
@@ -1483,6 +1492,7 @@ def _handle_image_generate(args, **kw):
     live_generation_approved = args.get("live_generation_approved")
     high_res_approved = args.get("high_res_approved")
     operation = args.get("operation")
+    output_type = args.get("output_type")
     source_image_path = args.get("source_image_path")
     postprocess_preset = args.get("postprocess_preset")
     upscale_model = args.get("upscale_model")
@@ -1534,6 +1544,7 @@ def _handle_image_generate(args, **kw):
         live_generation_approved=live_generation_approved if isinstance(live_generation_approved, bool) else None,
         high_res_approved=high_res_approved if isinstance(high_res_approved, bool) else None,
         operation=str(operation).strip() if isinstance(operation, str) and operation.strip() else None,
+        output_type=str(output_type).strip() if isinstance(output_type, str) and output_type.strip() else None,
         source_image_path=str(source_image_path).strip() if isinstance(source_image_path, str) and source_image_path.strip() else None,
         postprocess_preset=str(postprocess_preset).strip() if isinstance(postprocess_preset, str) and postprocess_preset.strip() else None,
         upscale_model=str(upscale_model).strip() if isinstance(upscale_model, str) and upscale_model.strip() else None,

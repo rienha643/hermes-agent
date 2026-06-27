@@ -230,7 +230,13 @@ STYLE_PRESET_LORAS: Dict[str, Any] = {
 }
 
 CHARACTER_PRODUCTION_PRESET = "character_production"
+PROFILE_ICON_PRODUCTION_PRESET = "profile_icon_production"
 PORTRAIT_PRODUCTION_PRESET = "portrait_production"
+DIALOGUE_BUST_PRODUCTION_PRESET = "dialogue_bust_production"
+UPPER_BODY_PRODUCTION_PRESET = "upper_body_production"
+FULLBODY_PRODUCTION_PRESET = "fullbody_production"
+STANDING_SPRITE_PRODUCTION_PRESET = "standing_sprite_production"
+INGAME_CG_PRODUCTION_PRESET = "ingame_cg_production"
 V8_STYLE_WORKFLOW_PRESET = "v8_style_workflow"
 KEY_VISUAL_SUBCULTURE_PRESET = "key_visual_subculture_v1"
 SOURCE_PRESERVING_POSTPROCESS_OPERATION = "source_preserving_postprocess"
@@ -243,6 +249,7 @@ DEFAULT_UPSCALE_MODEL = "4x-UltraSharp.pth"
 DEFAULT_WORKFLOW_KEY = "txt2img_minimal_v1"
 CHARACTER_KEY_VISUAL_WORKFLOW_KEY = "character_key_visual_txt2img_v1"
 PORTRAIT_WORKFLOW_KEY = "portrait_round_v1_txt2img_v1"
+FULLBODY_V8_WORKFLOW_KEY = "fullbody_v8_scene_txt2img_v2"
 SOURCE_PRESERVING_FACE_HAND_WORKFLOW_KEY = "source_preserving_face8m_hand9c_v1"
 SOURCE_PRESERVING_DEPTH50_CANNY100_FACE_HAND_WORKFLOW_KEY = "source_preserving_depth50_canny100_face8m_hand9c_v1"
 SOURCE_MASKED_INPAINT_WORKFLOW_KEY = "source_masked_inpaint_v1"
@@ -282,6 +289,8 @@ KEY_VISUAL_SUBCULTURE_SAMPLER = "dpmpp_2m"
 KEY_VISUAL_SUBCULTURE_SCHEDULER = "karras"
 PORTRAIT_PRODUCTION_WIDTH = 1024
 PORTRAIT_PRODUCTION_HEIGHT = 1536
+PROFILE_ICON_PRODUCTION_WIDTH = 512
+PROFILE_ICON_PRODUCTION_HEIGHT = 512
 PORTRAIT_PRODUCTION_CFG = 6.0
 PORTRAIT_PRODUCTION_SAMPLER = "euler"
 PORTRAIT_PRODUCTION_SCHEDULER = "normal"
@@ -318,10 +327,46 @@ CHARACTER_PRODUCTION_POSITIVE_SKELETON = (
     "detailed costume design, elegant silhouette, clean silhouette, full-body character art, vertical portrait, "
     "simple background, background secondary, safe, masterpiece, high score, great score, absurdres"
 )
+PROFILE_ICON_PRODUCTION_POSITIVE_SKELETON = (
+    "subculture anime game profile icon, square avatar composition, single character, centered face, "
+    "head and shoulders, clear readable face, polished eyes, clean hair silhouette, simple clean background, "
+    "icon-ready crop, commercial quality, clean lineart"
+)
 PORTRAIT_PRODUCTION_POSITIVE_SKELETON = (
     "adult woman, long hair, golden eyes, beautiful face, detailed eyes, ornate costume, "
     "anime illustration, upper body portrait, commercial quality, clean lineart, "
     "subculture illustration, light novel cover art, anime key visual"
+)
+DIALOGUE_BUST_PRODUCTION_POSITIVE_SKELETON = (
+    "subculture anime game dialogue bust, waist-up character art, upper body visible, expressive face, "
+    "readable emotion, clean outfit upper details, visual novel dialogue portrait source, "
+    "simple clean background, polished cel shading, clean lineart, commercial quality"
+)
+UPPER_BODY_PRODUCTION_POSITIVE_SKELETON = (
+    "subculture anime game illustration, upper body to knee-up composition, single character focus, "
+    "visible face, visible hands, hand and prop readable, detailed fingers, detailed outfit, "
+    "readable silhouette, polished cel shading, clean lineart, commercial quality"
+)
+FULLBODY_PRODUCTION_POSITIVE_SKELETON = (
+    "1girl, solo, only one person, anime girl, subculture mobile RPG heroine, "
+    "finished colored anime illustration, premium game character illustration, polished cel shading, "
+    "clean confident lineart, crisp linework, clean skin lighting, polished eyes, detailed hair, "
+    "detailed costume rendering, finished rendering, high detail background, atmospheric scene background, "
+    "dimensional lighting, rich but controlled lighting, commercial quality, "
+    "full body character art, head-to-toe visible, full feet visible, centered character, "
+    "shoes fully visible, bottom margin around shoes, readable full silhouette, balanced body proportions, "
+    "visible face, visible hands"
+)
+STANDING_SPRITE_PRODUCTION_POSITIVE_SKELETON = (
+    "subculture anime game illustration, game standing sprite, full body standing character art, "
+    "single character focus, centered character, neutral standing pose, readable full silhouette, "
+    "visible face, visible hands, clean outfit shapes, production-ready sprite source, "
+    "simple clean background, polished cel shading, clean lineart, commercial quality"
+)
+INGAME_CG_PRODUCTION_POSITIVE_SKELETON = (
+    "subculture anime game event CG, cinematic story scene, character and background relationship readable, "
+    "expressive face, clear focal character, rich but controlled background, dramatic lighting, "
+    "visual novel CG quality, polished cel shading, clean lineart, commercial quality"
 )
 CHARACTER_PRODUCTION_NEGATIVE_BASELINE = (
     "low quality, worst quality, bad quality, normal quality, lowres, blurry, watermark, text, signature, "
@@ -335,6 +380,40 @@ CHARACTER_PRODUCTION_NEGATIVE_BASELINE = (
 PORTRAIT_PRODUCTION_NEGATIVE_BASELINE = (
     "low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, missing fingers, "
     "distorted face, text, watermark"
+)
+PROFILE_ICON_PRODUCTION_NEGATIVE_BASELINE = (
+    "low quality, worst quality, blurry, bad anatomy, distorted face, asymmetrical eyes, unreadable face, "
+    "full body, tiny face, multiple characters, text, logo, watermark, UI, border, card frame, cropped head"
+)
+DIALOGUE_BUST_PRODUCTION_NEGATIVE_BASELINE = (
+    "low quality, worst quality, bad quality, lowres, blurry, watermark, text, logo, UI, textbox, "
+    "full body, tiny face, face out of frame, cropped head, bad anatomy, bad hands, extra fingers, "
+    "missing fingers, photorealistic, 3d render"
+)
+UPPER_BODY_PRODUCTION_NEGATIVE_BASELINE = (
+    "low quality, worst quality, bad quality, normal quality, lowres, blurry, watermark, text, "
+    "logo, signature, UI, title, textbox, stats panel, trading card, card frame, character sheet, "
+    "turnaround sheet, photorealistic, 3d render, bad anatomy, bad hands, malformed hands, "
+    "extra fingers, missing fingers, fused fingers, extra arms, cropped face, face out of frame, "
+    "unreadable face, black face, asymmetrical eyes"
+)
+FULLBODY_PRODUCTION_NEGATIVE_BASELINE = (
+    "low quality, worst quality, bad quality, lowres, blurry, watermark, text, letters, typography, "
+    "caption, title, logo, UI, card frame, "
+    "character sheet, turnaround sheet, cropped feet, cropped legs, cropped body, head out of frame, "
+    "tiny face, unreadable face, black face, bad anatomy, bad hands, malformed hands, extra fingers, "
+    "missing fingers, extra arms, extra legs, bad feet, multiple characters, 2girls, two girls, duo, "
+    "twins, companion, partner, group, another person, holding hands, overlapping bodies, "
+    "photorealistic, 3d render, sketch, rough sketch, unfinished, draft, doodle, monochrome, grayscale, "
+    "flat colors, uncolored, rough lineart, messy lineart, pencil sketch, storyboard, lineart only, "
+    "rough coloring, under-rendered, flat patterned background, wallpaper background, blank background, "
+    "simple background, close-up, portrait crop, cowboy shot, knee crop, missing feet, hidden hands, fused fingers"
+)
+INGAME_CG_PRODUCTION_NEGATIVE_BASELINE = (
+    "low quality, worst quality, bad quality, lowres, blurry, watermark, text, logo, UI, textbox, "
+    "card frame, character sheet, turnaround sheet, multiple views, poster collage, tiny face, "
+    "unreadable face, black face, bad anatomy, bad hands, malformed hands, extra fingers, missing fingers, "
+    "photorealistic, 3d render"
 )
 KEY_VISUAL_SUBCULTURE_NEGATIVE_BASELINE = (
     "low quality, worst quality, bad quality, normal quality, lowres, blurry, watermark, text, logo, "
@@ -1338,7 +1417,19 @@ def _is_character_production_request(prompt_text: str) -> bool:
     return any(keyword.casefold() in lowered for keyword in CHARACTER_PRODUCTION_KEYWORDS)
 
 
-def _is_portrait_production_request(prompt_text: str) -> bool:
+def _normalize_output_type_token(output_type: Any) -> str:
+    return str(output_type or "").strip().casefold().replace("-", "_").replace(" ", "_")
+
+
+def _is_profile_icon_production_request(*, output_type: Any = None) -> bool:
+    requested_output_type = _normalize_output_type_token(output_type)
+    return requested_output_type in {"profile_icon", "profileicon", "avatar", "icon"}
+
+
+def _is_portrait_production_request(prompt_text: str, *, output_type: Any = None) -> bool:
+    requested_output_type = _normalize_output_type_token(output_type)
+    if requested_output_type in {"portrait", "face_portrait", "bust_portrait"}:
+        return True
     lowered = str(prompt_text or "").casefold()
     return any(keyword.casefold() in lowered for keyword in PORTRAIT_PRODUCTION_KEYWORDS)
 
@@ -1350,7 +1441,7 @@ def _is_v8_style_workflow_request(prompt_text: str) -> bool:
 
 def _is_key_visual_subculture_request(prompt_text: str, *, workflow_key: Any = None, output_type: Any = None) -> bool:
     requested_workflow = str(workflow_key or "").strip()
-    requested_output_type = str(output_type or "").strip().casefold().replace("-", "_").replace(" ", "_")
+    requested_output_type = _normalize_output_type_token(output_type)
     if requested_workflow == CHARACTER_KEY_VISUAL_WORKFLOW_KEY:
         return True
     if requested_output_type in {"key_visual", "keyvisual", "promotional_key_visual"}:
@@ -1372,9 +1463,69 @@ def _is_key_visual_subculture_request(prompt_text: str, *, workflow_key: Any = N
     )
 
 
+def _is_upper_body_production_request(*, output_type: Any = None) -> bool:
+    requested_output_type = _normalize_output_type_token(output_type)
+    return requested_output_type in {"upper_body", "upperbody", "half_body", "knee_up", "knees_up"}
+
+
+def _is_dialogue_bust_production_request(*, output_type: Any = None) -> bool:
+    requested_output_type = _normalize_output_type_token(output_type)
+    return requested_output_type in {"dialogue_bust", "dialoguebust", "bust", "visual_novel_bust", "talking_bust"}
+
+
+def _is_fullbody_production_request(*, output_type: Any = None) -> bool:
+    requested_output_type = _normalize_output_type_token(output_type)
+    return requested_output_type in {"fullbody", "full_body", "full_body_shot", "fullbody_shot", "whole_body"}
+
+
+def _is_standing_sprite_production_request(*, output_type: Any = None) -> bool:
+    requested_output_type = _normalize_output_type_token(output_type)
+    return requested_output_type in {
+        "standing_sprite",
+        "standingsprite",
+        "standing",
+        "standing_character",
+        "game_sprite",
+        "sprite",
+    }
+
+
+def _is_ingame_cg_production_request(*, output_type: Any = None) -> bool:
+    requested_output_type = _normalize_output_type_token(output_type)
+    return requested_output_type in {"ingame_cg", "in_game_cg", "event_cg", "story_cg", "cg"}
+
+
+POSITIVE_PROMPT_NEGATION_PATTERNS: Tuple[str, ...] = (
+    r"\bno\s+text\b",
+    r"\bno\s+logo\b",
+    r"\bno\s+watermark\b",
+    r"\bno\s+signature\b",
+    r"\bno\s+letters?\b",
+    r"\bno\s+typography\b",
+    r"\bno\s+caption\b",
+    r"\bno\s+title\b",
+    r"\bno\s+ui\b",
+    r"\bno\s+speech\s+bubble\b",
+    r"\bno\s+text\s*box\b",
+    r"\bwithout\s+text\b",
+    r"\bwithout\s+logo\b",
+    r"\bwithout\s+watermark\b",
+)
+
+
+def _strip_positive_prompt_negation_terms(prompt_text: str) -> str:
+    sanitized = str(prompt_text or "")
+    for pattern in POSITIVE_PROMPT_NEGATION_PATTERNS:
+        sanitized = re.sub(pattern, "", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"\s*,\s*,+", ", ", sanitized)
+    sanitized = re.sub(r"^\s*,\s*|\s*,\s*$", "", sanitized)
+    return re.sub(r"\s+", " ", sanitized).strip()
+
+
 def _sanitize_sfw_prompt_terms(prompt_text: str) -> str:
     sanitized = NSFW_WEIGHTED_TAG_RE.sub("", str(prompt_text or ""))
     sanitized = NSFW_TEXT_TAG_RE.sub("", sanitized)
+    sanitized = _strip_positive_prompt_negation_terms(sanitized)
     sanitized = re.sub(r"\s*,\s*,+", ", ", sanitized)
     sanitized = re.sub(r"^\s*,\s*|\s*,\s*$", "", sanitized)
     return re.sub(r"\s+", " ", sanitized).strip()
@@ -1424,6 +1575,48 @@ def _translate_portrait_production_prompt(prompt_text: str) -> str:
     translated = re.sub(r"\bfull body\b", "upper body portrait", translated, flags=re.IGNORECASE)
     translated = re.sub(r"\s+", " ", translated).strip()
     return _merge_comma_terms(PORTRAIT_PRODUCTION_POSITIVE_SKELETON, translated)
+
+
+def _translate_profile_icon_production_prompt(prompt_text: str) -> str:
+    translated = _sanitize_portrait_prompt_terms(prompt_text)
+    if not translated:
+        return translated
+    return _merge_comma_terms(PROFILE_ICON_PRODUCTION_POSITIVE_SKELETON, translated)
+
+
+def _translate_dialogue_bust_production_prompt(prompt_text: str) -> str:
+    translated = _sanitize_portrait_prompt_terms(prompt_text)
+    if not translated:
+        return translated
+    return _merge_comma_terms(DIALOGUE_BUST_PRODUCTION_POSITIVE_SKELETON, translated)
+
+
+def _translate_upper_body_production_prompt(prompt_text: str) -> str:
+    translated = _sanitize_sfw_prompt_terms(prompt_text)
+    if not translated:
+        return translated
+    return _merge_comma_terms(UPPER_BODY_PRODUCTION_POSITIVE_SKELETON, translated)
+
+
+def _translate_fullbody_production_prompt(prompt_text: str) -> str:
+    translated = _sanitize_sfw_prompt_terms(prompt_text)
+    if not translated:
+        return translated
+    return _merge_comma_terms(FULLBODY_PRODUCTION_POSITIVE_SKELETON, translated)
+
+
+def _translate_standing_sprite_production_prompt(prompt_text: str) -> str:
+    translated = _sanitize_sfw_prompt_terms(prompt_text)
+    if not translated:
+        return translated
+    return _merge_comma_terms(STANDING_SPRITE_PRODUCTION_POSITIVE_SKELETON, translated)
+
+
+def _translate_ingame_cg_production_prompt(prompt_text: str) -> str:
+    translated = _sanitize_sfw_prompt_terms(prompt_text)
+    if not translated:
+        return translated
+    return _merge_comma_terms(INGAME_CG_PRODUCTION_POSITIVE_SKELETON, translated)
 
 
 def _merge_comma_terms(*segments: str) -> str:
@@ -1536,7 +1729,156 @@ def _build_character_production_runtime(
             "scheduler": KEY_VISUAL_SUBCULTURE_SCHEDULER,
             "prompt_translation_policy": "key-visual-subculture-v1 + sfw-sanitize + v8-style-anchors-only + no subject/composition rewrite",
         }
-    if _is_portrait_production_request(prompt):
+    if _is_profile_icon_production_request(output_type=output_type):
+        negative_prompt_text = str(negative_prompt or "").strip()
+        source_prompt = _sanitize_portrait_prompt_terms(prompt)
+        translated_prompt = _translate_profile_icon_production_prompt(source_prompt)
+        final_negative_prompt = PROFILE_ICON_PRODUCTION_NEGATIVE_BASELINE
+        if negative_prompt_text:
+            final_negative_prompt = _merge_comma_terms(PROFILE_ICON_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
+        return {
+            "preset": PROFILE_ICON_PRODUCTION_PRESET,
+            "workflow_key": DEFAULT_WORKFLOW_KEY,
+            "source_prompt": source_prompt,
+            "translated_prompt": translated_prompt,
+            "prompt": translated_prompt,
+            "negative_prompt": final_negative_prompt,
+            "negative_baseline": PROFILE_ICON_PRODUCTION_NEGATIVE_BASELINE,
+            "subject_dominance": None,
+            "subject_dominance_ratio": None,
+            "subject_dominance_rule": None,
+            "width": PROFILE_ICON_PRODUCTION_WIDTH,
+            "height": PROFILE_ICON_PRODUCTION_HEIGHT,
+            "steps": CHARACTER_PRODUCTION_STEPS,
+            "cfg": PORTRAIT_PRODUCTION_CFG,
+            "sampler_name": PORTRAIT_PRODUCTION_SAMPLER,
+            "scheduler": PORTRAIT_PRODUCTION_SCHEDULER,
+            "prompt_translation_policy": "profile-icon-v1 + sfw-sanitize + square-avatar skeleton",
+        }
+    if _is_dialogue_bust_production_request(output_type=output_type):
+        negative_prompt_text = str(negative_prompt or "").strip()
+        source_prompt = _sanitize_portrait_prompt_terms(prompt)
+        translated_prompt = _translate_dialogue_bust_production_prompt(source_prompt)
+        final_negative_prompt = DIALOGUE_BUST_PRODUCTION_NEGATIVE_BASELINE
+        if negative_prompt_text:
+            final_negative_prompt = _merge_comma_terms(DIALOGUE_BUST_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
+        return {
+            "preset": DIALOGUE_BUST_PRODUCTION_PRESET,
+            "workflow_key": DEFAULT_WORKFLOW_KEY,
+            "source_prompt": source_prompt,
+            "translated_prompt": translated_prompt,
+            "prompt": translated_prompt,
+            "negative_prompt": final_negative_prompt,
+            "negative_baseline": DIALOGUE_BUST_PRODUCTION_NEGATIVE_BASELINE,
+            "subject_dominance": None,
+            "subject_dominance_ratio": None,
+            "subject_dominance_rule": None,
+            "steps": CHARACTER_PRODUCTION_STEPS,
+            "cfg": PORTRAIT_PRODUCTION_CFG,
+            "sampler_name": PORTRAIT_PRODUCTION_SAMPLER,
+            "scheduler": PORTRAIT_PRODUCTION_SCHEDULER,
+            "prompt_translation_policy": "dialogue-bust-v1 + sfw-sanitize + visual-novel bust skeleton",
+        }
+    if _is_upper_body_production_request(output_type=output_type):
+        negative_prompt_text = str(negative_prompt or "").strip()
+        source_prompt = _sanitize_sfw_prompt_terms(prompt)
+        translated_prompt = _translate_upper_body_production_prompt(source_prompt)
+        final_negative_prompt = UPPER_BODY_PRODUCTION_NEGATIVE_BASELINE
+        if negative_prompt_text:
+            final_negative_prompt = _merge_comma_terms(UPPER_BODY_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
+        return {
+            "preset": UPPER_BODY_PRODUCTION_PRESET,
+            "workflow_key": DEFAULT_WORKFLOW_KEY,
+            "source_prompt": source_prompt,
+            "translated_prompt": translated_prompt,
+            "prompt": translated_prompt,
+            "negative_prompt": final_negative_prompt,
+            "negative_baseline": UPPER_BODY_PRODUCTION_NEGATIVE_BASELINE,
+            "subject_dominance": None,
+            "subject_dominance_ratio": None,
+            "subject_dominance_rule": None,
+            "steps": KEY_VISUAL_SUBCULTURE_STEPS,
+            "cfg": KEY_VISUAL_SUBCULTURE_CFG,
+            "sampler_name": KEY_VISUAL_SUBCULTURE_SAMPLER,
+            "scheduler": KEY_VISUAL_SUBCULTURE_SCHEDULER,
+            "prompt_translation_policy": "upper-body-v1 + sfw-sanitize + no portrait skeleton rewrite",
+        }
+    if _is_fullbody_production_request(output_type=output_type):
+        negative_prompt_text = str(negative_prompt or "").strip()
+        source_prompt = _sanitize_sfw_prompt_terms(prompt)
+        translated_prompt = _translate_fullbody_production_prompt(source_prompt)
+        final_negative_prompt = FULLBODY_PRODUCTION_NEGATIVE_BASELINE
+        if negative_prompt_text:
+            final_negative_prompt = _merge_comma_terms(FULLBODY_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
+        return {
+            "preset": FULLBODY_PRODUCTION_PRESET,
+            "workflow_key": FULLBODY_V8_WORKFLOW_KEY,
+            "source_prompt": source_prompt,
+            "translated_prompt": translated_prompt,
+            "prompt": translated_prompt,
+            "negative_prompt": final_negative_prompt,
+            "negative_baseline": FULLBODY_PRODUCTION_NEGATIVE_BASELINE,
+            "subject_dominance": None,
+            "subject_dominance_ratio": None,
+            "subject_dominance_rule": None,
+            "steps": CHARACTER_PRODUCTION_STEPS,
+            "cfg": PORTRAIT_PRODUCTION_CFG,
+            "sampler_name": PORTRAIT_PRODUCTION_SAMPLER,
+            "scheduler": PORTRAIT_PRODUCTION_SCHEDULER,
+            "prompt_translation_policy": (
+                "fullbody-v8-scene-v2 + sfw-sanitize + solo/head-to-toe guard + "
+                "finished-color anti-sketch guard + scene/full-feet anti-wallpaper guard"
+            ),
+        }
+    if _is_standing_sprite_production_request(output_type=output_type):
+        negative_prompt_text = str(negative_prompt or "").strip()
+        source_prompt = _sanitize_sfw_prompt_terms(prompt)
+        translated_prompt = _translate_standing_sprite_production_prompt(source_prompt)
+        final_negative_prompt = CHARACTER_PRODUCTION_NEGATIVE_BASELINE
+        if negative_prompt_text:
+            final_negative_prompt = _merge_comma_terms(CHARACTER_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
+        return {
+            "preset": STANDING_SPRITE_PRODUCTION_PRESET,
+            "workflow_key": DEFAULT_WORKFLOW_KEY,
+            "source_prompt": source_prompt,
+            "translated_prompt": translated_prompt,
+            "prompt": translated_prompt,
+            "negative_prompt": final_negative_prompt,
+            "negative_baseline": CHARACTER_PRODUCTION_NEGATIVE_BASELINE,
+            "subject_dominance": None,
+            "subject_dominance_ratio": None,
+            "subject_dominance_rule": None,
+            "steps": CHARACTER_PRODUCTION_STEPS,
+            "cfg": CHARACTER_PRODUCTION_CFG,
+            "sampler_name": CHARACTER_PRODUCTION_SAMPLER,
+            "scheduler": CHARACTER_PRODUCTION_SCHEDULER,
+            "prompt_translation_policy": "standing-sprite-v1 + sfw-sanitize + production sprite skeleton + no portrait rewrite",
+        }
+    if _is_ingame_cg_production_request(output_type=output_type):
+        negative_prompt_text = str(negative_prompt or "").strip()
+        source_prompt = _sanitize_sfw_prompt_terms(prompt)
+        translated_prompt = _translate_ingame_cg_production_prompt(source_prompt)
+        final_negative_prompt = INGAME_CG_PRODUCTION_NEGATIVE_BASELINE
+        if negative_prompt_text:
+            final_negative_prompt = _merge_comma_terms(INGAME_CG_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
+        return {
+            "preset": INGAME_CG_PRODUCTION_PRESET,
+            "workflow_key": DEFAULT_WORKFLOW_KEY,
+            "source_prompt": source_prompt,
+            "translated_prompt": translated_prompt,
+            "prompt": translated_prompt,
+            "negative_prompt": final_negative_prompt,
+            "negative_baseline": INGAME_CG_PRODUCTION_NEGATIVE_BASELINE,
+            "subject_dominance": None,
+            "subject_dominance_ratio": None,
+            "subject_dominance_rule": None,
+            "steps": KEY_VISUAL_SUBCULTURE_STEPS,
+            "cfg": KEY_VISUAL_SUBCULTURE_CFG,
+            "sampler_name": KEY_VISUAL_SUBCULTURE_SAMPLER,
+            "scheduler": KEY_VISUAL_SUBCULTURE_SCHEDULER,
+            "prompt_translation_policy": "ingame-cg-v1 + sfw-sanitize + story-scene skeleton",
+        }
+    if _is_portrait_production_request(prompt, output_type=output_type):
         negative_prompt_text = str(negative_prompt or "").strip()
         source_prompt = _sanitize_portrait_prompt_terms(prompt)
         translated_prompt = _translate_portrait_production_prompt(source_prompt)
@@ -1644,7 +1986,16 @@ def _resolve_lora_stack(kwargs: Dict[str, Any], *, runtime_preset: Optional[Dict
 
     preset_key = str(kwargs.get("lora_preset") or kwargs.get("style_preset") or "").strip().casefold().replace("-", "_").replace(" ", "_")
     runtime_preset_name = str((runtime_preset or {}).get("preset") or "")
-    if not preset_key and runtime_preset_name == CHARACTER_PRODUCTION_PRESET:
+    if not preset_key and runtime_preset_name in {
+        CHARACTER_PRODUCTION_PRESET,
+        PROFILE_ICON_PRODUCTION_PRESET,
+        PORTRAIT_PRODUCTION_PRESET,
+        DIALOGUE_BUST_PRODUCTION_PRESET,
+        UPPER_BODY_PRODUCTION_PRESET,
+        FULLBODY_PRODUCTION_PRESET,
+        STANDING_SPRITE_PRODUCTION_PRESET,
+        INGAME_CG_PRODUCTION_PRESET,
+    }:
         preset_key = "stable"
     if preset_key in STYLE_PRESET_LORAS:
         preset_config = STYLE_PRESET_LORAS[preset_key]
@@ -2034,6 +2385,12 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         subject_dominance = kwargs.get("subject_dominance")
         requested_workflow_key = str(kwargs.get("workflow_key") or "").strip()
         output_type = kwargs.get("output_type")
+        requested_output_type = str(output_type or "").strip() or None
+        normalized_output_type = (
+            requested_output_type.casefold().replace("-", "_").replace(" ", "_")
+            if requested_output_type
+            else None
+        )
         operation = str(kwargs.get("operation") or "").strip()
         source_image_path = str(kwargs.get("source_image_path") or kwargs.get("source_image") or "").strip()
         if _looks_like_source_image_task_prompt_without_args(
@@ -2115,7 +2472,13 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             subject_dominance_value = runtime_preset.get("subject_dominance")
             subject_dominance_rule = runtime_preset.get("subject_dominance_rule")
             workflow_key = str(runtime_preset.get("workflow_key") or workflow_key)
-            if preset_name in {PORTRAIT_PRODUCTION_PRESET, V8_STYLE_WORKFLOW_PRESET} and not explicit_dimensions:
+            if (
+                not explicit_dimensions
+                and isinstance(runtime_preset.get("width"), int)
+                and isinstance(runtime_preset.get("height"), int)
+            ):
+                width, height = int(runtime_preset["width"]), int(runtime_preset["height"])
+            elif preset_name in {PORTRAIT_PRODUCTION_PRESET, V8_STYLE_WORKFLOW_PRESET} and not explicit_dimensions:
                 width, height = PORTRAIT_PRODUCTION_WIDTH, PORTRAIT_PRODUCTION_HEIGHT
             if not explicit_seed and isinstance(runtime_preset.get("seed"), int):
                 seed = int(runtime_preset["seed"])
@@ -3499,6 +3862,38 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             workflow["3"]["inputs"]["clip"] = clip_source
             workflow["4"]["inputs"]["clip"] = clip_source
             workflow["5"]["inputs"]["model"] = model_source
+        workflow_node_audit = {
+            "audit_version": "comfy_txt2img_model_stack_v1",
+            "checkpoint_node": "1",
+            "checkpoint": workflow.get("1", {}).get("inputs", {}).get("ckpt_name"),
+            "vae_node": "6" if vae is not None else "1",
+            "vae": workflow.get("6", {}).get("inputs", {}).get("vae_name") if vae is not None else "checkpoint_builtin_vae",
+            "lora_nodes": [
+                {
+                    "node": node_id,
+                    "name": node.get("inputs", {}).get("lora_name"),
+                    "weight": node.get("inputs", {}).get("strength_model"),
+                    "clip_weight": node.get("inputs", {}).get("strength_clip"),
+                }
+                for node_id, node in sorted(workflow.items(), key=lambda item: item[0])
+                if isinstance(node, dict) and node.get("class_type") == "LoraLoader"
+            ],
+            "ksampler_node": "5",
+            "steps": workflow.get("5", {}).get("inputs", {}).get("steps"),
+            "cfg": workflow.get("5", {}).get("inputs", {}).get("cfg"),
+            "sampler_name": workflow.get("5", {}).get("inputs", {}).get("sampler_name"),
+            "scheduler": workflow.get("5", {}).get("inputs", {}).get("scheduler"),
+            "width": workflow.get("2", {}).get("inputs", {}).get("width"),
+            "height": workflow.get("2", {}).get("inputs", {}).get("height"),
+        }
+        model_stack_verified = (
+            workflow_node_audit["checkpoint"] == checkpoint
+            and workflow_node_audit["vae"] == (vae if vae is not None else "checkpoint_builtin_vae")
+            and [
+                item["name"]
+                for item in workflow_node_audit["lora_nodes"]
+            ] == [item["name"] for item in lora_stack]
+        )
         payload = {"prompt": workflow}
 
         try:
@@ -3651,7 +4046,11 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "runtime_preset": preset_name,
             "prompt_translation_policy": prompt_translation_policy,
             "loras": lora_stack,
+            "workflow_node_audit": workflow_node_audit,
+            "model_stack_verified": model_stack_verified,
             "workflow_key": workflow_key,
+            "requested_output_type": requested_output_type,
+            "output_type": normalized_output_type,
         }
         prompt_payload = {
             "prompt": prompt_for_generation,
@@ -3683,13 +4082,20 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "candidate_count": checkpoint_resolution.get("candidate_count"),
             "candidates": checkpoint_resolution.get("candidates"),
             "loras": lora_stack,
+            "workflow_node_audit": workflow_node_audit,
+            "model_stack_verified": model_stack_verified,
             "workflow_key": workflow_key,
+            "requested_output_type": requested_output_type,
+            "output_type": normalized_output_type,
         }
         metadata = {
             "provider": self.name,
             "prompt_id": prompt_id,
             "api_base_url": base_url,
             "workflow_key": workflow_key,
+            "requested_workflow_key": requested_workflow_key or None,
+            "requested_output_type": requested_output_type,
+            "output_type": normalized_output_type,
             "checkpoint": checkpoint,
             "requested_checkpoint": checkpoint_resolution.get("requested_checkpoint", requested_checkpoint),
             "resolved_checkpoint": checkpoint,
@@ -3709,6 +4115,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "negative_prompt": negative_prompt,
             "vae": vae,
             "loras": lora_stack,
+            "workflow_node_audit": workflow_node_audit,
+            "model_stack_verified": model_stack_verified,
             "controlnet_used": False,
             "seed": seed,
             "sampler": sampler_name,
@@ -3798,17 +4206,68 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "vae": vae,
             "vae_report_value": vae if vae is not None else "checkpoint_builtin_vae",
             "loras": lora_stack,
+            "workflow_node_audit": workflow_node_audit,
+            "model_stack_verified": model_stack_verified,
+            "preset": preset_name,
+            "requested_output_type": requested_output_type,
+            "output_type": normalized_output_type,
             "output_image": output_image,
             "artifact_path": str(bundle["primary_image_path"]),
             "output_source_origin": source_origin,
             "actual_width": actual_width,
             "actual_height": actual_height,
             "output_resolution": output_resolution,
+            "technical_execution_status": "COMPLETE",
+            "visual_quality_status": "USER_REVIEW_REQUIRED",
+            "visual_quality_note": "Tool evidence verifies model stack and file output only; visual style/composition must be reviewed separately.",
             "reporting_note": (
                 "Use evidence.workflow_key for the workflow key. "
                 "Do not substitute workflow_path when reporting workflow_key."
             ),
         }
+        report_evidence = {
+            "operation": "txt2img",
+            "workflow_key": workflow_key,
+            "workflow_path": str(bundle["workflow_path"]),
+            "prompt_id": prompt_id,
+            "preset": preset_name,
+            "requested_output_type": requested_output_type,
+            "output_type": normalized_output_type,
+            "checkpoint": checkpoint,
+            "vae": vae,
+            "loras": lora_stack,
+            "workflow_node_audit": workflow_node_audit,
+            "model_stack_verified": model_stack_verified,
+            "technical_execution_status": "COMPLETE",
+            "visual_quality_status": "USER_REVIEW_REQUIRED",
+            "visual_quality_note": "Automatic report confirms execution evidence only. Do not claim visual PASS without user/Codex review.",
+            "reporting_contract": {
+                "version": "image_generate_report_evidence_v2",
+                "required_fields": [
+                    "operation",
+                    "preset",
+                    "output_type",
+                    "workflow_key",
+                    "checkpoint",
+                    "vae",
+                    "loras",
+                    "workflow_node_audit",
+                    "model_stack_verified",
+                    "technical_execution_status",
+                    "visual_quality_status",
+                    "output_resolution",
+                    "seed",
+                    "artifact_path",
+                ],
+                "instruction": "Final Slack report must copy report_evidence fields; do not infer or omit model stack fields.",
+            },
+            "seed": seed,
+            "artifact_path": str(bundle["primary_image_path"]),
+            "output_resolution": output_resolution,
+            "actual_width": actual_width,
+            "actual_height": actual_height,
+        }
+        _update_metadata_report_evidence(bundle["metadata_path"], report_evidence)
         return success_response(
             image=str(bundle["primary_image_path"]),
             model=checkpoint,
@@ -3834,11 +4293,16 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "negative_baseline": runtime_preset.get("negative_baseline") if runtime_preset is not None else None,
                 "negative_prompt": negative_prompt,
                 "evidence": evidence,
+                "report_evidence": report_evidence,
                 "workflow_key": workflow_key,
+                "requested_output_type": requested_output_type,
+                "output_type": normalized_output_type,
                 "seed": seed,
                 "vae": vae,
                 "vae_report_value": evidence["vae_report_value"],
                 "loras": lora_stack,
+                "workflow_node_audit": workflow_node_audit,
+                "model_stack_verified": model_stack_verified,
                 "width": width,
                 "height": height,
                 "actual_width": actual_width,

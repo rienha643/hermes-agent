@@ -184,6 +184,146 @@ def _promote_gemma_text_tool_calls(agent: Any, assistant_message: Any) -> bool:
     return True
 
 
+def _coerce_jsonish_tool_content(value: Any) -> Any:
+    """Best-effort parse of tool message content without changing history."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("{", "[")):
+            try:
+                return json.loads(stripped)
+            except Exception:
+                return value
+        return value
+    if isinstance(value, list):
+        text_parts: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    text_parts.append(text)
+        if text_parts:
+            return _coerce_jsonish_tool_content("\n".join(text_parts))
+    return value
+
+
+def _tool_message_name(message: dict[str, Any]) -> str:
+    function_payload = message.get("function")
+    function_name = function_payload.get("name") if isinstance(function_payload, dict) else ""
+    return str(
+        message.get("tool_name")
+        or message.get("name")
+        or function_name
+        or ""
+    ).strip()
+
+
+def _last_successful_image_generate_payload(messages: list[dict[str, Any]], tool_count: int) -> dict[str, Any] | None:
+    if not isinstance(messages, list) or tool_count <= 0:
+        return None
+    for message in reversed(messages[-tool_count:]):
+        if not isinstance(message, dict) or str(message.get("role") or "").lower() != "tool":
+            continue
+        if _tool_message_name(message) != "image_generate":
+            continue
+        payload = _coerce_jsonish_tool_content(message.get("content"))
+        if isinstance(payload, dict) and payload.get("success") is True:
+            return payload
+    return None
+
+
+def _format_lora_report_value(loras: Any) -> str:
+    if not isinstance(loras, list) or not loras:
+        return "없음"
+    parts: list[str] = []
+    for item in loras[:6]:
+        if isinstance(item, dict):
+            name = item.get("name") or item.get("lora") or item.get("model") or "UNKNOWN"
+            weight = item.get("weight")
+            clip_weight = item.get("clip_weight")
+            if weight is not None and clip_weight is not None:
+                parts.append(f"{name} (model={weight}, clip={clip_weight})")
+            elif weight is not None:
+                parts.append(f"{name} (w={weight})")
+            else:
+                parts.append(str(name))
+        else:
+            parts.append(str(item))
+    if len(loras) > len(parts):
+        parts.append(f"... 외 {len(loras) - len(parts)}개")
+    return ", ".join(parts)
+
+
+def _format_workflow_audit_report(audit: Any) -> list[str]:
+    if not isinstance(audit, dict):
+        return []
+    loras = audit.get("lora_nodes")
+    return [
+        f"- 워크플로우 노드 감사: ckpt_node={audit.get('checkpoint_node', 'UNKNOWN')} / `{audit.get('checkpoint', 'UNKNOWN')}`",
+        f"- VAE 노드: {audit.get('vae_node', 'UNKNOWN')} / `{audit.get('vae', 'UNKNOWN')}`",
+        f"- LoRA 노드: {_format_lora_report_value(loras)}",
+        (
+            "- KSampler 설정: "
+            f"steps={audit.get('steps', 'UNKNOWN')}, cfg={audit.get('cfg', 'UNKNOWN')}, "
+            f"sampler={audit.get('sampler_name', 'UNKNOWN')}, scheduler={audit.get('scheduler', 'UNKNOWN')}"
+        ),
+        f"- 캔버스: {audit.get('width', 'UNKNOWN')}x{audit.get('height', 'UNKNOWN')}",
+    ]
+
+
+def _build_image_generate_auto_completion_report(
+    payload: dict[str, Any],
+    *,
+    user_message: str,
+) -> str | None:
+    """Build a deterministic final report from image_generate evidence.
+
+    This is intentionally narrow: it only runs for Commander-dispatched image
+    tasks after the image tool succeeded and the artifact path exists. It avoids
+    asking weaker local models to restate a large tool result, which has caused
+    missing or inaccurate Slack reports.
+    """
+    if "[COMMANDER_DISPATCH]" not in str(user_message or ""):
+        return None
+    evidence = payload.get("report_evidence")
+    if not isinstance(evidence, dict):
+        evidence = payload
+    artifact_path = (
+        evidence.get("artifact_path")
+        or payload.get("image")
+        or payload.get("local_path")
+        or payload.get("file_path")
+        or ""
+    )
+    if not isinstance(artifact_path, str) or not artifact_path.startswith("/"):
+        return None
+    if not os.path.isfile(artifact_path):
+        return None
+
+    audit = evidence.get("workflow_node_audit")
+    technical_status = evidence.get("technical_execution_status", payload.get("technical_execution_status", "COMPLETE"))
+    visual_status = evidence.get("visual_quality_status", payload.get("visual_quality_status", "USER_REVIEW_REQUIRED"))
+    lines = [
+        "[이미지 생성 자동 완료보고]",
+        f"기술 실행 상태: {technical_status}",
+        f"시각 품질 상태: {visual_status}",
+        "- 판정 기준: 이 보고는 실행 증거만 확정하며, 화풍/구도/크롭 품질은 별도 검수 대상",
+        "- 근거 소스: image_generate.report_evidence",
+        f"- 작업: {evidence.get('operation', payload.get('operation', 'UNKNOWN'))}",
+        f"- 프리셋: {evidence.get('preset', payload.get('preset', 'UNKNOWN'))}",
+        f"- 산출물 유형: {evidence.get('output_type', payload.get('output_type', 'UNKNOWN'))}",
+        f"- Workflow Key: `{evidence.get('workflow_key', payload.get('workflow_key', 'UNKNOWN'))}`",
+        f"- Checkpoint: `{evidence.get('checkpoint', payload.get('model', 'UNKNOWN'))}`",
+        f"- VAE: `{evidence.get('vae', payload.get('vae', 'UNKNOWN'))}`",
+        f"- LoRA: {_format_lora_report_value(evidence.get('loras', payload.get('loras')))}",
+        f"- 모델 스택 검증: {evidence.get('model_stack_verified', payload.get('model_stack_verified', 'UNKNOWN'))}",
+        f"- 해상도: {evidence.get('output_resolution', payload.get('output_resolution', 'UNKNOWN'))}",
+        f"- Seed: {evidence.get('seed', payload.get('seed', 'UNKNOWN'))}",
+        f"- 산출물 경로: {artifact_path}",
+    ]
+    lines.extend(_format_workflow_audit_report(audit))
+    return "\n".join(lines).strip()
+
+
 def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str]:
     """Return a user-facing error when Ollama is loaded with too little context."""
     if not getattr(agent, "tools", None):
@@ -4168,6 +4308,30 @@ def run_conversation(
                             except Exception:
                                 pass
                     break
+
+                _tc_names_after_tool = {tc.function.name for tc in assistant_message.tool_calls}
+                if _tc_names_after_tool == {"image_generate"}:
+                    _image_payload = _last_successful_image_generate_payload(
+                        messages,
+                        len(assistant_message.tool_calls),
+                    )
+                    if _image_payload is not None:
+                        _auto_report = _build_image_generate_auto_completion_report(
+                            _image_payload,
+                            user_message=user_message,
+                        )
+                        if _auto_report:
+                            _turn_exit_reason = "image_generate_auto_completion_report"
+                            final_response = _auto_report
+                            messages.append({
+                                "role": "assistant",
+                                "content": final_response,
+                                "_auto_completion_report": "image_generate_report_evidence",
+                            })
+                            agent._emit_status(
+                                "image_generate evidence 기반 자동 완료보고 생성"
+                            )
+                            break
 
                 # Reset per-turn retry counters after successful tool
                 # execution so a single truncation doesn't poison the
