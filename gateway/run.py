@@ -1739,15 +1739,20 @@ def _guard_unverified_image_generation_claim(
         return body, False
     if any(str(name or "") == "image_generate" for name in (turn_tool_names or [])):
         return body, False
-    if _SEIR_BLOCKER_RE.search(body):
-        return body, False
     commander_image_dispatch = (
         "[COMMANDER_DISPATCH]" in str(inbound_message_text or "")
         and _COMMANDER_IMAGE_TASK_HINT_RE.search(str(inbound_message_text or "")) is not None
     )
-    if not (
+    has_unverified_generation_claim = (
         _SEIR_GENERATION_PROGRESS_CLAIM_RE.search(body)
         or _SEIR_GENERATION_SUCCESS_CLAIM_RE.search(body)
+        or _SEIR_PLACEHOLDER_ARTIFACT_REPORT_RE.search(body)
+        or (commander_image_dispatch and _COMMANDER_IMAGE_SUCCESS_CLAIM_RE.search(body))
+    )
+    if not has_unverified_generation_claim:
+        return body, False
+    if _SEIR_BLOCKER_RE.search(body) and not (
+        _SEIR_GENERATION_SUCCESS_CLAIM_RE.search(body)
         or _SEIR_PLACEHOLDER_ARTIFACT_REPORT_RE.search(body)
         or (commander_image_dispatch and _COMMANDER_IMAGE_SUCCESS_CLAIM_RE.search(body))
     ):

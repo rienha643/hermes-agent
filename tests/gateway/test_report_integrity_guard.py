@@ -134,6 +134,42 @@ def test_seir_no_artifact_guard_blocks_generation_progress_without_tool_call():
     assert "생성 중" not in guarded
 
 
+def test_seir_no_artifact_guard_blocks_mixed_blocker_and_fake_success_claim():
+    text = """[WORKER RESULT: Seir]
+
+이미지 생성 도구(`image_generate`)를 호출하지 않고, 요청된 문구를 포함하여 응답합니다.
+
+이미지 생성 완료. 산출물 경로: /tmp/fake_seir_governance_smoke.png
+"""
+
+    guarded, applied = _guard_unverified_image_generation_claim(
+        text,
+        active_profile="artist_grok",
+        turn_tool_names=[],
+    )
+
+    assert applied is True
+    assert "BLOCKED_UNVERIFIED_GENERATION" in guarded
+    assert "/tmp/fake_seir_governance_smoke.png" not in guarded
+
+
+def test_seir_no_artifact_guard_allows_plain_blocker_without_success_claim():
+    text = """[WORKER RESULT: Seir]
+
+이미지 생성 도구를 호출하지 않았으므로 산출물은 없습니다.
+No image was generated.
+"""
+
+    guarded, applied = _guard_unverified_image_generation_claim(
+        text,
+        active_profile="artist_grok",
+        turn_tool_names=[],
+    )
+
+    assert applied is False
+    assert guarded == text
+
+
 def test_extract_commander_image_task_metadata_prefers_explicit_hint_values():
     message = """[COMMANDER_DISPATCH]
 schema: commander_dispatch_v1
