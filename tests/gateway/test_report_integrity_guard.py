@@ -219,6 +219,25 @@ dispatch_event_id: d3
     )
 
 
+def test_extract_commander_image_task_metadata_reads_single_tool_args_json():
+    message = """[COMMANDER_DISPATCH]
+schema: commander_dispatch_v1
+dispatch_event_id: d4
+[/COMMANDER_DISPATCH]
+
+image_generate 도구 인자 힌트:
+- 첫 행동은 아래 JSON 그대로 `image_generate` 도구 호출.
+```json
+{"artifact_name": "angelica_compact_dispatch_smoke_v1", "operation": "txt2img", "project_name": "angelica_compact_dispatch_smoke_20260628"}
+```
+"""
+
+    assert _extract_commander_image_task_metadata(message) == (
+        "angelica_compact_dispatch_smoke_20260628",
+        "angelica_compact_dispatch_smoke_v1",
+    )
+
+
 def test_seir_no_artifact_guard_allows_real_image_generate_tool_call():
     text = "[WORKER_RESULT: Seir]\n1번 이미지 생성 중..."
 

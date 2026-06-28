@@ -1716,6 +1716,21 @@ def _extract_commander_image_task_metadata(message_text: str) -> tuple[str | Non
         if basename_match:
             artifact_name = _normalize_commander_image_value(basename_match.group(1))
 
+    if not (project_name and artifact_name):
+        for json_match in re.finditer(r"```json\s*(\{.*?\})\s*```", body, re.DOTALL):
+            try:
+                tool_args = json.loads(json_match.group(1))
+            except Exception:
+                continue
+            if not isinstance(tool_args, dict):
+                continue
+            if not project_name and isinstance(tool_args.get("project_name"), str):
+                project_name = _normalize_commander_image_value(tool_args["project_name"])
+            if not artifact_name and isinstance(tool_args.get("artifact_name"), str):
+                artifact_name = _normalize_commander_image_value(tool_args["artifact_name"])
+            if project_name and artifact_name:
+                break
+
     return (project_name or None, artifact_name or None)
 
 
