@@ -227,11 +227,11 @@ class TestPublishDocumentArtifact:
     [
         (
             Path("/tmp/HermesWork/Documents/planning/brief.docx"),
-            "- 산출물\n  - 형식: DOCX\n  - 저장 위치: `HermesWork/Documents/planning/brief.docx`\n  - 전달 방식: Slack 첨부\n  - NAS 상태: hook state 생성",
+            "- 산출물\n  - 형식: DOCX\n  - 저장 위치: `HermesWork/Documents/planning/brief.docx`\n  - 전달 방식: Slack 첨부\n  - NAS 상태: NAS 검증 완료",
         ),
         (
             Path("/tmp/HermesWork/Story/worldbuilding/report.docx"),
-            "- 산출물\n  - 형식: DOCX\n  - 저장 위치: `HermesWork/Story/worldbuilding/report.docx`\n  - 전달 방식: Slack 첨부\n  - NAS 상태: hook state 생성",
+            "- 산출물\n  - 형식: DOCX\n  - 저장 위치: `HermesWork/Story/worldbuilding/report.docx`\n  - 전달 방식: Slack 첨부\n  - NAS 상태: NAS 검증 완료",
         ),
     ],
 )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -239,6 +241,7 @@ def test_run_artifact_hook_story_uses_canonical_destination(monkeypatch, tmp_pat
     monkeypatch.setattr(backup_mod, "_load_hook_state", lambda *args, **kwargs: {})
     monkeypatch.setattr(backup_mod, "_atomic_write_text", lambda *args, **kwargs: None)
     monkeypatch.setattr(backup_mod, "load_credentials", lambda: backup_mod.Credential(host="hyungwoo", username="user", password="pass"))
+    monkeypatch.setattr(backup_mod, "_share_file_sha256", lambda *args, **kwargs: backup_mod._sha256_path(artifact_path).lower())
 
     def fake_sync(cred, src, dest_unc, *, mirror=False):
         captured["cred"] = cred
@@ -293,6 +296,7 @@ def test_hook_state_dir_override_drives_lock_and_state_paths(monkeypatch, tmp_pa
     monkeypatch.setattr(backup_mod, "_load_hook_state", lambda *args, **kwargs: {})
     monkeypatch.setattr(backup_mod, "load_credentials", lambda: backup_mod.Credential(host="hyungwoo", username="user", password="pass"))
     monkeypatch.setattr(backup_mod, "sync_source_to_share", lambda *args, **kwargs: (3, "synced"))
+    monkeypatch.setattr(backup_mod, "_share_file_sha256", lambda *args, **kwargs: backup_mod._sha256_path(artifact_path).lower())
 
     ok, summary = backup_mod.run_artifact_hook(
         category="documents",
@@ -309,6 +313,142 @@ def test_hook_state_dir_override_drives_lock_and_state_paths(monkeypatch, tmp_pa
     assert recorded["state_path"].parent == state_dir
     assert backup_mod._hook_lock_path("documents|reports|ignored").parent == state_dir
     assert backup_mod._hook_state_path("documents|reports|ignored").parent == state_dir
+    state_content = json.loads(recorded["state_content"])
+    assert state_content["status"] == "success"
+    assert state_content["artifact_verified"] is True
+    assert state_content["mirror_verified"] is True
+
+
+def test_run_artifact_hook_writes_success_state_with_verified_hash(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    state_dir = tmp_path / "state" / "nas-sync"
+    monkeypatch.setenv("HERMES_NAS_HOOK_STATE_DIR", str(state_dir))
+
+    source_root = tmp_path / "HermesWork" / "Documents" / "reports"
+    source_root.mkdir(parents=True)
+    artifact_path = source_root / "artifact.md"
+    artifact_path.write_text("payload", encoding="utf-8")
+    expected_hash = backup_mod._sha256_path(artifact_path).lower()
+
+    monkeypatch.setattr(backup_mod, "_acquire_hook_lock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(backup_mod, "_release_hook_lock", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backup_mod, "load_credentials", lambda: backup_mod.Credential(host="hyungwoo", username="user", password="pass"))
+    monkeypatch.setattr(backup_mod, "sync_source_to_share", lambda *args, **kwargs: (1, "ok"))
+    monkeypatch.setattr(backup_mod, "_share_file_sha256", lambda *args, **kwargs: expected_hash)
+
+    ok, summary = backup_mod.run_artifact_hook(
+        category="documents",
+        scope="reports",
+        source_root=source_root,
+        artifact_path=artifact_path,
+    )
+
+    assert ok
+    assert "verified=true" in summary
+    state_files = list(state_dir.glob("*.json"))
+    assert len(state_files) == 1
+    state = json.loads(state_files[0].read_text(encoding="utf-8"))
+    assert state["status"] == "success"
+    assert state["artifact_verified"] is True
+    assert state["mirror_verified"] is True
+    assert state["artifact_sha256"] == expected_hash
+    assert state["dest_sha256"] == expected_hash
+    assert state["relative_artifact_path"] == "artifact.md"
+    assert state["destination_artifact"].endswith("\\Hermes\\documents\\reports\\artifact.md")
+
+
+def test_run_artifact_hook_writes_failed_state_on_hash_mismatch(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    state_dir = tmp_path / "state" / "nas-sync"
+    monkeypatch.setenv("HERMES_NAS_HOOK_STATE_DIR", str(state_dir))
+
+    source_root = tmp_path / "HermesWork" / "Documents" / "reports"
+    source_root.mkdir(parents=True)
+    artifact_path = source_root / "artifact.md"
+    artifact_path.write_text("payload", encoding="utf-8")
+
+    monkeypatch.setattr(backup_mod, "_acquire_hook_lock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(backup_mod, "_release_hook_lock", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backup_mod, "load_credentials", lambda: backup_mod.Credential(host="hyungwoo", username="user", password="pass"))
+    monkeypatch.setattr(backup_mod, "sync_source_to_share", lambda *args, **kwargs: (1, "ok"))
+    monkeypatch.setattr(backup_mod, "_share_file_sha256", lambda *args, **kwargs: "0" * 64)
+
+    ok, summary = backup_mod.run_artifact_hook(
+        category="documents",
+        scope="reports",
+        source_root=source_root,
+        artifact_path=artifact_path,
+    )
+
+    assert not ok
+    assert "result=failed" in summary
+    state_files = list(state_dir.glob("*.json"))
+    assert len(state_files) == 1
+    state = json.loads(state_files[0].read_text(encoding="utf-8"))
+    assert state["status"] == "failed"
+    assert state["artifact_verified"] is False
+    assert state["mirror_verified"] is False
+    assert "artifact hash mismatch" in state["last_error"]
+
+
+def test_document_artifact_nas_state_requires_verified_success(monkeypatch, tmp_path):
+    work_root = tmp_path / "HermesWork"
+    documents_root = work_root / "Documents"
+    artifact_path = documents_root / "reports" / "artifact.md"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("payload", encoding="utf-8")
+
+    state_dir = tmp_path / "state" / "nas-sync"
+    state_dir.mkdir(parents=True)
+
+    def fake_work_dir(*parts: str) -> Path:
+        return work_root.joinpath(*parts)
+
+    monkeypatch.setattr(document_artifacts, "get_hermes_work_dir", fake_work_dir)
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_state_dir", lambda: state_dir)
+
+    key = nas_sync_hooks._artifact_hook_key("documents", "reports", artifact_path)
+    state_path = state_dir / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()}.json"
+    digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+
+    assert document_artifacts.infer_document_artifact_nas_state(artifact_path) == "확인 불가"
+
+    state_path.write_text(json.dumps({"status": "pending"}), encoding="utf-8")
+    assert document_artifacts.infer_document_artifact_nas_state(artifact_path) == "NAS 동기화 진행중"
+
+    state_path.write_text(json.dumps({"status": "failed"}), encoding="utf-8")
+    assert document_artifacts.infer_document_artifact_nas_state(artifact_path) == "NAS 동기화 실패"
+
+    state_path.write_text(json.dumps({"artifact_sha256": digest, "dest_sha256": digest}), encoding="utf-8")
+    assert document_artifacts.infer_document_artifact_nas_state(artifact_path) == "확인 불가"
+
+    state_path.write_text(
+        json.dumps(
+            {
+                "status": "success",
+                "artifact_verified": True,
+                "mirror_verified": True,
+                "artifact_sha256": digest,
+                "dest_sha256": digest,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert document_artifacts.infer_document_artifact_nas_state(artifact_path) == "NAS 검증 완료"
+
+    state_path.write_text(
+        json.dumps(
+            {
+                "status": "success",
+                "artifact_verified": True,
+                "mirror_verified": True,
+                "artifact_sha256": digest,
+                "dest_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert document_artifacts.infer_document_artifact_nas_state(artifact_path) == "확인 불가"
 
 
 @pytest.mark.parametrize(

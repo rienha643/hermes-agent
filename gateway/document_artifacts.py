@@ -15,6 +15,7 @@ numbering parts present.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -363,7 +364,9 @@ _MINIMAL_THEME_XML = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 
 
 _DOCUMENT_ARTIFACT_DELIVERY = "Slack 첨부"
-_DOCUMENT_ARTIFACT_NAS_STATE_GENERATED = "hook state 생성"
+_DOCUMENT_ARTIFACT_NAS_STATE_GENERATED = "NAS 검증 완료"
+_DOCUMENT_ARTIFACT_NAS_STATE_PENDING = "NAS 동기화 진행중"
+_DOCUMENT_ARTIFACT_NAS_STATE_FAILED = "NAS 동기화 실패"
 _DOCUMENT_ARTIFACT_NAS_STATE_NONE = "hook state 없음"
 _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN = "확인 불가"
 
@@ -451,11 +454,23 @@ def infer_document_artifact_nas_state(path: str | Path) -> str:
     try:
         key = nas_sync_hooks._artifact_hook_key(category, scope or "", artifact_path)
         state_path = nas_sync_hooks._resolve_nas_hook_state_dir() / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()}.json"
-        return (
-            _DOCUMENT_ARTIFACT_NAS_STATE_GENERATED
-            if state_path.exists()
-            else _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
-        )
+        if not state_path.exists():
+            return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
+        status = str(state.get("status") or "").strip().lower()
+        if status == "success":
+            source_hash = str(state.get("artifact_sha256") or "").strip().lower()
+            dest_hash = str(state.get("dest_sha256") or "").strip().lower()
+            if state.get("artifact_verified") is True and state.get("mirror_verified") is True and source_hash and source_hash == dest_hash:
+                return _DOCUMENT_ARTIFACT_NAS_STATE_GENERATED
+            return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
+        if status == "pending":
+            return _DOCUMENT_ARTIFACT_NAS_STATE_PENDING
+        if status == "failed":
+            return _DOCUMENT_ARTIFACT_NAS_STATE_FAILED
+        return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
     except Exception:
         return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
 
