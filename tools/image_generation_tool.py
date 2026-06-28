@@ -42,7 +42,46 @@ from typing import Any, Dict, Optional
 fal_client: Any = None
 
 _IMAGE_TASK_METADATA_LOCK = threading.Lock()
-_IMAGE_TASK_METADATA_BY_TASK_ID: Dict[str, Dict[str, Optional[str]]] = {}
+_IMAGE_TASK_METADATA_BY_TASK_ID: Dict[str, Dict[str, Any]] = {}
+
+_COMMANDER_IMAGE_ARG_KEYS = {
+    "operation",
+    "workflow_key",
+    "reference_image_path",
+    "reference_image",
+    "source_image_path",
+    "source_image",
+    "project_name",
+    "artifact_name",
+    "output_type",
+    "prompt",
+    "negative_prompt",
+    "live_generation_approved",
+    "experimental_reference_identity",
+    "allow_reference_workflow_family_change",
+    "style_preset",
+    "lora_preset",
+    "loras",
+    "vae",
+    "model",
+    "checkpoint",
+    "aspect_ratio",
+    "width",
+    "height",
+    "steps",
+    "cfg_scale",
+    "sampler_name",
+    "scheduler",
+    "seed",
+    "denoise",
+    "postprocess_preset",
+    "upscale_model",
+    "mask_target",
+    "mask_source",
+    "mask_box",
+    "mask_feather_px",
+    "grow_mask_by",
+}
 
 
 def register_image_task_metadata(
@@ -50,6 +89,7 @@ def register_image_task_metadata(
     *,
     project_name: Optional[str] = None,
     artifact_name: Optional[str] = None,
+    image_args: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Register delegated image routing hints for a task id."""
     task_key = str(task_id or "").strip()
@@ -59,21 +99,34 @@ def register_image_task_metadata(
         "project_name": str(project_name).strip() if isinstance(project_name, str) and project_name.strip() else None,
         "artifact_name": str(artifact_name).strip() if isinstance(artifact_name, str) and artifact_name.strip() else None,
     }
-    if not payload["project_name"] and not payload["artifact_name"]:
+    if isinstance(image_args, dict):
+        filtered_args = {
+            key: value
+            for key, value in image_args.items()
+            if key in _COMMANDER_IMAGE_ARG_KEYS and value not in (None, "", [], {})
+        }
+        if filtered_args:
+            payload["image_args"] = filtered_args
+    if not payload["project_name"] and not payload["artifact_name"] and not payload.get("image_args"):
         return
     with _IMAGE_TASK_METADATA_LOCK:
         _IMAGE_TASK_METADATA_BY_TASK_ID[task_key] = payload
 
 
-def _consume_image_task_metadata(task_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+def _consume_image_task_metadata(task_id: Optional[str]) -> tuple[Optional[str], Optional[str], Dict[str, Any]]:
     task_key = str(task_id or "").strip()
     if not task_key:
-        return None, None
+        return None, None, {}
     with _IMAGE_TASK_METADATA_LOCK:
         payload = _IMAGE_TASK_METADATA_BY_TASK_ID.pop(task_key, None)
     if not payload:
-        return None, None
-    return payload.get("project_name"), payload.get("artifact_name")
+        return None, None, {}
+    image_args = payload.get("image_args")
+    return (
+        payload.get("project_name"),
+        payload.get("artifact_name"),
+        image_args if isinstance(image_args, dict) else {},
+    )
 
 
 def _load_fal_client() -> Any:
@@ -1120,8 +1173,8 @@ IMAGE_GENERATE_SCHEMA = {
             },
             "operation": {
                 "type": "string",
-                "enum": ["generate", "txt2img", "postprocess", "source_preserving_postprocess", "upscale"],
-                "description": "Optional provider operation. Use `source_preserving_postprocess` only when the user explicitly asks to preserve an existing source image and apply localized postprocess/editing. Use `upscale` only for source-image upscaling.",
+                "enum": ["generate", "txt2img", "postprocess", "source_preserving_postprocess", "upscale", "reference_identity_txt2img"],
+                "description": "Optional provider operation. Use `source_preserving_postprocess` only when the user explicitly asks to preserve an existing source image and apply localized postprocess/editing. Use `upscale` only for source-image upscaling. Use `reference_identity_txt2img` only with an explicit temporary reference identity experiment workflow and reference_image_path.",
                 "default": "generate",
             },
             "output_type": {
@@ -1131,6 +1184,20 @@ IMAGE_GENERATE_SCHEMA = {
             "source_image_path": {
                 "type": "string",
                 "description": "Optional absolute local source image path for source-preserving ComfyUI postprocess or upscale workflows.",
+            },
+            "reference_image_path": {
+                "type": "string",
+                "description": "Optional absolute local reference image path. For ComfyUI this is allowed only with explicit operation=`reference_identity_txt2img` and workflow_key=`character_reference_key_visual_experimental_v1` or `fullbody_v8_reference_identity_experimental_v1`; it must not be used for default generation. Match the reference image workflow family unless `allow_reference_workflow_family_change=true` is intentionally set.",
+            },
+            "experimental_reference_identity": {
+                "type": "boolean",
+                "description": "Optional audit flag for the temporary ComfyUI reference identity experiment. This does not make the route valid without operation, workflow_key, and reference_image_path.",
+                "default": False,
+            },
+            "allow_reference_workflow_family_change": {
+                "type": "boolean",
+                "description": "Optional safety override for temporary ComfyUI reference identity experiments. Default false. Set true only when intentionally converting a reference image from one workflow family, such as fullbody, into another target family, such as key_visual.",
+                "default": False,
             },
             "postprocess_preset": {
                 "type": "string",
@@ -1283,6 +1350,10 @@ def _dispatch_to_plugin_provider(
     operation: str | None = None,
     output_type: str | None = None,
     source_image_path: str | None = None,
+    reference_image_path: str | None = None,
+    reference_image: str | None = None,
+    experimental_reference_identity: bool | None = None,
+    allow_reference_workflow_family_change: bool | None = None,
     postprocess_preset: str | None = None,
     upscale_model: str | None = None,
     model: str | None = None,
@@ -1415,6 +1486,14 @@ def _dispatch_to_plugin_provider(
             kwargs["output_type"] = output_type
         if source_image_path is not None:
             kwargs["source_image_path"] = source_image_path
+        if reference_image_path is not None:
+            kwargs["reference_image_path"] = reference_image_path
+        if reference_image is not None:
+            kwargs["reference_image"] = reference_image
+        if experimental_reference_identity is not None:
+            kwargs["experimental_reference_identity"] = experimental_reference_identity
+        if allow_reference_workflow_family_change is not None:
+            kwargs["allow_reference_workflow_family_change"] = allow_reference_workflow_family_change
         if postprocess_preset is not None:
             kwargs["postprocess_preset"] = postprocess_preset
         if upscale_model is not None:
@@ -1469,6 +1548,17 @@ def _dispatch_to_plugin_provider(
 
 
 def _handle_image_generate(args, **kw):
+    task_id = kw.get("task_id")
+    task_project_name, task_artifact_name, task_image_args = _consume_image_task_metadata(task_id)
+    if task_image_args:
+        merged_args = dict(args or {})
+        merged_args.update(task_image_args)
+        args = merged_args
+        logger.info(
+            "Commander image task args applied for task_id=%s keys=%s",
+            task_id,
+            sorted(task_image_args),
+        )
     prompt = args.get("prompt", "")
     if not prompt:
         return tool_error("prompt is required for image generation")
@@ -1494,6 +1584,10 @@ def _handle_image_generate(args, **kw):
     operation = args.get("operation")
     output_type = args.get("output_type")
     source_image_path = args.get("source_image_path")
+    reference_image_path = args.get("reference_image_path")
+    reference_image = args.get("reference_image")
+    experimental_reference_identity = args.get("experimental_reference_identity")
+    allow_reference_workflow_family_change = args.get("allow_reference_workflow_family_change")
     postprocess_preset = args.get("postprocess_preset")
     upscale_model = args.get("upscale_model")
     model = args.get("model")
@@ -1505,9 +1599,6 @@ def _handle_image_generate(args, **kw):
     cfg_scale = args.get("cfg_scale")
     sampler_name = args.get("sampler_name")
     scheduler = args.get("scheduler")
-    task_id = kw.get("task_id")
-
-    task_project_name, task_artifact_name = _consume_image_task_metadata(task_id)
     if task_project_name:
         project_name = task_project_name
     if task_artifact_name:
@@ -1546,6 +1637,10 @@ def _handle_image_generate(args, **kw):
         operation=str(operation).strip() if isinstance(operation, str) and operation.strip() else None,
         output_type=str(output_type).strip() if isinstance(output_type, str) and output_type.strip() else None,
         source_image_path=str(source_image_path).strip() if isinstance(source_image_path, str) and source_image_path.strip() else None,
+        reference_image_path=str(reference_image_path).strip() if isinstance(reference_image_path, str) and reference_image_path.strip() else None,
+        reference_image=str(reference_image).strip() if isinstance(reference_image, str) and reference_image.strip() else None,
+        experimental_reference_identity=experimental_reference_identity if isinstance(experimental_reference_identity, bool) else None,
+        allow_reference_workflow_family_change=allow_reference_workflow_family_change if isinstance(allow_reference_workflow_family_change, bool) else None,
         postprocess_preset=str(postprocess_preset).strip() if isinstance(postprocess_preset, str) and postprocess_preset.strip() else None,
         upscale_model=str(upscale_model).strip() if isinstance(upscale_model, str) and upscale_model.strip() else None,
         model=str(model).strip() if isinstance(model, str) and model.strip() else None,

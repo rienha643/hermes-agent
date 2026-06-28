@@ -260,15 +260,20 @@ STANDING_SPRITE_PRODUCTION_PRESET = "standing_sprite_production"
 INGAME_CG_PRODUCTION_PRESET = "ingame_cg_production"
 V8_STYLE_WORKFLOW_PRESET = "v8_style_workflow"
 KEY_VISUAL_SUBCULTURE_PRESET = "key_visual_subculture_v1"
+REFERENCE_IDENTITY_EXPERIMENTAL_PRESET = "reference_identity_experimental_v1"
+REFERENCE_IDENTITY_FULLBODY_EXPERIMENTAL_PRESET = "reference_identity_fullbody_experimental_v1"
 SOURCE_PRESERVING_POSTPROCESS_OPERATION = "source_preserving_postprocess"
 LOCAL_RETOUCH_OPERATION = "local_retouch"
 MASKED_INPAINT_OPERATION = "masked_inpaint"
 UPSCALE_OPERATION = "upscale"
+REFERENCE_IDENTITY_TXT2IMG_OPERATION = "reference_identity_txt2img"
 FACE8M_HAND9C_POSTPROCESS_PRESET = "face8m_d035_hand9c_d025"
 DEPTH50_CANNY100_FACE8M_HAND9C_POSTPROCESS_PRESET = "depth50_canny100_face8m_hand9c_v1"
 DEFAULT_UPSCALE_MODEL = "4x-UltraSharp.pth"
 DEFAULT_WORKFLOW_KEY = "txt2img_minimal_v1"
 CHARACTER_KEY_VISUAL_WORKFLOW_KEY = "character_key_visual_txt2img_v1"
+CHARACTER_REFERENCE_KEY_VISUAL_EXPERIMENTAL_WORKFLOW_KEY = "character_reference_key_visual_experimental_v1"
+CHARACTER_REFERENCE_FULLBODY_EXPERIMENTAL_WORKFLOW_KEY = "fullbody_v8_reference_identity_experimental_v1"
 PORTRAIT_WORKFLOW_KEY = "portrait_round_v1_txt2img_v1"
 FULLBODY_V8_WORKFLOW_KEY = "fullbody_v8_scene_txt2img_v2"
 SOURCE_PRESERVING_FACE_HAND_WORKFLOW_KEY = "source_preserving_face8m_hand9c_v1"
@@ -292,6 +297,23 @@ FULLBODY_PRODUCTION_WIDTH = 1024
 FULLBODY_PRODUCTION_HEIGHT = 1536
 SOURCE_PRESERVING_DEPTH_CONTROLNET = "controlnet_zoe_depth_sdxl_1_0.safetensors"
 SOURCE_PRESERVING_CANNY_CONTROLNET = "illustriousXLCanny_v10.safetensors"
+REFERENCE_IDENTITY_IPADAPTER_MODEL = "ip-adapter-plus-face_sdxl_vit-h.safetensors"
+REFERENCE_IDENTITY_CLIP_VISION = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+REFERENCE_IDENTITY_IPADAPTER_WEIGHT = 0.42
+REFERENCE_IDENTITY_IPADAPTER_WEIGHT_TYPE = "linear"
+REFERENCE_IDENTITY_IPADAPTER_START_AT = 0.0
+REFERENCE_IDENTITY_IPADAPTER_END_AT = 0.55
+REFERENCE_IDENTITY_IPADAPTER_EMBEDS_SCALING = "V only"
+REFERENCE_IDENTITY_EXPERIMENTAL_WORKFLOW_KEYS = {
+    CHARACTER_REFERENCE_KEY_VISUAL_EXPERIMENTAL_WORKFLOW_KEY,
+    CHARACTER_REFERENCE_FULLBODY_EXPERIMENTAL_WORKFLOW_KEY,
+}
+REFERENCE_IDENTITY_NEGATIVE_GUARD = (
+    "copied reference background, overpowering reference background, style transfer artifact, "
+    "stained glass pattern, mosaic background, flat stained glass colors, posterized colors, "
+    "overexposed background, lineart only, under-rendered skin, flat childish drawing, "
+    "background person, distant person, tiny background character, silhouette person, extra girl in background"
+)
 LOCALIZED_RETOUCH_TARGET_KEYWORDS: Tuple[str, ...] = (
     "hand",
     "finger",
@@ -1160,6 +1182,180 @@ def _build_source_image_upscale_workflow(
     }
 
 
+def _truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "y", "on", "allow", "enabled"}
+    return False
+
+
+def _reference_identity_workflow_family(workflow_key: Any) -> Optional[str]:
+    key = str(workflow_key or "").strip()
+    if key in {FULLBODY_V8_WORKFLOW_KEY, CHARACTER_REFERENCE_FULLBODY_EXPERIMENTAL_WORKFLOW_KEY}:
+        return "fullbody"
+    if key in {CHARACTER_KEY_VISUAL_WORKFLOW_KEY, CHARACTER_REFERENCE_KEY_VISUAL_EXPERIMENTAL_WORKFLOW_KEY}:
+        return "key_visual"
+    if key == PORTRAIT_WORKFLOW_KEY:
+        return "portrait"
+    return None
+
+
+def _load_reference_identity_source_metadata(reference_input_path: Path) -> Dict[str, Any]:
+    """Best-effort read of a published HermesWork image sidecar metadata file."""
+    candidates = [
+        reference_input_path.parent / "sidecar" / "metadata.json",
+        reference_input_path.parent / "metadata.json",
+    ]
+    for candidate in candidates:
+        try:
+            if not candidate.exists():
+                continue
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            logger.debug("Could not read reference identity metadata: %s", candidate, exc_info=True)
+    return {}
+
+
+def _build_reference_identity_experimental_workflow(
+    *,
+    checkpoint: str,
+    vae: Optional[str],
+    lora_stack: List[Dict[str, Any]],
+    reference_image_name: str,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+    steps: int,
+    cfg: float,
+    sampler_name: str,
+    scheduler: str,
+    denoise: float,
+    filename_prefix: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
+    workflow: Dict[str, Any] = {
+        "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
+        "2": {"inputs": {"width": width, "height": height, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+        "3": {"inputs": {"text": prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "4": {"inputs": {"text": negative_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "50": {"inputs": {"ipadapter_file": REFERENCE_IDENTITY_IPADAPTER_MODEL}, "class_type": "IPAdapterModelLoader"},
+        "51": {"inputs": {"clip_name": REFERENCE_IDENTITY_CLIP_VISION}, "class_type": "CLIPVisionLoader"},
+        "52": {"inputs": {"image": reference_image_name}, "class_type": "LoadImage"},
+        "53": {
+            "inputs": {
+                "model": ["1", 0],
+                "ipadapter": ["50", 0],
+                "image": ["52", 0],
+                "weight": REFERENCE_IDENTITY_IPADAPTER_WEIGHT,
+                "weight_type": REFERENCE_IDENTITY_IPADAPTER_WEIGHT_TYPE,
+                "combine_embeds": "average",
+                "start_at": REFERENCE_IDENTITY_IPADAPTER_START_AT,
+                "end_at": REFERENCE_IDENTITY_IPADAPTER_END_AT,
+                "embeds_scaling": REFERENCE_IDENTITY_IPADAPTER_EMBEDS_SCALING,
+                "clip_vision": ["51", 0],
+            },
+            "class_type": "IPAdapterAdvanced",
+        },
+        "5": {
+            "inputs": {
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
+                "model": ["53", 0],
+                "positive": ["3", 0],
+                "negative": ["4", 0],
+                "latent_image": ["2", 0],
+            },
+            "class_type": "KSampler",
+        },
+        "7": {
+            "inputs": {
+                "samples": ["5", 0],
+                "vae": ["1", 2] if vae is None else ["6", 0],
+            },
+            "class_type": "VAEDecode",
+        },
+        "8": {"inputs": {"filename_prefix": filename_prefix, "images": ["7", 0]}, "class_type": "SaveImage"},
+    }
+    if vae is not None:
+        workflow["6"] = {"inputs": {"vae_name": vae}, "class_type": "VAELoader"}
+
+    model_source = ["1", 0]
+    clip_source = ["1", 1]
+    for index, lora in enumerate(lora_stack, start=1):
+        node_id = str(20 + index)
+        workflow[node_id] = {
+            "inputs": {
+                "model": model_source,
+                "clip": clip_source,
+                "lora_name": lora["name"],
+                "strength_model": lora["weight"],
+                "strength_clip": lora.get("clip_weight", lora["weight"]),
+            },
+            "class_type": "LoraLoader",
+        }
+        model_source = [node_id, 0]
+        clip_source = [node_id, 1]
+    if lora_stack:
+        workflow["3"]["inputs"]["clip"] = clip_source
+        workflow["4"]["inputs"]["clip"] = clip_source
+        workflow["53"]["inputs"]["model"] = model_source
+
+    workflow_node_audit = {
+        "audit_version": "comfy_reference_identity_experimental_v1",
+        "checkpoint_node": "1",
+        "checkpoint": workflow.get("1", {}).get("inputs", {}).get("ckpt_name"),
+        "vae_node": "6" if vae is not None else "1",
+        "vae": workflow.get("6", {}).get("inputs", {}).get("vae_name") if vae is not None else "checkpoint_builtin_vae",
+        "lora_nodes": [
+            {
+                "node": node_id,
+                "name": node.get("inputs", {}).get("lora_name"),
+                "weight": node.get("inputs", {}).get("strength_model"),
+                "clip_weight": node.get("inputs", {}).get("strength_clip"),
+            }
+            for node_id, node in sorted(workflow.items(), key=lambda item: item[0])
+            if isinstance(node, dict) and node.get("class_type") == "LoraLoader"
+        ],
+        "ipadapter": {
+            "model_loader_node": "50",
+            "clip_vision_node": "51",
+            "reference_image_node": "52",
+            "apply_node": "53",
+            "model": REFERENCE_IDENTITY_IPADAPTER_MODEL,
+            "clip_vision": REFERENCE_IDENTITY_CLIP_VISION,
+            "weight": REFERENCE_IDENTITY_IPADAPTER_WEIGHT,
+            "weight_type": REFERENCE_IDENTITY_IPADAPTER_WEIGHT_TYPE,
+            "start_at": REFERENCE_IDENTITY_IPADAPTER_START_AT,
+            "end_at": REFERENCE_IDENTITY_IPADAPTER_END_AT,
+            "embeds_scaling": REFERENCE_IDENTITY_IPADAPTER_EMBEDS_SCALING,
+        },
+        "ksampler_node": "5",
+        "steps": workflow.get("5", {}).get("inputs", {}).get("steps"),
+        "cfg": workflow.get("5", {}).get("inputs", {}).get("cfg"),
+        "sampler_name": workflow.get("5", {}).get("inputs", {}).get("sampler_name"),
+        "scheduler": workflow.get("5", {}).get("inputs", {}).get("scheduler"),
+        "width": workflow.get("2", {}).get("inputs", {}).get("width"),
+        "height": workflow.get("2", {}).get("inputs", {}).get("height"),
+    }
+    model_stack_verified = (
+        workflow_node_audit["checkpoint"] == checkpoint
+        and workflow_node_audit["vae"] == (vae if vae is not None else "checkpoint_builtin_vae")
+        and [item["name"] for item in workflow_node_audit["lora_nodes"]] == [item["name"] for item in lora_stack]
+        and workflow_node_audit["ipadapter"]["model"] == REFERENCE_IDENTITY_IPADAPTER_MODEL
+        and workflow_node_audit["ipadapter"]["clip_vision"] == REFERENCE_IDENTITY_CLIP_VISION
+    )
+    return workflow, workflow_node_audit, model_stack_verified
+
+
 def _parse_mask_box(mask_box: Any) -> Tuple[float, float, float, float]:
     if isinstance(mask_box, dict):
         raw = (
@@ -1471,7 +1667,10 @@ def _is_v8_style_workflow_request(prompt_text: str) -> bool:
 def _is_key_visual_subculture_request(prompt_text: str, *, workflow_key: Any = None, output_type: Any = None) -> bool:
     requested_workflow = str(workflow_key or "").strip()
     requested_output_type = _normalize_output_type_token(output_type)
-    if requested_workflow == CHARACTER_KEY_VISUAL_WORKFLOW_KEY:
+    if requested_workflow in {
+        CHARACTER_KEY_VISUAL_WORKFLOW_KEY,
+        CHARACTER_REFERENCE_KEY_VISUAL_EXPERIMENTAL_WORKFLOW_KEY,
+    }:
         return True
     if requested_output_type in {"key_visual", "keyvisual", "promotional_key_visual"}:
         return True
@@ -1558,6 +1757,40 @@ def _sanitize_sfw_prompt_terms(prompt_text: str) -> str:
     sanitized = re.sub(r"\s*,\s*,+", ", ", sanitized)
     sanitized = re.sub(r"^\s*,\s*|\s*,\s*$", "", sanitized)
     return re.sub(r"\s+", " ", sanitized).strip()
+
+
+REFERENCE_IDENTITY_META_PROMPT_PATTERNS: Tuple[Tuple[str, str], ...] = (
+    (r"\buse\s+the\s+reference\s+image\s+only\s+as\s+temporary\s+identity\s+guidance\s+for\s+this\s+experiment\b", ", "),
+    (r"\buse\s+the\s+reference\s+image\s+only\s+as\s+identity\s+guidance\b", ", "),
+    (r"\buse\s+the\s+reference\s+image\b", ", "),
+    (r"\breference\s+image\b", ", "),
+    (r"\btemporary\s+identity\s+guidance\b", ", "),
+    (r"\bthis\s+experiment\b", ", "),
+    (r"\bsame\s+original\s+heroine\s+identity\b", ", "),
+    (r"\bsame\s+character\s+identity\s+as\s+reference\b", ", "),
+    (r"\bsame\s+character\s+as\s+reference\s+image\b", ", "),
+    (r"\bkeep\s+(her|him|them|the\s+character)\s+recognizable\s+as\s+the\s+same\s+character\b", ", recognizable character identity, "),
+    (r"\bpreserve\s+the\s+fullbody_v8\s+image\s+type\b", ", fullbody_v8 image type, "),
+    (r"\bpreserve\s+the\s+[^,.;:]+?\s+image\s+type\b", ", "),
+    (r"\bnew\s+scene\b", ", scene, "),
+    (r"\bwhile\s+changing\s+only\s+scene\s+and\s+poster\s+composition\b", ", "),
+    (r"\bwhile\s+changing\s+only\s+[^,.;:]+", ", "),
+    (r"\bsame\s+(short|long|pink|blue|teal|navy|white|black|red|blonde|green|golden|youthful|elegant|academy|uniform|hair|eyes|outfit|costume|sailor)\b", r"\1"),
+)
+
+
+def _sanitize_reference_identity_prompt_terms(prompt_text: str) -> str:
+    """Strip routing prose from reference prompts before they reach CLIPTextEncode."""
+    sanitized = _sanitize_sfw_prompt_terms(prompt_text)
+    sanitized = re.sub(r"[.;:]+", ", ", sanitized)
+    for pattern, replacement in REFERENCE_IDENTITY_META_PROMPT_PATTERNS:
+        sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"\b(no|not|without)\s+(text|logo|watermark|caption|title|ui|speech bubble)\b", "", sanitized, flags=re.IGNORECASE)
+    while re.search(r",\s*,", sanitized):
+        sanitized = re.sub(r"\s*,\s*,+", ", ", sanitized)
+    sanitized = re.sub(r"^\s*,\s*|\s*,\s*$", "", sanitized)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    return sanitized
 
 
 def _sanitize_portrait_prompt_terms(prompt_text: str) -> str:
@@ -1732,13 +1965,21 @@ def _build_character_production_runtime(
             "use_checkpoint_vae": True,
             "prompt_translation_policy": "v8-style-workflow + sfw-sanitize + composition-guard + no portrait rewrite",
         }
+    is_reference_key_visual = str(workflow_key or "").strip() == CHARACTER_REFERENCE_KEY_VISUAL_EXPERIMENTAL_WORKFLOW_KEY
     if _is_key_visual_subculture_request(prompt, workflow_key=workflow_key, output_type=output_type):
         negative_prompt_text = str(negative_prompt or "").strip()
+        sanitized_prompt = (
+            _sanitize_reference_identity_prompt_terms(prompt)
+            if is_reference_key_visual
+            else _sanitize_sfw_prompt_terms(prompt)
+        )
         source_prompt = _merge_comma_terms(
-            _sanitize_sfw_prompt_terms(prompt),
+            sanitized_prompt,
             KEY_VISUAL_SUBCULTURE_STYLE_BASELINE,
         )
         final_negative_prompt = KEY_VISUAL_SUBCULTURE_NEGATIVE_BASELINE
+        if is_reference_key_visual:
+            final_negative_prompt = _merge_comma_terms(final_negative_prompt, REFERENCE_IDENTITY_NEGATIVE_GUARD)
         if negative_prompt_text:
             final_negative_prompt = _merge_comma_terms(final_negative_prompt, negative_prompt_text)
         return {
@@ -1758,7 +1999,11 @@ def _build_character_production_runtime(
             "cfg": KEY_VISUAL_SUBCULTURE_CFG,
             "sampler_name": KEY_VISUAL_SUBCULTURE_SAMPLER,
             "scheduler": KEY_VISUAL_SUBCULTURE_SCHEDULER,
-            "prompt_translation_policy": "key-visual-subculture-v1 + sfw-sanitize + v8-style-anchors-only + no subject/composition rewrite",
+            "prompt_translation_policy": (
+                "key-visual-subculture-v1 + "
+                + ("reference-identity-prompt-scrub + low-style-ipadapter-guard + " if is_reference_key_visual else "")
+                + "sfw-sanitize + v8-style-anchors-only + no subject/composition rewrite"
+            ),
         }
     if _is_profile_icon_production_request(output_type=output_type):
         negative_prompt_text = str(negative_prompt or "").strip()
@@ -1836,13 +2081,29 @@ def _build_character_production_runtime(
             "scheduler": KEY_VISUAL_SUBCULTURE_SCHEDULER,
             "prompt_translation_policy": "upper-body-v1 + sfw-sanitize + no portrait skeleton rewrite",
         }
-    if _is_fullbody_production_request(output_type=output_type):
+    is_reference_fullbody = str(workflow_key or "").strip() == CHARACTER_REFERENCE_FULLBODY_EXPERIMENTAL_WORKFLOW_KEY
+    if (
+        _is_fullbody_production_request(output_type=output_type)
+        or is_reference_fullbody
+    ):
         negative_prompt_text = str(negative_prompt or "").strip()
-        source_prompt = _sanitize_sfw_prompt_terms(prompt)
+        source_prompt = (
+            _sanitize_reference_identity_prompt_terms(prompt)
+            if is_reference_fullbody
+            else _sanitize_sfw_prompt_terms(prompt)
+        )
         translated_prompt = _translate_fullbody_production_prompt(source_prompt)
         final_negative_prompt = FULLBODY_PRODUCTION_NEGATIVE_BASELINE
+        if is_reference_fullbody:
+            final_negative_prompt = _merge_comma_terms(final_negative_prompt, REFERENCE_IDENTITY_NEGATIVE_GUARD)
         if negative_prompt_text:
             final_negative_prompt = _merge_comma_terms(FULLBODY_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
+            if is_reference_fullbody:
+                final_negative_prompt = _merge_comma_terms(
+                    FULLBODY_PRODUCTION_NEGATIVE_BASELINE,
+                    REFERENCE_IDENTITY_NEGATIVE_GUARD,
+                    negative_prompt_text,
+                )
         return {
             "preset": FULLBODY_PRODUCTION_PRESET,
             "workflow_key": FULLBODY_V8_WORKFLOW_KEY,
@@ -1865,6 +2126,7 @@ def _build_character_production_runtime(
             "prompt_translation_policy": (
                 "fullbody-v8-scene-v2 + sfw-sanitize + solo/head-to-toe guard + "
                 "finished-color anti-sketch guard + scene/full-feet anti-wallpaper guard"
+                + (" + reference-identity-prompt-scrub + low-style-ipadapter-guard" if is_reference_fullbody else "")
             ),
         }
     if _is_standing_sprite_production_request(output_type=output_type):
@@ -2040,6 +2302,12 @@ def _resolve_lora_stack(kwargs: Dict[str, Any], *, runtime_preset: Optional[Dict
     if not preset_key:
         if runtime_preset_name == PORTRAIT_PRODUCTION_PRESET:
             preset_key = "portrait_primary"
+        elif runtime_preset_name in {
+            KEY_VISUAL_SUBCULTURE_PRESET,
+            REFERENCE_IDENTITY_EXPERIMENTAL_PRESET,
+            REFERENCE_IDENTITY_FULLBODY_EXPERIMENTAL_PRESET,
+        }:
+            preset_key = "stable"
         elif runtime_preset_name in {
             CHARACTER_PRODUCTION_PRESET,
             PROFILE_ICON_PRODUCTION_PRESET,
@@ -2452,6 +2720,67 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         )
         operation = str(kwargs.get("operation") or "").strip()
         source_image_path = str(kwargs.get("source_image_path") or kwargs.get("source_image") or "").strip()
+        reference_image_path = str(kwargs.get("reference_image_path") or kwargs.get("reference_image") or "").strip()
+        reference_identity_experiment_enabled = _truthy_flag(kwargs.get("experimental_reference_identity"))
+        allow_reference_workflow_family_change = _truthy_flag(kwargs.get("allow_reference_workflow_family_change"))
+        reference_identity_requested = (
+            operation == REFERENCE_IDENTITY_TXT2IMG_OPERATION
+            or requested_workflow_key in REFERENCE_IDENTITY_EXPERIMENTAL_WORKFLOW_KEYS
+            or reference_identity_experiment_enabled
+        )
+        reference_identity_explicit_route = (
+            bool(reference_image_path)
+            and operation == REFERENCE_IDENTITY_TXT2IMG_OPERATION
+            and requested_workflow_key in REFERENCE_IDENTITY_EXPERIMENTAL_WORKFLOW_KEYS
+        )
+        if reference_image_path and not reference_identity_requested:
+            return error_response(
+                error=(
+                    "reference_image_path is accepted only by the explicit experimental reference identity route. "
+                    "Set operation=reference_identity_txt2img, "
+                    "and workflow_key=character_reference_key_visual_experimental_v1. "
+                    "experimental_reference_identity=true is recorded when provided, but is not the routing key."
+                ),
+                error_type="reference_identity_requires_explicit_experiment",
+                provider=self.name,
+                model=checkpoint,
+                prompt=prompt,
+                aspect_ratio=aspect,
+                extra={
+                    "reference_identity_status": "blocked_to_prevent_default_route_contamination",
+                    "required_arguments": [
+                        "operation=reference_identity_txt2img",
+                        "workflow_key=character_reference_key_visual_experimental_v1 or fullbody_v8_reference_identity_experimental_v1",
+                        "reference_image_path",
+                    ],
+                    "optional_audit_flag": "experimental_reference_identity=true",
+                },
+            )
+        if reference_identity_requested and not reference_identity_explicit_route:
+            return error_response(
+                error=(
+                    "Experimental reference identity generation requires explicit operation, workflow_key, and reference_image_path. "
+                    "This route is intentionally not available by partial inference."
+                ),
+                error_type="reference_identity_incomplete_guard",
+                provider=self.name,
+                model=checkpoint,
+                prompt=prompt,
+                aspect_ratio=aspect,
+                extra={
+                    "reference_identity_status": "blocked_to_prevent_partial_activation",
+                    "operation": operation or None,
+                    "workflow_key": requested_workflow_key or None,
+                    "experimental_reference_identity": reference_identity_experiment_enabled,
+                    "has_reference_image_path": bool(reference_image_path),
+                    "required_arguments": [
+                        "operation=reference_identity_txt2img",
+                        "workflow_key=character_reference_key_visual_experimental_v1 or fullbody_v8_reference_identity_experimental_v1",
+                        "reference_image_path",
+                    ],
+                    "optional_audit_flag": "experimental_reference_identity=true",
+                },
+            )
         if _looks_like_source_image_task_prompt_without_args(
             prompt,
             source_image_path=source_image_path,
@@ -3881,93 +4210,241 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 },
             )
 
-        workflow: Dict[str, Any] = {
-            "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
-            "2": {"inputs": {"width": width, "height": height, "batch_size": 1}, "class_type": "EmptyLatentImage"},
-            "3": {"inputs": {"text": prompt_for_generation, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
-            "4": {"inputs": {"text": negative_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
-            "5": {
-                "inputs": {
-                    "seed": seed,
-                    "steps": steps,
-                    "cfg": cfg,
-                    "sampler_name": sampler_name,
-                    "scheduler": scheduler,
-                    "denoise": denoise,
-                    "model": ["1", 0],
-                    "positive": ["3", 0],
-                    "negative": ["4", 0],
-                    "latent_image": ["2", 0],
-                },
-                "class_type": "KSampler",
-            },
-            "7": {
-                "inputs": {
-                    "samples": ["5", 0],
-                    "vae": ["1", 2] if vae is None else ["6", 0],
-                },
-                "class_type": "VAEDecode",
-            },
-            "8": {"inputs": {"filename_prefix": filename_prefix, "images": ["7", 0]}, "class_type": "SaveImage"},
-        }
-
-        if vae is not None:
-            workflow["6"] = {"inputs": {"vae_name": vae}, "class_type": "VAELoader"}
-
-        model_source = ["1", 0]
-        clip_source = ["1", 1]
-        for index, lora in enumerate(lora_stack, start=1):
-            # ComfyUI's prompt API expects numeric node identifiers. Non-numeric
-            # IDs such as L1 validate poorly on some servers and can cause 400s.
-            node_id = str(20 + index)
-            workflow[node_id] = {
-                "inputs": {
-                    "model": model_source,
-                    "clip": clip_source,
-                    "lora_name": lora["name"],
-                    "strength_model": lora["weight"],
-                    "strength_clip": lora.get("clip_weight", lora["weight"]),
-                },
-                "class_type": "LoraLoader",
+        reference_identity_evidence: Optional[Dict[str, Any]] = None
+        if reference_identity_requested:
+            reference_input_path, reference_resolution = _resolve_existing_source_image_path(reference_image_path)
+            if reference_input_path is None:
+                return error_response(
+                    error=f"reference_image_path not found for experimental reference identity route: {reference_image_path}",
+                    error_type="reference_image_not_found",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                    extra={
+                        "reference_identity_status": "blocked_missing_reference_image",
+                        "requested_reference_image_path": reference_image_path,
+                        "reference_path_resolution": reference_resolution,
+                    },
+                )
+            reference_source_metadata = _load_reference_identity_source_metadata(reference_input_path)
+            reference_source_workflow_key = str(
+                reference_source_metadata.get("workflow_key")
+                or (reference_source_metadata.get("report_evidence") or {}).get("workflow_key")
+                or ""
+            ).strip()
+            reference_source_audit = reference_source_metadata.get("workflow_node_audit")
+            if not isinstance(reference_source_audit, dict):
+                reference_source_audit = (reference_source_metadata.get("report_evidence") or {}).get("workflow_node_audit")
+            if not isinstance(reference_source_audit, dict):
+                reference_source_audit = {}
+            reference_source_model_stack_verified = reference_source_metadata.get("model_stack_verified")
+            if reference_source_model_stack_verified is None:
+                reference_source_model_stack_verified = (reference_source_metadata.get("report_evidence") or {}).get("model_stack_verified")
+            reference_source_family = _reference_identity_workflow_family(reference_source_workflow_key)
+            requested_reference_family = _reference_identity_workflow_family(requested_workflow_key)
+            if reference_source_metadata and reference_source_model_stack_verified is False:
+                return error_response(
+                    error=(
+                        "Reference identity source image metadata reports an unverified model stack. "
+                        "Use a verified source image or explicitly regenerate the source before reference identity work."
+                    ),
+                    error_type="reference_identity_source_model_stack_unverified",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                    extra={
+                        "reference_identity_status": "blocked_unverified_reference_source",
+                        "requested_reference_image_path": reference_image_path,
+                        "resolved_reference_image_path": str(reference_input_path),
+                        "reference_source_workflow_key": reference_source_workflow_key or None,
+                        "reference_source_model_stack_verified": reference_source_model_stack_verified,
+                    },
+                )
+            if (
+                reference_source_family
+                and requested_reference_family
+                and reference_source_family != requested_reference_family
+                and not allow_reference_workflow_family_change
+            ):
+                return error_response(
+                    error=(
+                        "Reference identity workflow family mismatch. "
+                        "The reference image was generated on a different workflow family than the requested reference route. "
+                        "Set allow_reference_workflow_family_change=true only when intentionally converting between image types."
+                    ),
+                    error_type="reference_identity_workflow_family_mismatch",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                    extra={
+                        "reference_identity_status": "blocked_workflow_family_mismatch",
+                        "requested_reference_image_path": reference_image_path,
+                        "resolved_reference_image_path": str(reference_input_path),
+                        "reference_source_workflow_key": reference_source_workflow_key or None,
+                        "reference_source_family": reference_source_family,
+                        "requested_workflow_key": requested_workflow_key,
+                        "requested_reference_family": requested_reference_family,
+                        "allow_reference_workflow_family_change": allow_reference_workflow_family_change,
+                    },
+                )
+            try:
+                uploaded_reference = _upload_comfy_input_file(base_url, reference_input_path)
+            except Exception as exc:  # noqa: BLE001
+                return error_response(
+                    error=f"ComfyUI reference image upload failed: {exc}",
+                    error_type="api_error",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                    extra={
+                        "reference_identity_status": "blocked_reference_upload_failed",
+                        "requested_reference_image_path": reference_image_path,
+                        "resolved_reference_image_path": str(reference_input_path),
+                    },
+                )
+            workflow_key = requested_workflow_key
+            preset_name = (
+                REFERENCE_IDENTITY_FULLBODY_EXPERIMENTAL_PRESET
+                if requested_workflow_key == CHARACTER_REFERENCE_FULLBODY_EXPERIMENTAL_WORKFLOW_KEY
+                else REFERENCE_IDENTITY_EXPERIMENTAL_PRESET
+            )
+            prompt_translation_policy = (
+                f"{prompt_translation_policy} + experimental-reference-identity-ipadapter-guarded"
+            )
+            if category == DEFAULT_CATEGORY:
+                category = "experimental_reference_identity"
+            workflow, workflow_node_audit, model_stack_verified = _build_reference_identity_experimental_workflow(
+                checkpoint=checkpoint,
+                vae=vae,
+                lora_stack=lora_stack,
+                reference_image_name=str(uploaded_reference["name"]),
+                prompt=prompt_for_generation,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                seed=seed,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                denoise=denoise,
+                filename_prefix=filename_prefix,
+            )
+            reference_identity_evidence = {
+                "reference_identity_status": "experimental_only",
+                "default_route_contamination_guard": True,
+                "explicit_route_guard": True,
+                "required_explicit_operation": REFERENCE_IDENTITY_TXT2IMG_OPERATION,
+                "required_explicit_workflow_key": requested_workflow_key,
+                "experimental_reference_identity": reference_identity_experiment_enabled,
+                "optional_audit_flag_present": reference_identity_experiment_enabled,
+                "reference_source_workflow_key": reference_source_workflow_key or None,
+                "reference_source_family": reference_source_family,
+                "reference_source_model_stack_verified": reference_source_model_stack_verified,
+                "reference_source_workflow_node_audit": reference_source_audit,
+                "reference_target_stack_policy": "same workflow family required unless allow_reference_workflow_family_change=true; IPAdapter is identity helper only, not production style source",
+                "requested_reference_family": requested_reference_family,
+                "allow_reference_workflow_family_change": allow_reference_workflow_family_change,
+                "reference_image": str(reference_input_path),
+                "reference_image_path": str(reference_input_path),
+                "requested_reference_image_path": reference_resolution.get("requested_source_image_path"),
+                "resolved_reference_image_path": reference_resolution.get("resolved_source_image_path"),
+                "reference_path_resolution": reference_resolution.get("source_path_resolution"),
+                "uploaded_reference": uploaded_reference,
+                "ipadapter": workflow_node_audit.get("ipadapter"),
             }
-            model_source = [node_id, 0]
-            clip_source = [node_id, 1]
-        if lora_stack:
-            workflow["3"]["inputs"]["clip"] = clip_source
-            workflow["4"]["inputs"]["clip"] = clip_source
-            workflow["5"]["inputs"]["model"] = model_source
-        workflow_node_audit = {
-            "audit_version": "comfy_txt2img_model_stack_v1",
-            "checkpoint_node": "1",
-            "checkpoint": workflow.get("1", {}).get("inputs", {}).get("ckpt_name"),
-            "vae_node": "6" if vae is not None else "1",
-            "vae": workflow.get("6", {}).get("inputs", {}).get("vae_name") if vae is not None else "checkpoint_builtin_vae",
-            "lora_nodes": [
-                {
-                    "node": node_id,
-                    "name": node.get("inputs", {}).get("lora_name"),
-                    "weight": node.get("inputs", {}).get("strength_model"),
-                    "clip_weight": node.get("inputs", {}).get("strength_clip"),
+        else:
+            workflow = {
+                "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
+                "2": {"inputs": {"width": width, "height": height, "batch_size": 1}, "class_type": "EmptyLatentImage"},
+                "3": {"inputs": {"text": prompt_for_generation, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+                "4": {"inputs": {"text": negative_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+                "5": {
+                    "inputs": {
+                        "seed": seed,
+                        "steps": steps,
+                        "cfg": cfg,
+                        "sampler_name": sampler_name,
+                        "scheduler": scheduler,
+                        "denoise": denoise,
+                        "model": ["1", 0],
+                        "positive": ["3", 0],
+                        "negative": ["4", 0],
+                        "latent_image": ["2", 0],
+                    },
+                    "class_type": "KSampler",
+                },
+                "7": {
+                    "inputs": {
+                        "samples": ["5", 0],
+                        "vae": ["1", 2] if vae is None else ["6", 0],
+                    },
+                    "class_type": "VAEDecode",
+                },
+                "8": {"inputs": {"filename_prefix": filename_prefix, "images": ["7", 0]}, "class_type": "SaveImage"},
+            }
+
+            if vae is not None:
+                workflow["6"] = {"inputs": {"vae_name": vae}, "class_type": "VAELoader"}
+
+            model_source = ["1", 0]
+            clip_source = ["1", 1]
+            for index, lora in enumerate(lora_stack, start=1):
+                # ComfyUI's prompt API expects numeric node identifiers. Non-numeric
+                # IDs such as L1 validate poorly on some servers and can cause 400s.
+                node_id = str(20 + index)
+                workflow[node_id] = {
+                    "inputs": {
+                        "model": model_source,
+                        "clip": clip_source,
+                        "lora_name": lora["name"],
+                        "strength_model": lora["weight"],
+                        "strength_clip": lora.get("clip_weight", lora["weight"]),
+                    },
+                    "class_type": "LoraLoader",
                 }
-                for node_id, node in sorted(workflow.items(), key=lambda item: item[0])
-                if isinstance(node, dict) and node.get("class_type") == "LoraLoader"
-            ],
-            "ksampler_node": "5",
-            "steps": workflow.get("5", {}).get("inputs", {}).get("steps"),
-            "cfg": workflow.get("5", {}).get("inputs", {}).get("cfg"),
-            "sampler_name": workflow.get("5", {}).get("inputs", {}).get("sampler_name"),
-            "scheduler": workflow.get("5", {}).get("inputs", {}).get("scheduler"),
-            "width": workflow.get("2", {}).get("inputs", {}).get("width"),
-            "height": workflow.get("2", {}).get("inputs", {}).get("height"),
-        }
-        model_stack_verified = (
-            workflow_node_audit["checkpoint"] == checkpoint
-            and workflow_node_audit["vae"] == (vae if vae is not None else "checkpoint_builtin_vae")
-            and [
-                item["name"]
-                for item in workflow_node_audit["lora_nodes"]
-            ] == [item["name"] for item in lora_stack]
-        )
+                model_source = [node_id, 0]
+                clip_source = [node_id, 1]
+            if lora_stack:
+                workflow["3"]["inputs"]["clip"] = clip_source
+                workflow["4"]["inputs"]["clip"] = clip_source
+                workflow["5"]["inputs"]["model"] = model_source
+            workflow_node_audit = {
+                "audit_version": "comfy_txt2img_model_stack_v1",
+                "checkpoint_node": "1",
+                "checkpoint": workflow.get("1", {}).get("inputs", {}).get("ckpt_name"),
+                "vae_node": "6" if vae is not None else "1",
+                "vae": workflow.get("6", {}).get("inputs", {}).get("vae_name") if vae is not None else "checkpoint_builtin_vae",
+                "lora_nodes": [
+                    {
+                        "node": node_id,
+                        "name": node.get("inputs", {}).get("lora_name"),
+                        "weight": node.get("inputs", {}).get("strength_model"),
+                        "clip_weight": node.get("inputs", {}).get("strength_clip"),
+                    }
+                    for node_id, node in sorted(workflow.items(), key=lambda item: item[0])
+                    if isinstance(node, dict) and node.get("class_type") == "LoraLoader"
+                ],
+                "ksampler_node": "5",
+                "steps": workflow.get("5", {}).get("inputs", {}).get("steps"),
+                "cfg": workflow.get("5", {}).get("inputs", {}).get("cfg"),
+                "sampler_name": workflow.get("5", {}).get("inputs", {}).get("sampler_name"),
+                "scheduler": workflow.get("5", {}).get("inputs", {}).get("scheduler"),
+                "width": workflow.get("2", {}).get("inputs", {}).get("width"),
+                "height": workflow.get("2", {}).get("inputs", {}).get("height"),
+            }
+            model_stack_verified = (
+                workflow_node_audit["checkpoint"] == checkpoint
+                and workflow_node_audit["vae"] == (vae if vae is not None else "checkpoint_builtin_vae")
+                and [
+                    item["name"]
+                    for item in workflow_node_audit["lora_nodes"]
+                ] == [item["name"] for item in lora_stack]
+            )
         payload = {"prompt": workflow}
 
         try:
@@ -4125,6 +4602,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "workflow_key": workflow_key,
             "requested_output_type": requested_output_type,
             "output_type": normalized_output_type,
+            "reference_identity_evidence": reference_identity_evidence,
         }
         prompt_payload = {
             "prompt": prompt_for_generation,
@@ -4161,6 +4639,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "workflow_key": workflow_key,
             "requested_output_type": requested_output_type,
             "output_type": normalized_output_type,
+            "reference_identity_evidence": reference_identity_evidence,
         }
         metadata = {
             "provider": self.name,
@@ -4191,6 +4670,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "loras": lora_stack,
             "workflow_node_audit": workflow_node_audit,
             "model_stack_verified": model_stack_verified,
+            "reference_identity_evidence": reference_identity_evidence,
             "controlnet_used": False,
             "seed": seed,
             "sampler": sampler_name,
@@ -4298,6 +4778,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "Use evidence.workflow_key for the workflow key. "
                 "Do not substitute workflow_path when reporting workflow_key."
             ),
+            "reference_identity_evidence": reference_identity_evidence,
         }
         report_evidence = {
             "operation": "txt2img",
@@ -4340,6 +4821,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "output_resolution": output_resolution,
             "actual_width": actual_width,
             "actual_height": actual_height,
+            "reference_identity_evidence": reference_identity_evidence,
         }
         _update_metadata_report_evidence(bundle["metadata_path"], report_evidence)
         return success_response(
@@ -4371,6 +4853,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "workflow_key": workflow_key,
                 "requested_output_type": requested_output_type,
                 "output_type": normalized_output_type,
+                "reference_identity_evidence": reference_identity_evidence,
                 "seed": seed,
                 "vae": vae,
                 "vae_report_value": evidence["vae_report_value"],

@@ -1734,6 +1734,36 @@ def _extract_commander_image_task_metadata(message_text: str) -> tuple[str | Non
     return (project_name or None, artifact_name or None)
 
 
+def _extract_commander_image_tool_args(message_text: str) -> dict[str, Any]:
+    body = str(message_text or "")
+    if "[COMMANDER_DISPATCH]" not in body:
+        return {}
+    for json_match in re.finditer(r"```(?:json)?\s*(.*?)```", body, re.IGNORECASE | re.DOTALL):
+        raw = json_match.group(1).strip()
+        if raw.lower().startswith("json\n"):
+            raw = raw.split("\n", 1)[1].strip()
+        try:
+            tool_args = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(tool_args, dict):
+            continue
+        if any(
+            key in tool_args
+            for key in (
+                "prompt",
+                "operation",
+                "project_name",
+                "artifact_name",
+                "workflow_key",
+                "source_image_path",
+                "reference_image_path",
+            )
+        ):
+            return tool_args
+    return {}
+
+
 def _guard_unverified_image_generation_claim(
     text: str,
     *,
@@ -19997,7 +20027,8 @@ class GatewayRunner:
                         "task_id": session_id,
                     }
                     _commander_project_name, _commander_artifact_name = _extract_commander_image_task_metadata(message)
-                    if _commander_project_name or _commander_artifact_name:
+                    _commander_image_args = _extract_commander_image_tool_args(message)
+                    if _commander_project_name or _commander_artifact_name or _commander_image_args:
                         try:
                             from tools.image_generation_tool import register_image_task_metadata
 
@@ -20005,6 +20036,7 @@ class GatewayRunner:
                                 session_id,
                                 project_name=_commander_project_name,
                                 artifact_name=_commander_artifact_name,
+                                image_args=_commander_image_args,
                             )
                         except Exception:
                             logger.debug("Could not register Commander image task metadata", exc_info=True)

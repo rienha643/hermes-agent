@@ -2101,6 +2101,244 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["workflow_key"] == "character_key_visual_txt2img_v1"
         assert result["cfg_scale"] == 6.5
 
+    def test_reference_image_path_without_explicit_experiment_is_blocked(self, monkeypatch, tmp_path):
+        reference_image = tmp_path / "reference.png"
+        reference_image.write_bytes(PNG_1PX)
+
+        result, _captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt="SFW key visual, same heroine, cinematic academy library",
+            negative_prompt="text, logo, watermark",
+            output_type="key_visual",
+            reference_image_path=str(reference_image),
+        )
+
+        assert result["success"] is False
+        assert result["error_type"] == "reference_identity_requires_explicit_experiment"
+        assert result["reference_identity_status"] == "blocked_to_prevent_default_route_contamination"
+
+    def test_reference_identity_experiment_accepts_explicit_operation_workflow_and_reference_path(
+        self, monkeypatch, tmp_path
+    ):
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        reference_image = tmp_path / "reference.png"
+        reference_image.write_bytes(PNG_1PX)
+        uploaded = {
+            "name": "reference.png",
+            "subfolder": "",
+            "type": "input",
+            "source_path": str(reference_image),
+        }
+        monkeypatch.setattr(comfy_mod, "_upload_comfy_input_file", lambda *_args, **_kwargs: uploaded)
+
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt="SFW key visual, same heroine identity as reference, academy poster",
+            negative_prompt="text, logo, watermark, different character",
+            output_type="key_visual",
+            operation="reference_identity_txt2img",
+            workflow_key="character_reference_key_visual_experimental_v1",
+            reference_image_path=str(reference_image),
+        )
+
+        assert result["success"] is True
+        assert result["preset"] == "reference_identity_experimental_v1"
+        assert result["workflow_key"] == "character_reference_key_visual_experimental_v1"
+        evidence = captured["metadata"]["reference_identity_evidence"]
+        assert evidence["reference_identity_status"] == "experimental_only"
+        assert evidence["explicit_route_guard"] is True
+        assert evidence["experimental_reference_identity"] is False
+        assert evidence["optional_audit_flag_present"] is False
+        assert captured["metadata"]["loras"] == [
+            {
+                "preset": "stable",
+                "name": "00_illustrious_style_candidates\\pornmaster-Aesthetics-v2-lora.safetensors",
+                "weight": 0.15,
+                "use_case": "default user-approved subculture character illustration",
+                "clip_weight": 0.15,
+            }
+        ]
+        assert captured["workflow_json"]["53"]["class_type"] == "IPAdapterAdvanced"
+
+    def test_reference_identity_experiment_uses_ipadapter_only_with_full_guard(self, monkeypatch, tmp_path):
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        reference_image = tmp_path / "reference.png"
+        reference_image.write_bytes(PNG_1PX)
+        uploaded = {
+            "name": "reference.png",
+            "subfolder": "",
+            "type": "input",
+            "source_path": str(reference_image),
+        }
+        monkeypatch.setattr(comfy_mod, "_upload_comfy_input_file", lambda *_args, **_kwargs: uploaded)
+
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt=(
+                "SFW promotional key visual, same character identity as reference, "
+                "magical academy library, elegant heroine, cinematic lighting"
+            ),
+            negative_prompt="text, logo, watermark, different hair color, different outfit",
+            output_type="key_visual",
+            operation="reference_identity_txt2img",
+            workflow_key="character_reference_key_visual_experimental_v1",
+            experimental_reference_identity=True,
+            reference_image_path=str(reference_image),
+        )
+
+        assert result["success"] is True
+        assert result["preset"] == "reference_identity_experimental_v1"
+        assert result["workflow_key"] == "character_reference_key_visual_experimental_v1"
+        assert captured["metadata"]["workflow_key"] == "character_reference_key_visual_experimental_v1"
+        assert captured["metadata"]["category"] == "experimental_reference_identity"
+        assert captured["metadata"]["loras"] == [
+            {
+                "preset": "stable",
+                "name": "00_illustrious_style_candidates\\pornmaster-Aesthetics-v2-lora.safetensors",
+                "weight": 0.15,
+                "use_case": "default user-approved subculture character illustration",
+                "clip_weight": 0.15,
+            }
+        ]
+        assert captured["metadata"]["reference_identity_evidence"]["reference_identity_status"] == "experimental_only"
+        assert captured["metadata"]["reference_identity_evidence"]["default_route_contamination_guard"] is True
+        assert captured["metadata"]["reference_identity_evidence"]["uploaded_reference"] == uploaded
+        assert captured["workflow_json"]["50"]["class_type"] == "IPAdapterModelLoader"
+        assert captured["workflow_json"]["51"]["class_type"] == "CLIPVisionLoader"
+        assert captured["workflow_json"]["52"]["class_type"] == "LoadImage"
+        assert captured["workflow_json"]["52"]["inputs"]["image"] == "reference.png"
+        assert captured["workflow_json"]["53"]["class_type"] == "IPAdapterAdvanced"
+        assert captured["workflow_json"]["53"]["inputs"]["model"] == ["21", 0]
+        assert captured["workflow_json"]["53"]["inputs"]["ipadapter"] == ["50", 0]
+        assert captured["workflow_json"]["53"]["inputs"]["clip_vision"] == ["51", 0]
+        assert captured["workflow_json"]["5"]["inputs"]["model"] == ["53", 0]
+        assert captured["prompt_payload"]["runtime_preset"] == "reference_identity_experimental_v1"
+        assert captured["prompt_payload"]["reference_identity_evidence"]["required_explicit_operation"] == "reference_identity_txt2img"
+        assert result["evidence"]["reference_identity_evidence"]["required_explicit_workflow_key"] == "character_reference_key_visual_experimental_v1"
+        assert result["report_evidence"]["reference_identity_evidence"]["experimental_reference_identity"] is True
+
+    def test_reference_identity_blocks_fullbody_reference_to_key_visual_without_override(self, monkeypatch, tmp_path):
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        reference_dir = tmp_path / "fullbody_reference"
+        reference_dir.mkdir()
+        reference_image = reference_dir / "reference.png"
+        reference_image.write_bytes(PNG_1PX)
+        sidecar_dir = reference_dir / "sidecar"
+        sidecar_dir.mkdir()
+        (sidecar_dir / "metadata.json").write_text(
+            json.dumps({"workflow_key": "fullbody_v8_scene_txt2img_v2"}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            comfy_mod,
+            "_upload_comfy_input_file",
+            lambda *_args, **_kwargs: {
+                "name": "reference.png",
+                "subfolder": "",
+                "type": "input",
+                "source_path": str(reference_image),
+            },
+        )
+
+        result, _captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt="SFW key visual, same heroine identity as reference, academy poster",
+            negative_prompt="text, logo, watermark, different character",
+            output_type="key_visual",
+            operation="reference_identity_txt2img",
+            workflow_key="character_reference_key_visual_experimental_v1",
+            experimental_reference_identity=True,
+            reference_image_path=str(reference_image),
+        )
+
+        assert result["success"] is False
+        assert result["error_type"] == "reference_identity_workflow_family_mismatch"
+        assert result["reference_identity_status"] == "blocked_workflow_family_mismatch"
+        assert result["reference_source_workflow_key"] == "fullbody_v8_scene_txt2img_v2"
+        assert result["reference_source_family"] == "fullbody"
+        assert result["requested_reference_family"] == "key_visual"
+
+    def test_reference_identity_fullbody_route_preserves_fullbody_v8_settings(self, monkeypatch, tmp_path):
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        reference_dir = tmp_path / "fullbody_reference"
+        reference_dir.mkdir()
+        reference_image = reference_dir / "reference.png"
+        reference_image.write_bytes(PNG_1PX)
+        sidecar_dir = reference_dir / "sidecar"
+        sidecar_dir.mkdir()
+        (sidecar_dir / "metadata.json").write_text(
+            json.dumps({"workflow_key": "fullbody_v8_scene_txt2img_v2"}),
+            encoding="utf-8",
+        )
+        uploaded = {
+            "name": "reference.png",
+            "subfolder": "",
+            "type": "input",
+            "source_path": str(reference_image),
+        }
+        monkeypatch.setattr(comfy_mod, "_upload_comfy_input_file", lambda *_args, **_kwargs: uploaded)
+
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt=(
+                "SFW fullbody anime game character illustration. "
+                "Use the reference image only as temporary identity guidance for this experiment: "
+                "same original heroine identity, same short pink bob hair silhouette, same teal blue eyes, "
+                "same navy academy uniform with red tie and sailor collar. "
+                "Preserve the fullbody_v8 image type: head-to-toe full body visible. "
+                "New scene: magical academy hall, visible shoes"
+            ),
+            negative_prompt="text, logo, watermark, different character",
+            output_type="fullbody",
+            operation="reference_identity_txt2img",
+            workflow_key="fullbody_v8_reference_identity_experimental_v1",
+            experimental_reference_identity=True,
+            reference_image_path=str(reference_image),
+        )
+
+        assert result["success"] is True
+        assert result["preset"] == "reference_identity_fullbody_experimental_v1"
+        assert result["workflow_key"] == "fullbody_v8_reference_identity_experimental_v1"
+        assert captured["metadata"]["workflow_key"] == "fullbody_v8_reference_identity_experimental_v1"
+        assert captured["metadata"]["reference_identity_evidence"]["reference_source_family"] == "fullbody"
+        assert captured["metadata"]["reference_identity_evidence"]["requested_reference_family"] == "fullbody"
+        assert captured["workflow_json"]["2"]["inputs"]["width"] == 1024
+        assert captured["workflow_json"]["2"]["inputs"]["height"] == 1536
+        assert captured["workflow_json"]["5"]["inputs"]["steps"] == 28
+        assert captured["workflow_json"]["5"]["inputs"]["cfg"] == 6.0
+        assert captured["workflow_json"]["5"]["inputs"]["sampler_name"] == "euler"
+        assert captured["workflow_json"]["5"]["inputs"]["scheduler"] == "normal"
+        assert captured["workflow_json"]["50"]["inputs"]["ipadapter_file"] == "ip-adapter-plus-face_sdxl_vit-h.safetensors"
+        assert captured["workflow_json"]["53"]["inputs"]["weight"] == 0.42
+        assert captured["workflow_json"]["53"]["inputs"]["weight_type"] == "linear"
+        assert captured["workflow_json"]["53"]["inputs"]["end_at"] == 0.55
+        assert captured["workflow_json"]["53"]["inputs"]["embeds_scaling"] == "V only"
+        assert captured["workflow_json"]["53"]["inputs"]["model"] == ["21", 0]
+        positive_prompt = captured["workflow_json"]["3"]["inputs"]["text"]
+        assert "Use the reference image" not in positive_prompt
+        assert "temporary identity guidance" not in positive_prompt
+        assert "this experiment" not in positive_prompt
+        assert "short pink bob hair silhouette" in positive_prompt
+        assert "teal blue eyes" in positive_prompt
+        assert "navy academy uniform" in positive_prompt
+        assert ", ," not in positive_prompt
+        assert "copied reference background" in captured["workflow_json"]["4"]["inputs"]["text"]
+        assert "background person" in captured["workflow_json"]["4"]["inputs"]["text"]
+        assert captured["metadata"]["loras"] == [
+            {
+                "preset": "stable",
+                "name": "00_illustrious_style_candidates\\pornmaster-Aesthetics-v2-lora.safetensors",
+                "weight": 0.15,
+                "use_case": "default user-approved subculture character illustration",
+                "clip_weight": 0.15,
+            }
+        ]
+
     def test_generate_routes_portrait_request_to_portrait_preset(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(
             monkeypatch,

@@ -407,6 +407,68 @@ class TestPluginDispatch:
             "height": None,
         }
 
+    def test_handle_image_generate_task_metadata_applies_reference_identity_args(self, monkeypatch, tmp_path):
+        from tools import image_generation_tool
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        captured = {}
+
+        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None, **kwargs):
+            captured.update(
+                {
+                    "prompt": prompt,
+                    "aspect_ratio": aspect_ratio,
+                    "task_id": task_id,
+                    "project_name": project_name,
+                    "artifact_name": artifact_name,
+                    **kwargs,
+                }
+            )
+            return json.dumps({"success": True, "image": "/tmp/result.png"})
+
+        monkeypatch.setattr(image_generation_tool, "_dispatch_to_plugin_provider", fake_dispatch)
+        image_generation_tool.register_image_task_metadata(
+            "reference-task-1",
+            image_args={
+                "operation": "reference_identity_txt2img",
+                "workflow_key": "character_reference_key_visual_experimental_v1",
+                "experimental_reference_identity": True,
+                "reference_image_path": "/Volumes/SSD_Hermes/HermesWork/Image/ref/heroine.png",
+                "output_type": "key_visual",
+                "project_name": "angelica_reference_identity_experimental_20260629",
+                "artifact_name": "angelica_reference_identity_experimental_v1",
+                "prompt": "same character identity as reference, SFW promotional key visual",
+                "negative_prompt": "different character, text, logo",
+                "live_generation_approved": True,
+            },
+        )
+
+        result = image_generation_tool._handle_image_generate(
+            {
+                "prompt": "model supplied prompt should not win",
+                "aspect_ratio": "portrait",
+                "operation": "txt2img",
+                "workflow_key": "character_key_visual_txt2img_v1",
+                "reference_image_path": "",
+            },
+            task_id="reference-task-1",
+        )
+
+        assert json.loads(result)["success"] is True
+        assert captured["prompt"] == "same character identity as reference, SFW promotional key visual"
+        assert captured["aspect_ratio"] == "portrait"
+        assert captured["task_id"] == "reference-task-1"
+        assert captured["project_name"] == "angelica_reference_identity_experimental_20260629"
+        assert captured["artifact_name"] == "angelica_reference_identity_experimental_v1"
+        assert captured["operation"] == "reference_identity_txt2img"
+        assert captured["workflow_key"] == "character_reference_key_visual_experimental_v1"
+        assert captured["experimental_reference_identity"] is True
+        assert captured["reference_image_path"] == "/Volumes/SSD_Hermes/HermesWork/Image/ref/heroine.png"
+        assert captured["output_type"] == "key_visual"
+        assert captured["negative_prompt"] == "different character, text, logo"
+        assert captured["live_generation_approved"] is True
+
     def test_dispatch_single_output_mode_reuses_cached_result_for_non_forge_provider(self, monkeypatch, tmp_path):
         from tools import image_generation_tool
         from agent import image_gen_registry as registry_module

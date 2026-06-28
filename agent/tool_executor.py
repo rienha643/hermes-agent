@@ -18,8 +18,10 @@ import json
 import logging
 import os
 import random
+import re
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 from agent.display import (
@@ -55,6 +57,151 @@ logger = logging.getLogger(__name__)
 # Maximum number of concurrent worker threads for parallel tool execution.
 # Mirrors the constant in ``run_agent`` for tests/imports that look here.
 _MAX_TOOL_WORKERS = 8
+
+_COMMANDER_IMAGE_ARG_KEYS = {
+    "operation",
+    "workflow_key",
+    "reference_image_path",
+    "reference_image",
+    "source_image_path",
+    "source_image",
+    "project_name",
+    "artifact_name",
+    "output_type",
+    "prompt",
+    "negative_prompt",
+    "live_generation_approved",
+    "experimental_reference_identity",
+    "allow_reference_workflow_family_change",
+    "style_preset",
+    "lora_preset",
+    "loras",
+    "vae",
+    "model",
+    "checkpoint",
+    "aspect_ratio",
+    "width",
+    "height",
+    "steps",
+    "cfg_scale",
+    "sampler_name",
+    "scheduler",
+    "seed",
+    "denoise",
+    "postprocess_preset",
+    "upscale_model",
+    "mask_target",
+    "mask_source",
+    "mask_box",
+    "mask_feather_px",
+    "grow_mask_by",
+}
+
+_COMMANDER_QUEUE_DIR = Path("/Volumes/SSD_Hermes/HermesCodexControl/commander_bridge/queue")
+
+
+def _looks_like_commander_image_hint(text: str) -> bool:
+    return (
+        "[COMMANDER_DISPATCH]" in text
+        and (
+            "image_generate 도구 인자 힌트" in text
+            or "image_generate tool args" in text
+        )
+    )
+
+
+def _extract_commander_image_args_from_text(text: str) -> dict:
+    if not _looks_like_commander_image_hint(text):
+        return {}
+    for block in re.findall(r"```(?:json)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL):
+        cleaned = block.strip()
+        if cleaned.lower().startswith("json\n"):
+            cleaned = cleaned.split("\n", 1)[1].strip()
+        try:
+            parsed = json.loads(cleaned)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            hinted = {k: v for k, v in parsed.items() if k in _COMMANDER_IMAGE_ARG_KEYS and v not in (None, "")}
+            if hinted:
+                return hinted
+    return {}
+
+
+def _commander_queue_args_from_text(text: str) -> dict:
+    if "[COMMANDER_DISPATCH]" not in text:
+        return {}
+    queue_match = re.search(r"^queue_id:\s*([A-Za-z0-9_.:-]+)\s*$", text, flags=re.MULTILINE)
+    if not queue_match:
+        return {}
+    queue_id = queue_match.group(1)
+    if "/" in queue_id or "\\" in queue_id:
+        return {}
+    queue_path = _COMMANDER_QUEUE_DIR / f"{queue_id}.json"
+    try:
+        queue_payload = json.loads(queue_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    command_text = queue_payload.get("command_text")
+    if not isinstance(command_text, str):
+        return {}
+    return _extract_commander_image_args_from_text(
+        "[COMMANDER_DISPATCH]\n"
+        f"queue_id: {queue_id}\n"
+        "[/COMMANDER_DISPATCH]\n\n"
+        f"{command_text}"
+    )
+
+
+def _message_content_text(message) -> str:
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return ""
+
+
+def _commander_image_args_from_messages(messages: list) -> dict:
+    for message in reversed(messages or []):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        text = _message_content_text(message)
+        hinted = _extract_commander_image_args_from_text(text)
+        if hinted:
+            return hinted
+        hinted = _commander_queue_args_from_text(text)
+        if hinted:
+            return hinted
+    return {}
+
+
+def _merge_commander_image_args(function_name: str, function_args: dict, messages: list) -> dict:
+    if function_name != "image_generate":
+        return function_args
+    hinted = _commander_image_args_from_messages(messages)
+    if not hinted:
+        return function_args
+    merged = dict(function_args or {})
+    changed = {}
+    for key, value in hinted.items():
+        if key not in merged or merged[key] in (None, "", [], {}):
+            merged[key] = value
+            changed[key] = value
+    if changed:
+        logger.info(
+            "Commander image_generate arg merge filled missing keys: %s",
+            sorted(changed),
+        )
+    return merged
 
 
 def _ra():
@@ -100,6 +247,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             function_args = {}
         if not isinstance(function_args, dict):
             function_args = {}
+        function_args = _merge_commander_image_args(function_name, function_args, messages)
 
         # Checkpoint for file-mutating tools
         if function_name in {"write_file", "patch"} and agent._checkpoint_mgr.enabled:
@@ -512,6 +660,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             function_args = {}
         if not isinstance(function_args, dict):
             function_args = {}
+        function_args = _merge_commander_image_args(function_name, function_args, messages)
 
         # Check plugin hooks for a block directive before executing.
         _block_msg: Optional[str] = None
