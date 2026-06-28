@@ -60,6 +60,14 @@ def test_queue_nas_sync_hook_launches_and_debounces(monkeypatch, tmp_path):
         artifact_path=artifact_path,
         source_root=source_root,
     )
+    sibling_artifact_path = source_root / "artifact-2.png"
+    sibling_artifact_path.write_bytes(b"y")
+    assert not nas_sync_hooks.queue_nas_sync_hook(
+        category="image",
+        scope="task-1",
+        artifact_path=sibling_artifact_path,
+        source_root=source_root,
+    )
 
     assert len(launched) == 1
     assert launched[0][0] == str(Path(nas_sync_hooks.sys.executable))
@@ -317,6 +325,10 @@ def test_hook_state_dir_override_drives_lock_and_state_paths(monkeypatch, tmp_pa
     assert state_content["status"] == "success"
     assert state_content["artifact_verified"] is True
     assert state_content["mirror_verified"] is True
+    artifact_state = state_content["artifacts"]["artifact.docx"]
+    assert artifact_state["status"] == "success"
+    assert artifact_state["artifact_verified"] is True
+    assert artifact_state["mirror_verified"] is True
 
 
 def test_run_artifact_hook_writes_success_state_with_verified_hash(monkeypatch, tmp_path):
@@ -355,6 +367,10 @@ def test_run_artifact_hook_writes_success_state_with_verified_hash(monkeypatch, 
     assert state["dest_sha256"] == expected_hash
     assert state["relative_artifact_path"] == "artifact.md"
     assert state["destination_artifact"].endswith("\\Hermes\\documents\\reports\\artifact.md")
+    artifact_state = state["artifacts"]["artifact.md"]
+    assert artifact_state["status"] == "success"
+    assert artifact_state["artifact_sha256"] == expected_hash
+    assert artifact_state["dest_sha256"] == expected_hash
 
 
 def test_run_artifact_hook_writes_failed_state_on_hash_mismatch(monkeypatch, tmp_path):
@@ -389,6 +405,11 @@ def test_run_artifact_hook_writes_failed_state_on_hash_mismatch(monkeypatch, tmp
     assert state["artifact_verified"] is False
     assert state["mirror_verified"] is False
     assert "artifact hash mismatch" in state["last_error"]
+    artifact_state = state["artifacts"]["artifact.md"]
+    assert artifact_state["status"] == "failed"
+    assert artifact_state["artifact_verified"] is False
+    assert artifact_state["mirror_verified"] is False
+    assert "artifact hash mismatch" in artifact_state["last_error"]
 
 
 def test_document_artifact_nas_state_requires_verified_success(monkeypatch, tmp_path):
@@ -407,29 +428,33 @@ def test_document_artifact_nas_state_requires_verified_success(monkeypatch, tmp_
     monkeypatch.setattr(document_artifacts, "get_hermes_work_dir", fake_work_dir)
     monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_state_dir", lambda: state_dir)
 
-    key = nas_sync_hooks._artifact_hook_key("documents", "reports", artifact_path)
+    key = nas_sync_hooks._source_hook_key("documents", "reports", artifact_path.parent)
     state_path = state_dir / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()}.json"
     digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
 
     assert document_artifacts.infer_document_artifact_nas_state(artifact_path) == "확인 불가"
 
-    state_path.write_text(json.dumps({"status": "pending"}), encoding="utf-8")
+    state_path.write_text(json.dumps({"artifacts": {"artifact.md": {"status": "pending"}}}), encoding="utf-8")
     assert document_artifacts.infer_document_artifact_nas_state(artifact_path) == "NAS 동기화 진행중"
 
-    state_path.write_text(json.dumps({"status": "failed"}), encoding="utf-8")
+    state_path.write_text(json.dumps({"artifacts": {"artifact.md": {"status": "failed"}}}), encoding="utf-8")
     assert document_artifacts.infer_document_artifact_nas_state(artifact_path) == "NAS 동기화 실패"
 
-    state_path.write_text(json.dumps({"artifact_sha256": digest, "dest_sha256": digest}), encoding="utf-8")
+    state_path.write_text(json.dumps({"artifacts": {"artifact.md": {"artifact_sha256": digest, "dest_sha256": digest}}}), encoding="utf-8")
     assert document_artifacts.infer_document_artifact_nas_state(artifact_path) == "확인 불가"
 
     state_path.write_text(
         json.dumps(
             {
-                "status": "success",
-                "artifact_verified": True,
-                "mirror_verified": True,
-                "artifact_sha256": digest,
-                "dest_sha256": digest,
+                "artifacts": {
+                    "artifact.md": {
+                        "status": "success",
+                        "artifact_verified": True,
+                        "mirror_verified": True,
+                        "artifact_sha256": digest,
+                        "dest_sha256": digest,
+                    }
+                }
             }
         ),
         encoding="utf-8",
@@ -439,11 +464,15 @@ def test_document_artifact_nas_state_requires_verified_success(monkeypatch, tmp_
     state_path.write_text(
         json.dumps(
             {
-                "status": "success",
-                "artifact_verified": True,
-                "mirror_verified": True,
-                "artifact_sha256": digest,
-                "dest_sha256": "0" * 64,
+                "artifacts": {
+                    "artifact.md": {
+                        "status": "success",
+                        "artifact_verified": True,
+                        "mirror_verified": True,
+                        "artifact_sha256": digest,
+                        "dest_sha256": "0" * 64,
+                    }
+                }
             }
         ),
         encoding="utf-8",

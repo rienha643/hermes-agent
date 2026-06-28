@@ -444,6 +444,44 @@ def _document_artifact_category_scope(path: Path) -> tuple[Optional[str], Option
     return None, None
 
 
+def _nas_hook_state_path_for_key(key: str) -> Path:
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return nas_sync_hooks._resolve_nas_hook_state_dir() / f"{digest}.json"
+
+
+def _document_artifact_hook_source(category: str, artifact_path: Path) -> tuple[Path, Path]:
+    logical_path = _absolute_path(artifact_path)
+    if category == "story":
+        story_root = _absolute_path(get_hermes_work_dir("Story"))
+        return story_root, _relative_to_root_consistent(logical_path, story_root)
+    return logical_path.parent, Path(logical_path.name)
+
+
+def _nas_state_label_from_flat_state(state: dict[str, object]) -> str:
+    status = str(state.get("status") or "").strip().lower()
+    if status == "success":
+        source_hash = str(state.get("artifact_sha256") or "").strip().lower()
+        dest_hash = str(state.get("dest_sha256") or "").strip().lower()
+        if state.get("artifact_verified") is True and state.get("mirror_verified") is True and source_hash and source_hash == dest_hash:
+            return _DOCUMENT_ARTIFACT_NAS_STATE_GENERATED
+        return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
+    if status == "pending":
+        return _DOCUMENT_ARTIFACT_NAS_STATE_PENDING
+    if status == "failed":
+        return _DOCUMENT_ARTIFACT_NAS_STATE_FAILED
+    return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
+
+
+def _nas_state_label_from_source_state(state: dict[str, object], relative_artifact_path: Path) -> str:
+    artifacts = state.get("artifacts")
+    if isinstance(artifacts, dict):
+        artifact_state = artifacts.get(relative_artifact_path.as_posix())
+        if isinstance(artifact_state, dict):
+            return _nas_state_label_from_flat_state(artifact_state)
+        return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
+    return _nas_state_label_from_flat_state(state)
+
+
 def infer_document_artifact_nas_state(path: str | Path) -> str:
     """Best-effort NAS state label for a published HermesWork document artifact."""
     artifact_path = Path(path)
@@ -452,24 +490,20 @@ def infer_document_artifact_nas_state(path: str | Path) -> str:
         return _DOCUMENT_ARTIFACT_NAS_STATE_NONE
 
     try:
+        source_root, relative_artifact_path = _document_artifact_hook_source(category, artifact_path)
+        source_key = nas_sync_hooks._source_hook_key(category, scope or "", source_root)
+        source_state_path = _nas_hook_state_path_for_key(source_key)
+        if source_state_path.exists():
+            state = json.loads(source_state_path.read_text(encoding="utf-8"))
+            if isinstance(state, dict):
+                return _nas_state_label_from_source_state(state, relative_artifact_path)
+
         key = nas_sync_hooks._artifact_hook_key(category, scope or "", artifact_path)
-        state_path = nas_sync_hooks._resolve_nas_hook_state_dir() / f"{hashlib.sha256(key.encode('utf-8')).hexdigest()}.json"
-        if not state_path.exists():
-            return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        if not isinstance(state, dict):
-            return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
-        status = str(state.get("status") or "").strip().lower()
-        if status == "success":
-            source_hash = str(state.get("artifact_sha256") or "").strip().lower()
-            dest_hash = str(state.get("dest_sha256") or "").strip().lower()
-            if state.get("artifact_verified") is True and state.get("mirror_verified") is True and source_hash and source_hash == dest_hash:
-                return _DOCUMENT_ARTIFACT_NAS_STATE_GENERATED
-            return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
-        if status == "pending":
-            return _DOCUMENT_ARTIFACT_NAS_STATE_PENDING
-        if status == "failed":
-            return _DOCUMENT_ARTIFACT_NAS_STATE_FAILED
+        state_path = _nas_hook_state_path_for_key(key)
+        if state_path.exists():
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            if isinstance(state, dict):
+                return _nas_state_label_from_flat_state(state)
         return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN
     except Exception:
         return _DOCUMENT_ARTIFACT_NAS_STATE_UNKNOWN

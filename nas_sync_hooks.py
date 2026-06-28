@@ -106,6 +106,11 @@ def _artifact_hook_key(category: str, scope: str, artifact_path: Path) -> str:
     return f"{category}|{scope}|{resolved}"
 
 
+def _source_hook_key(category: str, scope: str, source_root: Path) -> str:
+    resolved = source_root.resolve(strict=False)
+    return f"{category}|{scope}|{resolved}"
+
+
 def _normalized_story_scope(scope: str) -> str:
     normalized = scope.strip()
     if normalized.casefold() in _STORY_SCOPE_EMPTY_NAMES:
@@ -151,7 +156,7 @@ def queue_nas_sync_hook(
         else (source_root if source_root.is_dir() else source_root.parent)
     )
 
-    key = _artifact_hook_key(normalized_category, normalized_scope, artifact_path)
+    key = _source_hook_key(normalized_category, normalized_scope, normalized_source_root)
     now = time.monotonic()
     with _IN_PROCESS_LOCK:
         last = _IN_PROCESS_LAST_LAUNCH.get(key)
