@@ -2377,8 +2377,12 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         category = str(kwargs.get("category") or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
         explicit_dimensions = isinstance(kwargs.get("width"), int) and int(kwargs.get("width")) > 0 and isinstance(kwargs.get("height"), int) and int(kwargs.get("height")) > 0
         width, height = _resolve_dimensions(aspect, kwargs.get("width"), kwargs.get("height"))
-        steps = int(kwargs.get("steps")) if isinstance(kwargs.get("steps"), int) and int(kwargs.get("steps")) > 0 else DEFAULT_STEPS
-        cfg = float(kwargs.get("cfg_scale")) if isinstance(kwargs.get("cfg_scale"), (int, float)) and float(kwargs.get("cfg_scale")) > 0 else DEFAULT_CFG
+        explicit_steps = isinstance(kwargs.get("steps"), int) and int(kwargs.get("steps")) > 0
+        explicit_cfg = isinstance(kwargs.get("cfg_scale"), (int, float)) and float(kwargs.get("cfg_scale")) > 0
+        explicit_sampler = isinstance(kwargs.get("sampler_name"), str) and bool(str(kwargs.get("sampler_name")).strip())
+        explicit_scheduler = isinstance(kwargs.get("scheduler"), str) and bool(str(kwargs.get("scheduler")).strip())
+        steps = int(kwargs.get("steps")) if explicit_steps else DEFAULT_STEPS
+        cfg = float(kwargs.get("cfg_scale")) if explicit_cfg else DEFAULT_CFG
         denoise = float(kwargs.get("denoise")) if isinstance(kwargs.get("denoise"), (int, float)) and float(kwargs.get("denoise")) > 0 else DEFAULT_DENOISE
         sampler_name = str(kwargs.get("sampler_name") or DEFAULT_SAMPLER).strip() or DEFAULT_SAMPLER
         scheduler = str(kwargs.get("scheduler") or "normal").strip() or "normal"
@@ -2467,10 +2471,15 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             source_prompt = str(runtime_preset.get("source_prompt") or source_prompt)
             prompt_for_generation = str(runtime_preset.get("prompt") or prompt)
             negative_prompt = str(runtime_preset.get("negative_prompt") or negative_prompt)
-            steps = int(runtime_preset.get("steps") or steps)
-            cfg = float(runtime_preset.get("cfg") or cfg)
-            sampler_name = str(runtime_preset.get("sampler_name") or sampler_name)
-            scheduler = str(runtime_preset.get("scheduler") or scheduler)
+            honor_explicit_generation_settings = preset_name in {PORTRAIT_PRODUCTION_PRESET}
+            if not explicit_steps or not honor_explicit_generation_settings:
+                steps = int(runtime_preset.get("steps") or steps)
+            if not explicit_cfg or not honor_explicit_generation_settings:
+                cfg = float(runtime_preset.get("cfg") or cfg)
+            if not explicit_sampler or not honor_explicit_generation_settings:
+                sampler_name = str(runtime_preset.get("sampler_name") or sampler_name)
+            if not explicit_scheduler or not honor_explicit_generation_settings:
+                scheduler = str(runtime_preset.get("scheduler") or scheduler)
             prompt_translation_policy = str(runtime_preset.get("prompt_translation_policy") or prompt_translation_policy)
             subject_dominance_value = runtime_preset.get("subject_dominance")
             subject_dominance_rule = runtime_preset.get("subject_dominance_rule")

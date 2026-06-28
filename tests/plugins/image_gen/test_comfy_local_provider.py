@@ -2116,6 +2116,35 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["evidence"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["prompt_translation_policy"] == "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize"
 
+    def test_generate_respects_explicit_sampler_settings_with_portrait_preset(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt="미소녀 얼굴 초상 portrait, ornate costume, clean subculture illustration",
+            negative_prompt="blurry, watermark",
+            output_type="portrait",
+            steps=28,
+            cfg_scale=5.0,
+            sampler_name="dpmpp_2m",
+            scheduler="karras",
+        )
+
+        assert result["success"] is True
+        assert captured["prompt_payload"]["runtime_preset"] == "portrait_production"
+        assert captured["prompt_payload"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
+        assert captured["prompt_payload"]["steps"] == 28
+        assert captured["prompt_payload"]["cfg"] == 5.0
+        assert captured["prompt_payload"]["sampler"] == "dpmpp_2m"
+        assert captured["prompt_payload"]["scheduler"] == "karras"
+        assert captured["workflow_json"]["5"]["inputs"]["steps"] == 28
+        assert captured["workflow_json"]["5"]["inputs"]["cfg"] == 5.0
+        assert captured["workflow_json"]["5"]["inputs"]["sampler_name"] == "dpmpp_2m"
+        assert captured["workflow_json"]["5"]["inputs"]["scheduler"] == "karras"
+        assert result["steps"] == 28
+        assert result["cfg_scale"] == 5.0
+        assert result["sampler_name"] == "dpmpp_2m"
+        assert result["scheduler"] == "karras"
+
     def test_generate_routes_standing_sprite_to_fullbody_v8_workflow(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(
             monkeypatch,
