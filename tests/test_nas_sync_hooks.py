@@ -567,12 +567,13 @@ def test_story_scope_rejections_match_backup_script(scope, expected):
     assert backup_mod._normalize_story_scope(scope) == expected
 
 
-def test_queue_nas_sync_hook_ignores_unsupported_category(monkeypatch, tmp_path):
+@pytest.mark.parametrize("category", ["games", "archive", "forge-models"])
+def test_queue_nas_sync_hook_ignores_daily_backup_only_categories(monkeypatch, tmp_path, category):
     monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_script", lambda: tmp_path / "missing.py")
     monkeypatch.setattr(nas_sync_hooks.subprocess, "Popen", pytest.fail)
 
     assert nas_sync_hooks.queue_nas_sync_hook(
-        category="archive",
+        category=category,
         scope="task-1",
         artifact_path=tmp_path / "artifact.txt",
         source_root=tmp_path,
