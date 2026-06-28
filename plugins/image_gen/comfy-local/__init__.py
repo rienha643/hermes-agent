@@ -73,6 +73,8 @@ DEFAULT_GLOSSY_SKIN_LORA = r"04_utility_skin_gloss\shiny_nai_ilxl_goofy_remade.s
 DEFAULT_GLOSSY_SKIN_LORA_WEIGHT = 0.20
 DEFAULT_VIDEO_SOURCE_STYLE_LORA = r"00_illustrious_style_candidates\K NAI Style.safetensors"
 DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT = 0.65
+DEFAULT_ADD_MICRO_DETAILS_LORA = r"03_utility_detail_enhancer\AddMicroDetails_Illustrious_v6.safetensors"
+DEFAULT_ADD_MICRO_DETAILS_LORA_WEIGHT = 0.20
 DEFAULT_DNF_ANIMA_EXPERIMENTAL_LORA = r"90_compatibility_review_non_illustrious_or_anima\DNF Anima-v2.safetensors"
 DEFAULT_DNF_ANIMA_EXPERIMENTAL_LORA_WEIGHT = 0.45
 
@@ -95,9 +97,28 @@ def _stable_lora_preset_entry() -> Dict[str, Any]:
     )
 
 
+def _portrait_primary_lora_preset_entries() -> List[Dict[str, Any]]:
+    return [
+        _lora_preset_entry(
+            "portrait_primary",
+            DEFAULT_VIDEO_SOURCE_STYLE_LORA,
+            DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT,
+            "user-selected top portrait/close-up style baseline from 2026-06-22 F candidate",
+        ),
+        _lora_preset_entry(
+            "portrait_primary_detail",
+            DEFAULT_ADD_MICRO_DETAILS_LORA,
+            DEFAULT_ADD_MICRO_DETAILS_LORA_WEIGHT,
+            "portrait/close-up micro-detail companion from WAI cross-format confirmation",
+        ),
+    ]
+
+
 STYLE_PRESET_LORAS: Dict[str, Any] = {
     "stable": _stable_lora_preset_entry(),
     "default": _stable_lora_preset_entry(),
+    "portrait_primary": _portrait_primary_lora_preset_entries(),
+    "portrait_closeup": _portrait_primary_lora_preset_entries(),
     "key_art": {
         "preset": "key_art",
         "name": DEFAULT_KEY_ART_LORA,
@@ -261,6 +282,12 @@ SOURCE_PRESERVING_DEPTH_CANNY_STYLE_LORA = r"00_illustrious_style_candidates\K N
 SOURCE_PRESERVING_DEPTH_CANNY_STYLE_LORA_WEIGHT = 0.65
 SOURCE_PRESERVING_DEPTH_CANNY_UTILITY_LORA = r"03_utility_detail_enhancer\AddMicroDetails_Illustrious_v6.safetensors"
 SOURCE_PRESERVING_DEPTH_CANNY_UTILITY_LORA_WEIGHT = 0.20
+PORTRAIT_PRIMARY_CHECKPOINT = SOURCE_PRESERVING_DEPTH_CANNY_CHECKPOINT
+PORTRAIT_PRIMARY_VAE = SOURCE_PRESERVING_DEPTH_CANNY_VAE
+PORTRAIT_PRIMARY_WIDTH = 1024
+PORTRAIT_PRIMARY_HEIGHT = 1216
+WIDER_CHARACTER_PRIMARY_CHECKPOINT = "pornmasterAnime_ilV5.safetensors"
+WIDER_CHARACTER_PRIMARY_VAE = SOURCE_PRESERVING_DEPTH_CANNY_VAE
 SOURCE_PRESERVING_DEPTH_CONTROLNET = "controlnet_zoe_depth_sdxl_1_0.safetensors"
 SOURCE_PRESERVING_CANNY_CONTROLNET = "illustriousXLCanny_v10.safetensors"
 LOCALIZED_RETOUCH_TARGET_KEYWORDS: Tuple[str, ...] = (
@@ -1723,6 +1750,8 @@ def _build_character_production_runtime(
             "subject_dominance": None,
             "subject_dominance_ratio": None,
             "subject_dominance_rule": None,
+            "checkpoint": WIDER_CHARACTER_PRIMARY_CHECKPOINT,
+            "vae": WIDER_CHARACTER_PRIMARY_VAE,
             "steps": KEY_VISUAL_SUBCULTURE_STEPS,
             "cfg": KEY_VISUAL_SUBCULTURE_CFG,
             "sampler_name": KEY_VISUAL_SUBCULTURE_SAMPLER,
@@ -1797,6 +1826,8 @@ def _build_character_production_runtime(
             "subject_dominance": None,
             "subject_dominance_ratio": None,
             "subject_dominance_rule": None,
+            "checkpoint": WIDER_CHARACTER_PRIMARY_CHECKPOINT,
+            "vae": WIDER_CHARACTER_PRIMARY_VAE,
             "steps": KEY_VISUAL_SUBCULTURE_STEPS,
             "cfg": KEY_VISUAL_SUBCULTURE_CFG,
             "sampler_name": KEY_VISUAL_SUBCULTURE_SAMPLER,
@@ -1821,6 +1852,8 @@ def _build_character_production_runtime(
             "subject_dominance": None,
             "subject_dominance_ratio": None,
             "subject_dominance_rule": None,
+            "checkpoint": WIDER_CHARACTER_PRIMARY_CHECKPOINT,
+            "vae": WIDER_CHARACTER_PRIMARY_VAE,
             "steps": CHARACTER_PRODUCTION_STEPS,
             "cfg": PORTRAIT_PRODUCTION_CFG,
             "sampler_name": PORTRAIT_PRODUCTION_SAMPLER,
@@ -1848,6 +1881,8 @@ def _build_character_production_runtime(
             "subject_dominance": None,
             "subject_dominance_ratio": None,
             "subject_dominance_rule": None,
+            "checkpoint": WIDER_CHARACTER_PRIMARY_CHECKPOINT,
+            "vae": WIDER_CHARACTER_PRIMARY_VAE,
             "steps": CHARACTER_PRODUCTION_STEPS,
             "cfg": CHARACTER_PRODUCTION_CFG,
             "sampler_name": CHARACTER_PRODUCTION_SAMPLER,
@@ -1875,6 +1910,8 @@ def _build_character_production_runtime(
             "subject_dominance": None,
             "subject_dominance_ratio": None,
             "subject_dominance_rule": None,
+            "checkpoint": WIDER_CHARACTER_PRIMARY_CHECKPOINT,
+            "vae": WIDER_CHARACTER_PRIMARY_VAE,
             "steps": KEY_VISUAL_SUBCULTURE_STEPS,
             "cfg": KEY_VISUAL_SUBCULTURE_CFG,
             "sampler_name": KEY_VISUAL_SUBCULTURE_SAMPLER,
@@ -1899,13 +1936,16 @@ def _build_character_production_runtime(
             "subject_dominance": None,
             "subject_dominance_ratio": None,
             "subject_dominance_rule": None,
+            "checkpoint": PORTRAIT_PRIMARY_CHECKPOINT,
+            "vae": PORTRAIT_PRIMARY_VAE,
+            "width": PORTRAIT_PRIMARY_WIDTH,
+            "height": PORTRAIT_PRIMARY_HEIGHT,
             "steps": CHARACTER_PRODUCTION_STEPS,
             "cfg": PORTRAIT_PRODUCTION_CFG,
             "sampler_name": PORTRAIT_PRODUCTION_SAMPLER,
             "scheduler": PORTRAIT_PRODUCTION_SCHEDULER,
             "seed": PORTRAIT_PRODUCTION_SEED,
-            "use_checkpoint_vae": True,
-            "prompt_translation_policy": "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize",
+            "prompt_translation_policy": "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize + portrait-primary-wai-knai-addmicro",
         }
     if not _is_character_production_request(prompt):
         return None
@@ -1928,6 +1968,8 @@ def _build_character_production_runtime(
         "subject_dominance": dominance_pct,
         "subject_dominance_ratio": normalized_subject_dominance,
         "subject_dominance_rule": subject_rule,
+        "checkpoint": WIDER_CHARACTER_PRIMARY_CHECKPOINT,
+        "vae": WIDER_CHARACTER_PRIMARY_VAE,
         "steps": CHARACTER_PRODUCTION_STEPS,
         "cfg": CHARACTER_PRODUCTION_CFG,
         "sampler_name": CHARACTER_PRODUCTION_SAMPLER,
@@ -1989,17 +2031,19 @@ def _resolve_lora_stack(kwargs: Dict[str, Any], *, runtime_preset: Optional[Dict
 
     preset_key = str(kwargs.get("lora_preset") or kwargs.get("style_preset") or "").strip().casefold().replace("-", "_").replace(" ", "_")
     runtime_preset_name = str((runtime_preset or {}).get("preset") or "")
-    if not preset_key and runtime_preset_name in {
-        CHARACTER_PRODUCTION_PRESET,
-        PROFILE_ICON_PRODUCTION_PRESET,
-        PORTRAIT_PRODUCTION_PRESET,
-        DIALOGUE_BUST_PRODUCTION_PRESET,
-        UPPER_BODY_PRODUCTION_PRESET,
-        FULLBODY_PRODUCTION_PRESET,
-        STANDING_SPRITE_PRODUCTION_PRESET,
-        INGAME_CG_PRODUCTION_PRESET,
-    }:
-        preset_key = "stable"
+    if not preset_key:
+        if runtime_preset_name == PORTRAIT_PRODUCTION_PRESET:
+            preset_key = "portrait_primary"
+        elif runtime_preset_name in {
+            CHARACTER_PRODUCTION_PRESET,
+            PROFILE_ICON_PRODUCTION_PRESET,
+            DIALOGUE_BUST_PRODUCTION_PRESET,
+            UPPER_BODY_PRODUCTION_PRESET,
+            FULLBODY_PRODUCTION_PRESET,
+            STANDING_SPRITE_PRODUCTION_PRESET,
+            INGAME_CG_PRODUCTION_PRESET,
+        }:
+            preset_key = "stable"
     if preset_key in STYLE_PRESET_LORAS:
         preset_config = STYLE_PRESET_LORAS[preset_key]
         preset_items = preset_config if isinstance(preset_config, list) else [preset_config]
@@ -2368,7 +2412,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             )
 
         base_url = _resolve_base_url()
-        checkpoint = str(kwargs.get("model") or _resolve_model()).strip() or DEFAULT_CHECKPOINT
+        configured_checkpoint = _resolve_model()
+        explicit_checkpoint = isinstance(kwargs.get("model"), str) and bool(str(kwargs.get("model")).strip())
+        checkpoint = str(kwargs.get("model") or configured_checkpoint).strip() or DEFAULT_CHECKPOINT
         requested_checkpoint = checkpoint
         explicit_vae = isinstance(kwargs.get("vae"), str) and bool(str(kwargs.get("vae")).strip())
         vae = str(kwargs.get("vae") or _resolve_vae() or "").strip() or None
@@ -2484,6 +2530,16 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             subject_dominance_value = runtime_preset.get("subject_dominance")
             subject_dominance_rule = runtime_preset.get("subject_dominance_rule")
             workflow_key = str(runtime_preset.get("workflow_key") or workflow_key)
+            preset_checkpoint = str(runtime_preset.get("checkpoint") or "").strip()
+            if preset_checkpoint and (
+                not explicit_checkpoint
+                or checkpoint in {DEFAULT_CHECKPOINT, configured_checkpoint}
+            ):
+                checkpoint = preset_checkpoint
+                requested_checkpoint = checkpoint
+            preset_vae = str(runtime_preset.get("vae") or "").strip()
+            if preset_vae and not explicit_vae:
+                vae = preset_vae
             if (
                 not explicit_dimensions
                 and isinstance(runtime_preset.get("width"), int)

@@ -235,6 +235,26 @@ class TestComfyLocalLoraPresetResolution:
             }
         ]
 
+    def test_portrait_production_uses_user_selected_f_stack_by_default(self):
+        stack = COMFY_MOD._resolve_lora_stack({}, runtime_preset={"preset": "portrait_production"})
+
+        assert stack == [
+            {
+                "preset": "portrait_primary",
+                "name": COMFY_MOD.DEFAULT_VIDEO_SOURCE_STYLE_LORA,
+                "weight": COMFY_MOD.DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT,
+                "use_case": "user-selected top portrait/close-up style baseline from 2026-06-22 F candidate",
+                "clip_weight": COMFY_MOD.DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT,
+            },
+            {
+                "preset": "portrait_primary_detail",
+                "name": COMFY_MOD.DEFAULT_ADD_MICRO_DETAILS_LORA,
+                "weight": COMFY_MOD.DEFAULT_ADD_MICRO_DETAILS_LORA_WEIGHT,
+                "use_case": "portrait/close-up micro-detail companion from WAI cross-format confirmation",
+                "clip_weight": COMFY_MOD.DEFAULT_ADD_MICRO_DETAILS_LORA_WEIGHT,
+            },
+        ]
+
     def test_key_art_style_preset_uses_pornmaster_key_visual_weight(self):
         stack = COMFY_MOD._resolve_lora_stack({"style_preset": "key_art"}, runtime_preset=None)
 
@@ -673,6 +693,8 @@ class TestComfyLocalImageGenProviderGenerate:
                 return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
             if url.endswith("/models/checkpoints"):
                 return Response(["waiIllustriousSDXL_v170.safetensors"])
+            if url.endswith("/models/vae"):
+                return Response(["Anime SDXL VAE DPipe Prototype.safetensors"])
             if "/history/" in url:
                 return Response(
                     {
@@ -1670,9 +1692,9 @@ class TestComfyLocalImageGenProviderGenerate:
             if url.endswith("/system_stats"):
                 return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
             if url.endswith("/models/checkpoints"):
-                return Response(["AOM3A1_orangemixs.safetensors"])
+                return Response(["AOM3A1_orangemixs.safetensors", "waiIllustriousSDXL_v170.safetensors"])
             if url.endswith("/models/vae"):
-                return Response(["animevae.pt"])
+                return Response(["animevae.pt", "Anime SDXL VAE DPipe Prototype.safetensors"])
             if "/history/" in url:
                 return Response(
                     {
@@ -1810,9 +1832,9 @@ class TestComfyLocalImageGenProviderGenerate:
             if url.endswith("/system_stats"):
                 return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
             if url.endswith("/models/checkpoints"):
-                return Response(["AOM3A1_orangemixs.safetensors"])
+                return Response(["AOM3A1_orangemixs.safetensors", "waiIllustriousSDXL_v170.safetensors"])
             if url.endswith("/models/vae"):
-                return Response(["animevae.pt"])
+                return Response(["animevae.pt", "Anime SDXL VAE DPipe Prototype.safetensors"])
             if "/history/" in url:
                 return Response({"pid-123": {"status": {"completed": True, "status_str": "success"}, "outputs": {"8": {"images": [{"filename": "ang_txt_001_por_01_00001_.png", "subfolder": "", "type": "output"}]}}}})
             raise AssertionError(f"unexpected GET {url}")
@@ -1897,7 +1919,12 @@ class TestComfyLocalCharacterProductionPreset:
             if url.endswith("/system_stats"):
                 return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
             if url.endswith("/models/checkpoints"):
-                return Response(["AOM3A1_orangemixs.safetensors", "animagine-xl-4.0-opt.safetensors"])
+                return Response([
+                    "AOM3A1_orangemixs.safetensors",
+                    "animagine-xl-4.0-opt.safetensors",
+                    "pornmasterAnime_ilV5.safetensors",
+                    "waiIllustriousSDXL_v170.safetensors",
+                ])
             if url.endswith("/models/vae"):
                 return Response(["Anime SDXL VAE DPipe Prototype.safetensors"])
             if "/history/" in url:
@@ -2087,11 +2114,13 @@ class TestComfyLocalCharacterProductionPreset:
         assert captured["prompt_payload"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert captured["metadata"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert captured["prompt_payload"]["width"] == 1024
-        assert captured["prompt_payload"]["height"] == 1536
+        assert captured["prompt_payload"]["height"] == 1216
         assert captured["prompt_payload"]["cfg"] == 6.0
         assert captured["prompt_payload"]["sampler"] == "euler"
         assert captured["prompt_payload"]["scheduler"] == "normal"
         assert captured["prompt_payload"]["seed"] == 12345
+        assert captured["metadata"]["checkpoint"] == "waiIllustriousSDXL_v170.safetensors"
+        assert captured["metadata"]["vae"] == "Anime SDXL VAE DPipe Prototype.safetensors"
         prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
         assert "upper body portrait" in prompt_text
         assert "light novel cover art" in prompt_text
@@ -2102,11 +2131,16 @@ class TestComfyLocalCharacterProductionPreset:
         assert "patterned ornamental backdrop" not in prompt_text
         assert "full-body character art" not in prompt_text
         assert "standing full body" not in prompt_text
-        assert captured["metadata"]["loras"][0]["preset"] == "stable"
-        assert captured["metadata"]["loras"][0]["weight"] == 0.15
-        assert captured["metadata"]["vae"] is None
-        assert "6" not in captured["workflow_json"]
-        assert captured["workflow_json"]["7"]["inputs"]["vae"] == ["1", 2]
+        assert [item["preset"] for item in captured["metadata"]["loras"]] == [
+            "portrait_primary",
+            "portrait_primary_detail",
+        ]
+        assert captured["metadata"]["loras"][0]["name"] == r"00_illustrious_style_candidates\K NAI Style.safetensors"
+        assert captured["metadata"]["loras"][0]["weight"] == 0.65
+        assert captured["metadata"]["loras"][1]["name"] == r"03_utility_detail_enhancer\AddMicroDetails_Illustrious_v6.safetensors"
+        assert captured["metadata"]["loras"][1]["weight"] == 0.20
+        assert captured["workflow_json"]["6"]["inputs"]["vae_name"] == "Anime SDXL VAE DPipe Prototype.safetensors"
+        assert captured["workflow_json"]["7"]["inputs"]["vae"] == ["6", 0]
         negative_text = captured["workflow_json"]["4"]["inputs"]["text"]
         assert "bad hands" in negative_text
         assert "extra fingers" in negative_text
@@ -2114,7 +2148,7 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["preset"] == "portrait_production"
         assert result["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["evidence"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
-        assert result["prompt_translation_policy"] == "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize"
+        assert result["prompt_translation_policy"] == "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize + portrait-primary-wai-knai-addmicro"
 
     def test_generate_respects_explicit_sampler_settings_with_portrait_preset(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(
@@ -2346,11 +2380,11 @@ class TestComfyLocalCharacterProductionPreset:
 
         assert result["success"] is True
         assert captured["prompt_payload"]["resolution_mode"] == "exact"
-        assert captured["prompt_payload"]["resolved_checkpoint"] == "AOM3A1_orangemixs.safetensors"
+        assert captured["prompt_payload"]["resolved_checkpoint"] == "pornmasterAnime_ilV5.safetensors"
         assert captured["metadata"]["preset"] == "character_production"
         assert captured["metadata"]["workflow_key"] == "character_key_visual_txt2img_v1"
         assert result["resolution_mode"] == "exact"
-        assert result["resolved_checkpoint"] == "AOM3A1_orangemixs.safetensors"
+        assert result["resolved_checkpoint"] == "pornmasterAnime_ilV5.safetensors"
 
 
 class TestComfyLocalPluginRegistration:
