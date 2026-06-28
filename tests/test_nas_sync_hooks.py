@@ -743,6 +743,57 @@ def test_backup_script_copy_only_allowed(monkeypatch, tmp_path):
     assert copied == 1
 
 
+def test_snapshot_retention_plan_is_dry_run_and_keeps_latest():
+    backup_mod = _load_backup_script_module()
+
+    plan = backup_mod.plan_snapshot_retention(
+        [
+            "20260620_033000",
+            "20260621_033000",
+            "20260622_033000",
+            "20260623_033000",
+            "manual_restore_note",
+            "#recycle",
+        ],
+        keep_latest=2,
+    )
+
+    assert plan["mode"] == "dry-run"
+    assert plan["delete_executed"] is False
+    assert plan["retained"] == ["20260623_033000", "20260622_033000"]
+    assert plan["delete_candidates"] == ["20260620_033000", "20260621_033000"]
+    assert plan["invalid_or_manual_entries"] == ["#recycle", "manual_restore_note"]
+    assert all("manual_restore_note" not in path for path in plan["delete_candidate_paths"])
+
+
+def test_snapshot_retention_plan_rejects_zero_keep_latest():
+    backup_mod = _load_backup_script_module()
+
+    with pytest.raises(backup_mod.BackupError, match="keep_latest=0"):
+        backup_mod.plan_snapshot_retention(["20260620_033000"], keep_latest=0)
+
+
+def test_snapshot_retention_dry_run_lists_posix_share_without_delete(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    cred = backup_mod.Credential(host="host", username="user", password="pass")
+    mount_point = tmp_path / "mount"
+    snapshot_root = mount_point / "_snapshots"
+    for name in ["20260620_033000", "20260621_033000", "20260622_033000", "manual"]:
+        (snapshot_root / name).mkdir(parents=True)
+
+    monkeypatch.setattr(backup_mod, "running_windows_share_toolchain", lambda: False)
+    monkeypatch.setattr(backup_mod, "_mount_share_posix", lambda cred: (mount_point, True))
+    monkeypatch.setattr(backup_mod, "_unmount_share_posix", lambda mount_point, owned_mount: None)
+
+    plan = backup_mod.snapshot_retention_dry_run(cred, keep_latest=1)
+
+    assert plan["delete_executed"] is False
+    assert plan["observed_entries"] == ["20260620_033000", "20260621_033000", "20260622_033000", "manual"]
+    assert plan["retained"] == ["20260622_033000"]
+    assert plan["delete_candidates"] == ["20260620_033000", "20260621_033000"]
+    assert plan["invalid_or_manual_entries"] == ["manual"]
+
+
 def test_backup_script_temp_mount_cleanup_allowed_outside_nas(monkeypatch, tmp_path):
     backup_mod = _load_backup_script_module()
     mount_point = tmp_path / "hermes_nas_mount_tmp"
