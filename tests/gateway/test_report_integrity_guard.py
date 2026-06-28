@@ -1,9 +1,10 @@
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
 
-from gateway.config import Platform
+from gateway.config import GatewayConfig, Platform
 from gateway.run import (
     _apply_post_delivery_evidence_overlay,
     _collect_gateway_nas_mirror_evidence,
@@ -11,9 +12,11 @@ from gateway.run import (
     _extract_commander_image_task_metadata,
     _evaluate_gateway_delivery_governance,
     _evaluate_gateway_user_report_governance,
+    _gateway_governance_event_log_path,
     _gateway_report_language,
     _gateway_report_omitted_present,
     _guard_unverified_image_generation_claim,
+    _record_gateway_governance_event,
     _sanitize_gateway_final_response,
     _validate_gateway_report_integrity,
 )
@@ -75,6 +78,46 @@ def test_gateway_user_report_governance_pings_on_omitted_protected_report():
 
     assert "GOVERNANCE PING" in ping
     assert "protected_report_omitted" in ping
+
+
+def test_gateway_governance_event_log_path_is_profile_local(tmp_path: Path):
+    config = GatewayConfig(sessions_dir=tmp_path / "sessions")
+
+    assert _gateway_governance_event_log_path(config) == tmp_path / "logs" / "governance_events.jsonl"
+
+
+def test_record_gateway_governance_event_writes_jsonl(tmp_path: Path):
+    config = GatewayConfig(sessions_dir=tmp_path / "sessions")
+
+    path = _record_gateway_governance_event(
+        config,
+        rule_id="report_integrity_invalid_success_claim",
+        severity="HARD_BLOCK",
+        action="REPLACE_RESPONSE",
+        profile="comfy",
+        platform="slack",
+        chat_id="C123",
+        thread_id="170.1",
+        session_id="session-1",
+        session_key="agent:main:slack:group:C123:170.1",
+        run_generation=3,
+        inbound_message_id="170.2",
+        response_sha256="a" * 64,
+        reasons=["output_path_missing"],
+        evidence_paths=["/tmp/result.png"],
+    )
+
+    assert path == tmp_path / "logs" / "governance_events.jsonl"
+    rows = path.read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 1
+    event = json.loads(rows[0])
+    assert event["schema"] == "gateway_governance_event_v1"
+    assert event["rule_id"] == "report_integrity_invalid_success_claim"
+    assert event["severity"] == "HARD_BLOCK"
+    assert event["action"] == "REPLACE_RESPONSE"
+    assert event["profile"] == "comfy"
+    assert event["reasons"] == ["output_path_missing"]
+    assert event["evidence_paths"] == ["/tmp/result.png"]
 
 
 def test_seir_no_artifact_guard_blocks_generation_progress_without_tool_call():

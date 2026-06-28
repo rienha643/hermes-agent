@@ -1047,6 +1047,96 @@ class GatewayPostDeliveryOverlayResult:
     decision: Any | None = None
 
 
+def _gateway_governance_event_log_path(config: Any) -> Path:
+    """Return the profile-local governance event ledger path."""
+    sessions_dir = getattr(config, "sessions_dir", None)
+    try:
+        if sessions_dir:
+            return Path(sessions_dir).expanduser().parent / "logs" / "governance_events.jsonl"
+    except Exception:
+        pass
+    home = os.getenv("HERMES_HOME") or "~/.hermes"
+    return Path(home).expanduser() / "logs" / "governance_events.jsonl"
+
+
+def _gateway_governance_rule_id_from_ping(ping_text: str, default: str = "governance_ping") -> str:
+    body = str(ping_text or "")
+    match = re.search(r"(?im)^\s*violation_type:\s*([^\r\n]+)\s*$", body)
+    if match:
+        value = match.group(1).strip().strip("`'\"")
+        if value and value != "none":
+            return value
+    for marker in (
+        "protected_report_omitted",
+        "report_language_mismatch",
+        "worker_pass_without_evidence",
+        "file_delivery_pass_without_file_evidence",
+        "sync_pass_without_mirror_evidence",
+        "runtime_unapplied_completion_claim",
+    ):
+        if marker in body:
+            return marker
+    return default
+
+
+def _record_gateway_governance_event(
+    config: Any,
+    *,
+    rule_id: str,
+    severity: str,
+    action: str,
+    profile: str = "",
+    platform: str = "",
+    chat_id: str = "",
+    thread_id: str = "",
+    session_id: str = "",
+    session_key: str = "",
+    run_generation: int | None = None,
+    inbound_message_id: str = "",
+    response_sha256: str = "",
+    reasons: list[str] | None = None,
+    missing_evidence: list[str] | None = None,
+    blocked_state: str = "",
+    final_state: str = "",
+    auto_blocking: bool | None = None,
+    evidence_paths: list[str] | None = None,
+    detail: dict[str, Any] | None = None,
+) -> Path | None:
+    """Append a compact governance decision event for later operations audit."""
+    try:
+        path = _gateway_governance_event_log_path(config)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "schema": "gateway_governance_event_v1",
+            "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "rule_id": str(rule_id or "unknown"),
+            "severity": str(severity or "UNKNOWN"),
+            "action": str(action or "UNKNOWN"),
+            "profile": str(profile or ""),
+            "platform": str(platform or ""),
+            "chat_id": str(chat_id or ""),
+            "thread_id": str(thread_id or ""),
+            "session_id": str(session_id or ""),
+            "session_key": str(session_key or ""),
+            "run_generation": run_generation,
+            "inbound_message_id": str(inbound_message_id or ""),
+            "response_sha256": str(response_sha256 or ""),
+            "reasons": [str(item) for item in (reasons or [])],
+            "missing_evidence": [str(item) for item in (missing_evidence or [])],
+            "blocked_state": str(blocked_state or ""),
+            "final_state": str(final_state or ""),
+            "auto_blocking": auto_blocking,
+            "evidence_paths": [str(item) for item in (evidence_paths or [])],
+            "detail": detail or {},
+        }
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        return path
+    except Exception as exc:
+        logger.warning("gateway governance event logging failed: %s", exc)
+        return None
+
+
 def _sha256_file(path: Path) -> str | None:
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -11156,20 +11246,38 @@ class GatewayRunner:
                 for item in (_structured_attachment_debug or {}).get("source_summaries", [])
                 if isinstance(item, dict)
             ]
-            response, _seir_no_artifact_blocked = _guard_unverified_image_generation_claim(
+            response, _image_no_artifact_blocked = _guard_unverified_image_generation_claim(
                 response,
                 active_profile=_active_profile,
                 turn_tool_names=_turn_tool_names,
                 inbound_message_text=message_text,
             )
-            if _seir_no_artifact_blocked:
+            if _image_no_artifact_blocked:
                 logger.warning(
-                    "Seir no-artifact completion guard blocked generation progress claim: session_id=%s session_key=%s run_generation=%s inbound_message_id=%s tool_names=%s",
+                    "image no-artifact completion guard blocked generation progress claim: session_id=%s session_key=%s run_generation=%s inbound_message_id=%s profile=%s tool_names=%s",
                     session_entry.session_id,
                     _quick_key or "",
                     run_generation,
                     self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                    _active_profile,
                     _turn_tool_names,
+                )
+                _record_gateway_governance_event(
+                    self.config,
+                    rule_id="image_generation_claim_without_tool_evidence",
+                    severity="HARD_BLOCK",
+                    action="REPLACE_RESPONSE",
+                    profile=_active_profile,
+                    platform=_platform_name,
+                    chat_id=source.chat_id or "",
+                    thread_id=source.thread_id or "",
+                    session_id=session_entry.session_id,
+                    session_key=_quick_key or "",
+                    run_generation=run_generation,
+                    inbound_message_id=self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                    response_sha256=hashlib.sha256(response.encode("utf-8", errors="replace")).hexdigest() if response else "",
+                    evidence_paths=[str(path) for path in _structured_attachment_paths],
+                    detail={"tool_names": _turn_tool_names},
                 )
             _report_integrity = _validate_gateway_report_integrity(
                 response,
@@ -11179,6 +11287,23 @@ class GatewayRunner:
                 logger.warning(
                     "gateway report integrity guard blocked success report: reasons=%s",
                     _report_integrity.reasons,
+                )
+                _record_gateway_governance_event(
+                    self.config,
+                    rule_id="report_integrity_invalid_success_claim",
+                    severity="HARD_BLOCK",
+                    action="REPLACE_RESPONSE",
+                    profile=_active_profile,
+                    platform=_platform_name,
+                    chat_id=source.chat_id or "",
+                    thread_id=source.thread_id or "",
+                    session_id=session_entry.session_id,
+                    session_key=_quick_key or "",
+                    run_generation=run_generation,
+                    inbound_message_id=self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                    response_sha256=hashlib.sha256(response.encode("utf-8", errors="replace")).hexdigest() if response else "",
+                    reasons=_report_integrity.reasons,
+                    evidence_paths=[str(path) for path in _structured_attachment_paths],
                 )
                 response = _report_integrity.text
             if _looks_like_governance_delivery_report(response):
@@ -11192,6 +11317,34 @@ class GatewayRunner:
                             _post_delivery_overlay.governance_overlay,
                             _post_delivery_overlay.final_state,
                         )
+                        _record_gateway_governance_event(
+                            self.config,
+                            rule_id="post_delivery_evidence_overlay",
+                            severity="OBSERVE",
+                            action="APPEND_OVERLAY",
+                            profile=_active_profile,
+                            platform=_platform_name,
+                            chat_id=source.chat_id or "",
+                            thread_id=source.thread_id or "",
+                            session_id=session_entry.session_id,
+                            session_key=_quick_key or "",
+                            run_generation=run_generation,
+                            inbound_message_id=self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                            response_sha256=hashlib.sha256(response.encode("utf-8", errors="replace")).hexdigest() if response else "",
+                            final_state=_post_delivery_overlay.final_state,
+                            missing_evidence=list(getattr(_post_delivery_overlay.decision, "missing_evidence", []) or []),
+                            blocked_state=str(getattr(_post_delivery_overlay.decision, "blocked_state", "") or ""),
+                            auto_blocking=getattr(_post_delivery_overlay.decision, "auto_blocking", None),
+                            evidence_paths=(
+                                [str(path) for path in getattr(_post_delivery_overlay.delivery_evidence, "source_paths", []) or []]
+                                + [str(path) for path in getattr(_post_delivery_overlay.sync_evidence, "mirror_paths", []) or []]
+                            ),
+                            detail={
+                                "slack_overlay": _post_delivery_overlay.slack_overlay,
+                                "nas_overlay": _post_delivery_overlay.nas_overlay,
+                                "governance_overlay": _post_delivery_overlay.governance_overlay,
+                            },
+                        )
                         response = _post_delivery_overlay.text
                     _governance_delivery = _evaluate_gateway_delivery_governance(
                         response,
@@ -11204,6 +11357,30 @@ class GatewayRunner:
                             _governance_delivery.decision.blocked_state,
                             _governance_delivery.decision.auto_blocking,
                         )
+                        _record_gateway_governance_event(
+                            self.config,
+                            rule_id=str(_governance_delivery.decision.violation_type or "gateway_delivery_governance_ping"),
+                            severity="WARN_STOP_THE_LINE",
+                            action="APPEND_PING",
+                            profile=_active_profile,
+                            platform=_platform_name,
+                            chat_id=source.chat_id or "",
+                            thread_id=source.thread_id or "",
+                            session_id=session_entry.session_id,
+                            session_key=_quick_key or "",
+                            run_generation=run_generation,
+                            inbound_message_id=self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                            response_sha256=hashlib.sha256(response.encode("utf-8", errors="replace")).hexdigest() if response else "",
+                            missing_evidence=list(_governance_delivery.decision.missing_evidence or []),
+                            blocked_state=str(_governance_delivery.decision.blocked_state or ""),
+                            final_state=str(_governance_delivery.decision.final_state or ""),
+                            auto_blocking=bool(_governance_delivery.decision.auto_blocking),
+                            evidence_paths=(
+                                [str(path) for path in getattr(_governance_delivery.delivery_evidence, "source_paths", []) or []]
+                                + [str(path) for path in getattr(_governance_delivery.sync_evidence, "mirror_paths", []) or []]
+                            ),
+                            detail={"nas_status": _governance_delivery.nas_status},
+                        )
                         response = f"{response}\n\n{_governance_delivery.ping_text}"
                 except Exception as _governance_delivery_exc:
                     logger.warning("GOVLAWLIVEWIP delivery governance evaluation failed: %s", _governance_delivery_exc)
@@ -11211,6 +11388,22 @@ class GatewayRunner:
                 _user_report_ping = _evaluate_gateway_user_report_governance(response)
                 if _user_report_ping:
                     logger.warning("GOVLAWLIVEWIP user report governance ping appended")
+                    _record_gateway_governance_event(
+                        self.config,
+                        rule_id=_gateway_governance_rule_id_from_ping(_user_report_ping, "gateway_user_report_governance_ping"),
+                        severity="WARN_STOP_THE_LINE",
+                        action="APPEND_PING",
+                        profile=_active_profile,
+                        platform=_platform_name,
+                        chat_id=source.chat_id or "",
+                        thread_id=source.thread_id or "",
+                        session_id=session_entry.session_id,
+                        session_key=_quick_key or "",
+                        run_generation=run_generation,
+                        inbound_message_id=self._reply_anchor_for_event(event) or getattr(event, "message_id", None) or "",
+                        response_sha256=hashlib.sha256(response.encode("utf-8", errors="replace")).hexdigest() if response else "",
+                        detail={"ping_sha256": hashlib.sha256(_user_report_ping.encode("utf-8", errors="replace")).hexdigest()},
+                    )
                     response = f"{response}\n\n{_user_report_ping}"
             except Exception as _user_report_governance_exc:
                 logger.warning("GOVLAWLIVEWIP user report governance evaluation failed: %s", _user_report_governance_exc)
