@@ -2150,6 +2150,50 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["evidence"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["prompt_translation_policy"] == "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize + portrait-primary-wai-knai-addmicro"
 
+    def test_generate_routes_fullbody_to_vertical_fullbody_v8_workflow(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt=(
+                "SFW T32 fullbody, full body visible from head to toe, "
+                "fantasy academy heroine, visible shoes, small ornate book in one hand"
+            ),
+            negative_prompt="portrait, close-up, cropped feet",
+            output_type="fullbody",
+        )
+
+        assert result["success"] is True
+        assert captured["prompt_payload"]["runtime_preset"] == "fullbody_production"
+        assert captured["prompt_payload"]["workflow_key"] == "fullbody_v8_scene_txt2img_v2"
+        assert captured["metadata"]["workflow_key"] == "fullbody_v8_scene_txt2img_v2"
+        assert captured["metadata"]["output_type"] == "fullbody"
+        assert captured["prompt_payload"]["width"] == 1024
+        assert captured["prompt_payload"]["height"] == 1536
+        assert captured["workflow_json"]["2"]["inputs"]["width"] == 1024
+        assert captured["workflow_json"]["2"]["inputs"]["height"] == 1536
+        assert captured["metadata"]["checkpoint"] == "pornmasterAnime_ilV5.safetensors"
+        assert captured["metadata"]["vae"] == "Anime SDXL VAE DPipe Prototype.safetensors"
+        assert captured["metadata"]["loras"][0]["preset"] == "stable"
+        assert captured["metadata"]["loras"][0]["name"] == r"00_illustrious_style_candidates\pornmaster-Aesthetics-v2-lora.safetensors"
+        assert captured["metadata"]["loras"][0]["weight"] == 0.15
+        prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
+        assert "full body character art" in prompt_text
+        assert "head-to-toe visible" in prompt_text
+        assert "full feet visible" in prompt_text
+        assert "fantasy academy heroine" in prompt_text
+        assert "upper body portrait" not in prompt_text
+        negative_text = captured["workflow_json"]["4"]["inputs"]["text"]
+        assert "portrait" in negative_text
+        assert "close-up" in negative_text
+        assert "cropped feet" in negative_text
+        assert result["preset"] == "fullbody_production"
+        assert result["workflow_key"] == "fullbody_v8_scene_txt2img_v2"
+        assert result["evidence"]["workflow_key"] == "fullbody_v8_scene_txt2img_v2"
+        assert result["prompt_translation_policy"] == (
+            "fullbody-v8-scene-v2 + sfw-sanitize + solo/head-to-toe guard + "
+            "finished-color anti-sketch guard + scene/full-feet anti-wallpaper guard"
+        )
+
     def test_portrait_skeleton_does_not_inject_fixed_identity_traits(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(
             monkeypatch,
@@ -2217,6 +2261,10 @@ class TestComfyLocalCharacterProductionPreset:
         assert captured["prompt_payload"]["workflow_key"] == "fullbody_v8_scene_txt2img_v2"
         assert captured["metadata"]["workflow_key"] == "fullbody_v8_scene_txt2img_v2"
         assert captured["metadata"]["output_type"] == "standing_sprite"
+        assert captured["prompt_payload"]["width"] == 1024
+        assert captured["prompt_payload"]["height"] == 1536
+        assert captured["workflow_json"]["2"]["inputs"]["width"] == 1024
+        assert captured["workflow_json"]["2"]["inputs"]["height"] == 1536
         prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
         assert "game standing sprite" in prompt_text
         assert "full body standing character art" in prompt_text

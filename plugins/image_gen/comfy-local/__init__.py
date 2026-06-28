@@ -288,6 +288,8 @@ PORTRAIT_PRIMARY_WIDTH = 1024
 PORTRAIT_PRIMARY_HEIGHT = 1216
 WIDER_CHARACTER_PRIMARY_CHECKPOINT = "pornmasterAnime_ilV5.safetensors"
 WIDER_CHARACTER_PRIMARY_VAE = SOURCE_PRESERVING_DEPTH_CANNY_VAE
+FULLBODY_PRODUCTION_WIDTH = 1024
+FULLBODY_PRODUCTION_HEIGHT = 1536
 SOURCE_PRESERVING_DEPTH_CONTROLNET = "controlnet_zoe_depth_sdxl_1_0.safetensors"
 SOURCE_PRESERVING_CANNY_CONTROLNET = "illustriousXLCanny_v10.safetensors"
 LOCALIZED_RETOUCH_TARGET_KEYWORDS: Tuple[str, ...] = (
@@ -1854,6 +1856,8 @@ def _build_character_production_runtime(
             "subject_dominance_rule": None,
             "checkpoint": WIDER_CHARACTER_PRIMARY_CHECKPOINT,
             "vae": WIDER_CHARACTER_PRIMARY_VAE,
+            "width": FULLBODY_PRODUCTION_WIDTH,
+            "height": FULLBODY_PRODUCTION_HEIGHT,
             "steps": CHARACTER_PRODUCTION_STEPS,
             "cfg": PORTRAIT_PRODUCTION_CFG,
             "sampler_name": PORTRAIT_PRODUCTION_SAMPLER,
@@ -1883,6 +1887,8 @@ def _build_character_production_runtime(
             "subject_dominance_rule": None,
             "checkpoint": WIDER_CHARACTER_PRIMARY_CHECKPOINT,
             "vae": WIDER_CHARACTER_PRIMARY_VAE,
+            "width": FULLBODY_PRODUCTION_WIDTH,
+            "height": FULLBODY_PRODUCTION_HEIGHT,
             "steps": CHARACTER_PRODUCTION_STEPS,
             "cfg": CHARACTER_PRODUCTION_CFG,
             "sampler_name": CHARACTER_PRODUCTION_SAMPLER,
