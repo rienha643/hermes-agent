@@ -1839,7 +1839,7 @@ def _build_character_production_runtime(
             final_negative_prompt = _merge_comma_terms(CHARACTER_PRODUCTION_NEGATIVE_BASELINE, negative_prompt_text)
         return {
             "preset": STANDING_SPRITE_PRODUCTION_PRESET,
-            "workflow_key": DEFAULT_WORKFLOW_KEY,
+            "workflow_key": FULLBODY_V8_WORKFLOW_KEY,
             "source_prompt": source_prompt,
             "translated_prompt": translated_prompt,
             "prompt": translated_prompt,
@@ -1852,7 +1852,10 @@ def _build_character_production_runtime(
             "cfg": CHARACTER_PRODUCTION_CFG,
             "sampler_name": CHARACTER_PRODUCTION_SAMPLER,
             "scheduler": CHARACTER_PRODUCTION_SCHEDULER,
-            "prompt_translation_policy": "standing-sprite-v1 + sfw-sanitize + production sprite skeleton + no portrait rewrite",
+            "prompt_translation_policy": (
+                "standing-sprite-v1 + fullbody-v8-workflow + sfw-sanitize + "
+                "production sprite skeleton + no portrait rewrite"
+            ),
         }
     if _is_ingame_cg_production_request(output_type=output_type):
         negative_prompt_text = str(negative_prompt or "").strip()

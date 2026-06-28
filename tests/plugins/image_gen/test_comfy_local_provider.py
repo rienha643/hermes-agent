@@ -2116,6 +2116,42 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["evidence"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["prompt_translation_policy"] == "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize"
 
+    def test_generate_routes_standing_sprite_to_fullbody_v8_workflow(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt=(
+                "standing sprite, full body visible from head to toe, "
+                "fantasy guild receptionist heroine, visible shoes, staff in left hand"
+            ),
+            negative_prompt="portrait, close-up, cropped feet",
+            output_type="standing_sprite",
+        )
+
+        assert result["success"] is True
+        assert captured["prompt_payload"]["runtime_preset"] == "standing_sprite_production"
+        assert captured["prompt_payload"]["workflow_key"] == "fullbody_v8_scene_txt2img_v2"
+        assert captured["metadata"]["workflow_key"] == "fullbody_v8_scene_txt2img_v2"
+        assert captured["metadata"]["output_type"] == "standing_sprite"
+        prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
+        assert "game standing sprite" in prompt_text
+        assert "full body standing character art" in prompt_text
+        assert "readable full silhouette" in prompt_text
+        assert "fantasy guild receptionist heroine" in prompt_text
+        assert "upper body portrait" not in prompt_text
+        negative_text = captured["workflow_json"]["4"]["inputs"]["text"]
+        assert "portrait" in negative_text
+        assert "close-up" in negative_text
+        assert "cropped feet" in negative_text
+        assert captured["metadata"]["loras"][0]["preset"] == "stable"
+        assert result["preset"] == "standing_sprite_production"
+        assert result["workflow_key"] == "fullbody_v8_scene_txt2img_v2"
+        assert result["evidence"]["workflow_key"] == "fullbody_v8_scene_txt2img_v2"
+        assert result["prompt_translation_policy"] == (
+            "standing-sprite-v1 + fullbody-v8-workflow + sfw-sanitize + "
+            "production sprite skeleton + no portrait rewrite"
+        )
+
     def test_generate_routes_v8_style_request_to_portrait_workflow_without_portrait_rewrite(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(
             monkeypatch,
