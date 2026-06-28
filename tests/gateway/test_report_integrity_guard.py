@@ -10,6 +10,7 @@ from gateway.run import (
     _collect_gateway_nas_mirror_evidence,
     _compact_gateway_final_response,
     _extract_commander_image_task_metadata,
+    _extract_commander_image_tool_args,
     _evaluate_gateway_delivery_governance,
     _evaluate_gateway_user_report_governance,
     _gateway_governance_event_log_path,
@@ -236,6 +237,43 @@ image_generate 도구 인자 힌트:
         "angelica_compact_dispatch_smoke_20260628",
         "angelica_compact_dispatch_smoke_v1",
     )
+
+
+def test_extract_commander_image_tool_args_ignores_compact_empty_prompt_marker():
+    message = """[COMMANDER_DISPATCH]
+schema: commander_dispatch_v1
+dispatch_event_id: d5
+queue_id: compact-q
+[/COMMANDER_DISPATCH]
+
+image_generate 도구 인자 힌트:
+- 실제 도구 인자는 queue_id 원본 metadata에서 자동 복원돼.
+```json
+{"prompt": ""}
+```
+"""
+
+    assert _extract_commander_image_tool_args(message) == {}
+
+
+def test_extract_commander_image_tool_args_keeps_real_prompt_payload():
+    message = """[COMMANDER_DISPATCH]
+schema: commander_dispatch_v1
+dispatch_event_id: d6
+queue_id: verbose-q
+[/COMMANDER_DISPATCH]
+
+image_generate 도구 인자 힌트:
+```json
+{"operation": "txt2img", "prompt": "real prompt", "project_name": "p1"}
+```
+"""
+
+    assert _extract_commander_image_tool_args(message) == {
+        "operation": "txt2img",
+        "prompt": "real prompt",
+        "project_name": "p1",
+    }
 
 
 def test_seir_no_artifact_guard_allows_real_image_generate_tool_call():

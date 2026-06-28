@@ -1748,6 +1748,14 @@ def _extract_commander_image_tool_args(message_text: str) -> dict[str, Any]:
             continue
         if not isinstance(tool_args, dict):
             continue
+        if set(tool_args) <= {"prompt"} and not str(tool_args.get("prompt") or "").strip():
+            # Compact Commander image dispatch intentionally sends a minimal
+            # prompt-only marker so the model calls image_generate while the
+            # real args are recovered from queue metadata by the tool executor.
+            # Do not register this marker as task metadata; otherwise
+            # _handle_image_generate would later overwrite recovered args with
+            # an empty prompt.
+            continue
         if any(
             key in tool_args
             for key in (
