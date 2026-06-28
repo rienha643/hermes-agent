@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
@@ -111,6 +114,42 @@ def _source_hook_key(category: str, scope: str, source_root: Path) -> str:
     return f"{category}|{scope}|{resolved}"
 
 
+def _hook_key_hash(key: str) -> str:
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def _nas_hook_state_path(key: str) -> Path:
+    return _resolve_nas_hook_state_dir() / f"{_hook_key_hash(key)}.json"
+
+
+def _nas_hook_launcher_event_log_path() -> Path:
+    return _resolve_nas_hook_state_dir() / "launcher_events.jsonl"
+
+
+def _nas_hook_launcher_output_dir() -> Path:
+    return _resolve_nas_hook_state_dir() / "launcher-output"
+
+
+def _nas_hook_launcher_metadata_dir() -> Path:
+    return _resolve_nas_hook_state_dir() / "launcher-metadata"
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _append_launcher_event(payload: dict[str, object]) -> None:
+    path = _nas_hook_launcher_event_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _write_launcher_metadata(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def _normalized_story_scope(scope: str) -> str:
     normalized = scope.strip()
     if normalized.casefold() in _STORY_SCOPE_EMPTY_NAMES:
@@ -157,6 +196,8 @@ def queue_nas_sync_hook(
     )
 
     key = _source_hook_key(normalized_category, normalized_scope, normalized_source_root)
+    key_hash = _hook_key_hash(key)
+    state_path = _nas_hook_state_path(key)
     now = time.monotonic()
     with _IN_PROCESS_LOCK:
         last = _IN_PROCESS_LAST_LAUNCH.get(key)
@@ -190,18 +231,76 @@ def queue_nas_sync_hook(
         ]
         try:
             env = os.environ.copy()
-            env["HERMES_NAS_HOOK_STATE_DIR"] = str(_resolve_nas_hook_state_dir())
-            subprocess.Popen(
-                cmd,
-                start_new_session=True,
-                close_fds=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=env,
-            )
+            state_dir = _resolve_nas_hook_state_dir()
+            env["HERMES_NAS_HOOK_STATE_DIR"] = str(state_dir)
+            launched_at = _utc_now_iso()
+            launch_token = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}_{key_hash[:12]}"
+            stdout_path = _nas_hook_launcher_output_dir() / f"{launch_token}.stdout.log"
+            stderr_path = _nas_hook_launcher_output_dir() / f"{launch_token}.stderr.log"
+            metadata_path = _nas_hook_launcher_metadata_dir() / f"{launch_token}.json"
+            stdout_path.parent.mkdir(parents=True, exist_ok=True)
+            stdout_handle = None
+            stderr_handle = None
+            try:
+                stdout_handle = stdout_path.open("ab")
+                stderr_handle = stderr_path.open("ab")
+                process = subprocess.Popen(
+                    cmd,
+                    start_new_session=True,
+                    close_fds=True,
+                    stdout=stdout_handle,
+                    stderr=stderr_handle,
+                    env=env,
+                )
+            finally:
+                if stdout_handle is not None:
+                    stdout_handle.close()
+                if stderr_handle is not None:
+                    stderr_handle.close()
         except Exception as exc:  # noqa: BLE001
+            try:
+                _append_launcher_event(
+                    {
+                        "event": "launch_failed",
+                        "launched_at": _utc_now_iso(),
+                        "key": key,
+                        "key_hash": key_hash,
+                        "category": normalized_category,
+                        "scope": normalized_scope,
+                        "source_root": str(normalized_source_root),
+                        "artifact_path": str(artifact_path),
+                        "state_path": str(state_path),
+                        "cmd": cmd,
+                        "error": str(exc),
+                    }
+                )
+            except Exception:
+                pass
             logger.warning("Failed to launch NAS sync hook for %s: %s", key, exc)
             return False
+
+        metadata = {
+            "event": "launched",
+            "launched_at": launched_at,
+            "pid": getattr(process, "pid", None),
+            "key": key,
+            "key_hash": key_hash,
+            "category": normalized_category,
+            "scope": normalized_scope,
+            "source_root": str(normalized_source_root),
+            "artifact_path": str(artifact_path),
+            "state_path": str(state_path),
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "metadata_path": str(metadata_path),
+            "cmd": cmd,
+            "debounce_seconds": debounce_seconds,
+        }
+        try:
+            _write_launcher_metadata(metadata_path, metadata)
+            _append_launcher_event(metadata)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("NAS sync hook launched for %s but metadata logging failed: %s", key, exc)
 
         _IN_PROCESS_LAST_LAUNCH[key] = now
         return True

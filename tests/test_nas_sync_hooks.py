@@ -29,16 +29,20 @@ def test_queue_nas_sync_hook_launches_and_debounces(monkeypatch, tmp_path):
 
     launched: list[list[str]] = []
     launched_envs: list[dict[str, str]] = []
+    launched_kwargs: list[dict] = []
 
     class DummyPopen:
         def __init__(self, cmd, **kwargs):
             launched.append(cmd)
             launched_envs.append(kwargs["env"])
+            launched_kwargs.append(kwargs)
+            self.pid = 4242
             self.cmd = cmd
             self.kwargs = kwargs
 
     monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_script", lambda: script)
-    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_state_dir", lambda: tmp_path / "state" / "nas-sync")
+    state_dir = tmp_path / "state" / "nas-sync"
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_state_dir", lambda: state_dir)
     monkeypatch.setattr(nas_sync_hooks.subprocess, "Popen", DummyPopen)
     monkeypatch.setattr(nas_sync_hooks, "_IN_PROCESS_LAST_LAUNCH", {})
 
@@ -75,7 +79,67 @@ def test_queue_nas_sync_hook_launches_and_debounces(monkeypatch, tmp_path):
     assert launched[0][2:6] == ["--hook", str(source_root), "--category", "image"]
     assert launched[0][6:10] == ["--scope", "task-1", "--artifact-path", str(artifact_path)]
     assert launched_envs[0]["HERMES_HOME"] == str(tmp_path / "profiles" / "coder")
-    assert launched_envs[0]["HERMES_NAS_HOOK_STATE_DIR"] == str(tmp_path / "state" / "nas-sync")
+    assert launched_envs[0]["HERMES_NAS_HOOK_STATE_DIR"] == str(state_dir)
+
+    stdout_path = Path(launched_kwargs[0]["stdout"].name)
+    stderr_path = Path(launched_kwargs[0]["stderr"].name)
+    assert stdout_path.parent == state_dir / "launcher-output"
+    assert stderr_path.parent == state_dir / "launcher-output"
+
+    key = nas_sync_hooks._source_hook_key("image", "task-1", source_root)
+    event_log = state_dir / "launcher_events.jsonl"
+    events = [json.loads(line) for line in event_log.read_text(encoding="utf-8").splitlines()]
+    assert len(events) == 1
+    event = events[0]
+    assert event["event"] == "launched"
+    assert event["pid"] == 4242
+    assert event["cmd"] == launched[0]
+    assert event["state_path"] == str(nas_sync_hooks._nas_hook_state_path(key))
+    assert event["stdout_path"] == str(stdout_path)
+    assert event["stderr_path"] == str(stderr_path)
+
+    metadata_files = list((state_dir / "launcher-metadata").glob("*.json"))
+    assert len(metadata_files) == 1
+    metadata = json.loads(metadata_files[0].read_text(encoding="utf-8"))
+    assert metadata == event
+
+
+def test_queue_nas_sync_hook_records_launch_failure(monkeypatch, tmp_path):
+    script = tmp_path / "hermes_nas_backup.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+    state_dir = tmp_path / "state" / "nas-sync"
+
+    class FailingPopen:
+        def __init__(self, cmd, **kwargs):
+            raise RuntimeError("spawn failed")
+
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_script", lambda: script)
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_state_dir", lambda: state_dir)
+    monkeypatch.setattr(nas_sync_hooks.subprocess, "Popen", FailingPopen)
+    monkeypatch.setattr(nas_sync_hooks, "_IN_PROCESS_LAST_LAUNCH", {})
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    artifact_path = source_root / "artifact.png"
+    artifact_path.write_bytes(b"x")
+
+    assert not nas_sync_hooks.queue_nas_sync_hook(
+        category="image",
+        scope="task-1",
+        artifact_path=artifact_path,
+        source_root=source_root,
+    )
+
+    events = [
+        json.loads(line)
+        for line in (state_dir / "launcher_events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(events) == 1
+    assert events[0]["event"] == "launch_failed"
+    assert events[0]["error"] == "spawn failed"
+    assert events[0]["state_path"] == str(
+        nas_sync_hooks._nas_hook_state_path(nas_sync_hooks._source_hook_key("image", "task-1", source_root))
+    )
 
 
 @pytest.mark.parametrize("profile_name", ["coder", "artist"])
