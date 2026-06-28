@@ -2150,6 +2150,27 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["evidence"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["prompt_translation_policy"] == "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize + portrait-primary-wai-knai-addmicro"
 
+    def test_portrait_skeleton_does_not_inject_fixed_identity_traits(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt=(
+                "portrait, short pink hair, teal eyes, simple navy uniform, "
+                "warm magical library background, subculture illustration"
+            ),
+            negative_prompt="blurry, watermark",
+            output_type="portrait",
+        )
+
+        assert result["success"] is True
+        prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
+        assert "short pink hair" in prompt_text
+        assert "teal eyes" in prompt_text
+        assert "simple navy uniform" in prompt_text
+        assert "golden eyes" not in prompt_text
+        assert "long hair" not in prompt_text
+        assert "ornate costume" not in prompt_text
+
     def test_generate_respects_explicit_sampler_settings_with_portrait_preset(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(
             monkeypatch,

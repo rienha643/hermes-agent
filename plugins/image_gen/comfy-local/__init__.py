@@ -360,7 +360,7 @@ PROFILE_ICON_PRODUCTION_POSITIVE_SKELETON = (
     "icon-ready crop, commercial quality, clean lineart"
 )
 PORTRAIT_PRODUCTION_POSITIVE_SKELETON = (
-    "adult woman, long hair, golden eyes, beautiful face, detailed eyes, ornate costume, "
+    "single adult character, beautiful face, expressive face, detailed expressive eyes, detailed outfit, "
     "anime illustration, upper body portrait, commercial quality, clean lineart, "
     "subculture illustration, light novel cover art, anime key visual"
 )
