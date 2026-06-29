@@ -20,6 +20,24 @@ PNG_1PX = bytes.fromhex(
     "00000049454e44ae426082"
 )
 
+PNG_1PX_EDITED = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15"
+    "c4890000000d49444154789c63f8cfc0f01f00050001ff89993d1d000000"
+    "0049454e44ae426082"
+)
+
+PNG_1PX_VALID_SOURCE = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15"
+    "c4890000000d49444154789c636060f8ff1f00030201ffe6770bae000000"
+    "0049454e44ae426082"
+)
+
+
+def write_solid_png(path: Path, size: tuple[int, int], color: tuple[int, int, int, int]) -> None:
+    from PIL import Image
+
+    Image.new("RGBA", size, color).save(path, "PNG")
+
 
 class TestComfyLocalImageGenProviderSurface:
     def test_name(self):
@@ -27,6 +45,42 @@ class TestComfyLocalImageGenProviderSurface:
 
     def test_display_name(self):
         assert ComfyLocalImageGenProvider().display_name == "Comfy Local"
+
+    def test_parse_mask_box_accepts_json_object_string(self):
+        assert COMFY_MOD._parse_mask_box('{"x": 0.27, "y": 0.25, "w": 0.18, "h": 0.12}') == (
+            0.27,
+            0.25,
+            0.18,
+            0.12,
+        )
+
+
+class TestComfyLocalPromptBaselines:
+    def test_fullbody_prompt_includes_five_finger_guard(self):
+        runtime = COMFY_MOD._build_character_production_runtime(
+            "전신 미소녀 캐릭터",
+            negative_prompt="",
+            subject_dominance=80,
+            output_type="fullbody",
+        )
+
+        assert runtime is not None
+        assert "5 fingers on each visible hand" in runtime["prompt"]
+        assert "clean separate fingers" in runtime["prompt"]
+        assert "extra fingers" in runtime["negative_prompt"]
+        assert "fused fingers" in runtime["negative_prompt"]
+
+    def test_key_visual_prompt_includes_five_finger_guard(self):
+        runtime = COMFY_MOD._build_character_production_runtime(
+            "키비주얼 미소녀 캐릭터",
+            negative_prompt="",
+            subject_dominance=80,
+            output_type="key_visual",
+        )
+
+        assert runtime is not None
+        assert "5 fingers on each visible hand" in runtime["prompt"]
+        assert "clean separate fingers" in runtime["prompt"]
 
 
 class TestComfyLocalSourceImageResolution:
@@ -219,6 +273,32 @@ class TestComfyLocalCheckpointResolution:
         assert result["resolved_checkpoint"] == "gpt-image-2-medium.safetensors"
         assert result["resolution_mode"] == "exact"
         assert result.get("source_model_rejected") is None
+
+    def test_detector_only_sam3_checkpoint_is_not_allowed_as_generation_checkpoint(self):
+        result = resolve_checkpoint(
+            "sam3.1_multiplex_fp16.safetensors",
+            [*self.CHECKPOINTS, "sam3.1_multiplex_fp16.safetensors"],
+            task_context="custom user image generation",
+        )
+
+        assert result["ok"] is False
+        assert result["error_type"] == "detector_only_checkpoint"
+        assert result["resolution_mode"] == "detector_only_forbidden"
+        assert result["candidates"] == ["sam3.1_multiplex_fp16.safetensors"]
+        assert result["resolved_checkpoint"] is None
+
+    def test_detector_only_sam3_alias_is_not_allowed_as_generation_checkpoint(self):
+        result = resolve_checkpoint(
+            "sam3",
+            [*self.CHECKPOINTS, "sam3.1_multiplex_fp16.safetensors"],
+            task_context="custom user image generation",
+        )
+
+        assert result["ok"] is False
+        assert result["error_type"] == "detector_only_checkpoint"
+        assert result["resolution_mode"] == "detector_only_forbidden"
+        assert result["candidates"] == ["sam3.1_multiplex_fp16.safetensors"]
+        assert result["resolved_checkpoint"] is None
 
 
 class TestComfyLocalLoraPresetResolution:
@@ -680,6 +760,252 @@ class TestComfyLocalImageGenProviderGenerate:
         assert metadata["hand_detailer"] == result["report_evidence"]["hand_detailer"]
         assert Path(result["image"]).exists()
 
+    def test_generate_source_preserving_pithand_postprocess_uses_segmentation_route(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
+        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "comfy-output"))
+
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        source_image = tmp_path / "source.png"
+        source_image.write_bytes(PNG_1PX)
+        output_dir = Path(tmp_path / "comfy-output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / "pithand_postprocess_00001_.png"
+        output_file.write_bytes(PNG_1PX)
+        mask_file = output_dir / "pithand_postprocess_pithand_mask_00001_.png"
+        mask_file.write_bytes(PNG_1PX)
+
+        calls = {"post": [], "get": []}
+
+        class Response:
+            def __init__(self, payload, content=b""):
+                self._payload = payload
+                self.content = content
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, timeout=None):
+            calls["get"].append(url)
+            if url.endswith("/system_stats"):
+                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
+            if url.endswith("/models/checkpoints"):
+                return Response(["pornmasterAnime_ilV5.safetensors"])
+            if "/history/" in url:
+                return Response(
+                    {
+                        "pid-pithand-post": {
+                            "status": {"completed": True, "status_str": "success"},
+                            "outputs": {
+                                "90": {
+                                    "images": [
+                                        {
+                                            "filename": "pithand_postprocess_pithand_mask_00001_.png",
+                                            "subfolder": "",
+                                            "type": "output",
+                                        }
+                                    ]
+                                },
+                                "99": {
+                                    "images": [
+                                        {
+                                            "filename": "pithand_postprocess_00001_.png",
+                                            "subfolder": "",
+                                            "type": "output",
+                                        }
+                                    ]
+                                },
+                            },
+                        }
+                    }
+                )
+            raise AssertionError(f"unexpected GET {url}")
+
+        def fake_post(url, json=None, files=None, data=None, timeout=None):
+            calls["post"].append((url, json, files, data, timeout))
+            if url.endswith("/upload/image"):
+                assert files and "image" in files
+                assert data == {"overwrite": "true", "type": "input"}
+                return Response({"name": "source.png", "subfolder": "", "type": "input"})
+            if url.endswith("/prompt"):
+                return Response({"prompt_id": "pid-pithand-post", "number": 0, "node_errors": {}})
+            raise AssertionError(f"unexpected POST {url}")
+
+        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
+        monkeypatch.setattr(comfy_mod.requests, "post", fake_post)
+        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
+        import agent.image_gen_provider as provider_mod
+        monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
+
+        result = ComfyLocalImageGenProvider().generate(
+            "preserve original anime character, source-preserving PitHand hand postprocess",
+            aspect_ratio="portrait",
+            model="pornmasterAnime_ilV5.safetensors",
+            project_name="angelica_pithand_postprocess_test",
+            artifact_name="pithand_postprocess",
+            operation="source_preserving_postprocess",
+            source_image_path=str(source_image),
+            postprocess_preset="face8m_d035_pithand_d025",
+        )
+
+        prompt_calls = [call for call in calls["post"] if call[0].endswith("/prompt")]
+        assert len(prompt_calls) == 1
+        workflow = prompt_calls[0][1]["prompt"]
+        assert workflow["5"]["inputs"]["model_name"] == "bbox/face_yolov8m.pt"
+        assert workflow["6"]["class_type"] == "FaceDetailer"
+        assert workflow["9"]["inputs"]["model_name"] == "segm/PitHandDetailer-v1-seg.pt"
+        assert workflow["10"]["class_type"] == "SegmDetectorSEGS"
+        assert workflow["10"]["inputs"]["segm_detector"] == ["9", 1]
+        assert workflow["13"]["class_type"] == "DetailerForEach"
+        assert workflow["13"]["inputs"]["denoise"] == 0.25
+        assert workflow["90"]["inputs"]["images"] == ["12", 0]
+        assert workflow["99"]["inputs"]["images"] == ["13", 0]
+        assert result["success"] is True
+        assert result["workflow_key"] == "source_preserving_face8m_pithand_v1"
+        assert result["postprocess_preset"] == "face8m_d035_pithand_d025"
+        assert result["evidence"]["hand_detailer"]["model"] == "segm/PitHandDetailer-v1-seg.pt"
+        assert result["evidence"]["hand_detailer"]["detector"] == "SegmDetectorSEGS"
+        assert result["mask_output_image"]["filename"] == "pithand_postprocess_pithand_mask_00001_.png"
+        assert result["primary_image"] == "pithand_postprocess_v1.png"
+        assert Path(result["image"]).exists()
+
+    def test_generate_source_preserving_hand_only_presets_skip_face_detailer(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
+        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "comfy-output"))
+
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        source_image = tmp_path / "source.png"
+        source_image.write_bytes(PNG_1PX)
+        output_dir = Path(tmp_path / "comfy-output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for name in [
+            "hand9c_only_00001_.png",
+            "hand9c_only_hand9c_mask_00001_.png",
+            "pithand_only_00001_.png",
+            "pithand_only_pithand_mask_00001_.png",
+        ]:
+            (output_dir / name).write_bytes(PNG_1PX)
+
+        calls = {"post": [], "get": []}
+        prompt_ids: list[str] = []
+
+        class Response:
+            def __init__(self, payload, content=b""):
+                self._payload = payload
+                self.content = content
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, timeout=None):
+            calls["get"].append(url)
+            if url.endswith("/system_stats"):
+                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
+            if url.endswith("/models/checkpoints"):
+                return Response(["pornmasterAnime_ilV5.safetensors"])
+            if "/history/" in url:
+                prompt_id = url.rsplit("/", 1)[-1]
+                if prompt_id == "pid-hand9c-only":
+                    result_name = "hand9c_only_00001_.png"
+                    mask_name = "hand9c_only_hand9c_mask_00001_.png"
+                elif prompt_id == "pid-pithand-only":
+                    result_name = "pithand_only_00001_.png"
+                    mask_name = "pithand_only_pithand_mask_00001_.png"
+                else:
+                    raise AssertionError(f"unexpected history prompt id {prompt_id}")
+                return Response(
+                    {
+                        prompt_id: {
+                            "status": {"completed": True, "status_str": "success"},
+                            "outputs": {
+                                "90": {"images": [{"filename": mask_name, "subfolder": "", "type": "output"}]},
+                                "99": {"images": [{"filename": result_name, "subfolder": "", "type": "output"}]},
+                            },
+                        }
+                    }
+                )
+            raise AssertionError(f"unexpected GET {url}")
+
+        def fake_post(url, json=None, files=None, data=None, timeout=None):
+            calls["post"].append((url, json, files, data, timeout))
+            if url.endswith("/upload/image"):
+                assert files and "image" in files
+                assert data == {"overwrite": "true", "type": "input"}
+                return Response({"name": "source.png", "subfolder": "", "type": "input"})
+            if url.endswith("/prompt"):
+                workflow = json["prompt"]
+                if workflow["9"]["inputs"]["model_name"] == "bbox/hand_yolov9c.pt":
+                    prompt_id = "pid-hand9c-only"
+                elif workflow["9"]["inputs"]["model_name"] == "segm/PitHandDetailer-v1-seg.pt":
+                    prompt_id = "pid-pithand-only"
+                else:
+                    raise AssertionError(f"unexpected hand model {workflow['9']['inputs']['model_name']}")
+                prompt_ids.append(prompt_id)
+                return Response({"prompt_id": prompt_id, "number": 0, "node_errors": {}})
+            raise AssertionError(f"unexpected POST {url}")
+
+        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
+        monkeypatch.setattr(comfy_mod.requests, "post", fake_post)
+        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
+        import agent.image_gen_provider as provider_mod
+        monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
+
+        cases = [
+            (
+                "hand9c_d025_only",
+                "source_preserving_hand9c_only_v1",
+                "bbox/hand_yolov9c.pt",
+                "BboxDetectorSEGS",
+                "hand9c_only_hand9c_mask_00001_.png",
+            ),
+            (
+                "pithand_d025_only",
+                "source_preserving_pithand_only_v1",
+                "segm/PitHandDetailer-v1-seg.pt",
+                "SegmDetectorSEGS",
+                "pithand_only_pithand_mask_00001_.png",
+            ),
+        ]
+        for preset, workflow_key, model_name, detector_class, mask_name in cases:
+            artifact_name = "hand9c_only" if preset.startswith("hand9c") else "pithand_only"
+            result = ComfyLocalImageGenProvider().generate(
+                "source-preserving hand-only postprocess",
+                aspect_ratio="portrait",
+                model="pornmasterAnime_ilV5.safetensors",
+                project_name=f"angelica_{artifact_name}_postprocess_test",
+                artifact_name=artifact_name,
+                operation="source_preserving_postprocess",
+                source_image_path=str(source_image),
+                postprocess_preset=preset,
+            )
+
+            workflow = [call for call in calls["post"] if call[0].endswith("/prompt")][-1][1]["prompt"]
+            assert not any(node.get("class_type") == "FaceDetailer" for node in workflow.values())
+            assert workflow["2"]["inputs"]["image"] == "source.png"
+            assert workflow["9"]["inputs"]["model_name"] == model_name
+            assert workflow["10"]["class_type"] == detector_class
+            assert workflow["10"]["inputs"]["image"] == ["2", 0]
+            assert workflow["13"]["inputs"]["image"] == ["2", 0]
+            assert workflow["13"]["inputs"]["denoise"] == 0.25
+            assert result["success"] is True
+            assert result["workflow_key"] == workflow_key
+            assert result["postprocess_preset"] == preset
+            assert result["evidence"]["face_detailer"]["enabled"] is False
+            assert result["evidence"]["hand_detailer"]["model"] == model_name
+            assert result["evidence"]["hand_detailer"]["scope"] == "hand_only"
+            assert result["mask_output_image"]["filename"] == mask_name
+            assert result["primary_image"] == f"{artifact_name}_v1.png"
+            assert Path(result["image"]).exists()
+
     def test_generate_source_preserving_depth_canny_postprocess_uses_promoted_workflow(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
         monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
@@ -794,6 +1120,135 @@ class TestComfyLocalImageGenProviderGenerate:
         assert metadata["resolved_checkpoint"] == "waiIllustriousSDXL_v170.safetensors"
         assert metadata["vae"] == "Anime SDXL VAE DPipe Prototype.safetensors"
         assert metadata["controlnet_used"] is True
+        assert Path(result["image"]).exists()
+
+    def test_generate_source_preserving_sam3_local_hand_uses_coordinate_mask_route(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
+        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "comfy-output"))
+
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        source_image = tmp_path / "source.png"
+        source_image.write_bytes(PNG_1PX)
+        output_dir = Path(tmp_path / "comfy-output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / "sam3_postprocess_00001_.png"
+        output_file.write_bytes(PNG_1PX)
+
+        calls = {"post": [], "get": []}
+
+        class Response:
+            def __init__(self, payload, content=b""):
+                self._payload = payload
+                self.content = content
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, timeout=None):
+            calls["get"].append(url)
+            if url.endswith("/system_stats"):
+                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
+            if url.endswith("/models/checkpoints"):
+                return Response(["waiIllustriousSDXL_v170.safetensors", "sam3.1_multiplex_fp16.safetensors"])
+            if url.endswith("/models/vae"):
+                return Response([])
+            if "/history/" in url:
+                return Response(
+                    {
+                        "pid-sam3-post": {
+                            "status": {"completed": True, "status_str": "success"},
+                            "outputs": {
+                                "99": {
+                                    "images": [
+                                        {
+                                            "filename": "sam3_postprocess_mask_00001_.png",
+                                            "subfolder": "",
+                                            "type": "output",
+                                        }
+                                    ]
+                                },
+                                "90": {
+                                    "images": [
+                                        {
+                                            "filename": "sam3_postprocess_00001_.png",
+                                            "subfolder": "",
+                                            "type": "output",
+                                        }
+                                    ]
+                                },
+                            },
+                        }
+                    }
+                )
+            raise AssertionError(f"unexpected GET {url}")
+
+        def fake_post(url, json=None, files=None, data=None, timeout=None):
+            calls["post"].append((url, json, files, data, timeout))
+            if url.endswith("/upload/image"):
+                assert files and "image" in files
+                assert data == {"overwrite": "true", "type": "input"}
+                return Response({"name": "source.png", "subfolder": "", "type": "input"})
+            if url.endswith("/prompt"):
+                return Response({"prompt_id": "pid-sam3-post", "number": 0, "node_errors": {}})
+            raise AssertionError(f"unexpected POST {url}")
+
+        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
+        monkeypatch.setattr(comfy_mod.requests, "post", fake_post)
+        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
+        import agent.image_gen_provider as provider_mod
+        monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
+
+        result = ComfyLocalImageGenProvider().generate(
+            "source-preserving SAM3 local hand postprocess",
+            aspect_ratio="portrait",
+            model="waiIllustriousSDXL_v170.safetensors",
+            project_name="angelica_sam3_postprocess_test",
+            artifact_name="sam3_postprocess",
+            operation="source_preserving_postprocess",
+            source_image_path=str(source_image),
+            postprocess_preset="sam3_local_hand_tight_v1",
+            sam3_positive_coords=[{"x": 388, "y": 464}],
+            sam3_negative_coords=[{"x": 320, "y": 570}, {"x": 500, "y": 555}],
+            sam3_threshold=0.72,
+            sam3_refine_iterations=1,
+            sam3_detail_denoise=0.38,
+        )
+
+        prompt_calls = [call for call in calls["post"] if call[0].endswith("/prompt")]
+        assert len(prompt_calls) == 1
+        workflow = prompt_calls[0][1]["prompt"]
+        assert "5" not in workflow
+        assert "6" not in workflow
+        assert not any(node.get("class_type") == "FaceDetailer" for node in workflow.values())
+        assert workflow["9"]["class_type"] == "CheckpointLoaderSimple"
+        assert workflow["9"]["inputs"]["ckpt_name"] == "sam3.1_multiplex_fp16.safetensors"
+        assert workflow["10"]["class_type"] == "SAM3_Detect"
+        assert workflow["10"]["inputs"]["image"] == ["2", 0]
+        assert workflow["10"]["inputs"]["threshold"] == 0.72
+        assert workflow["10"]["inputs"]["positive_coords"] == '[{"x": 388, "y": 464}]'
+        assert workflow["10"]["inputs"]["negative_coords"] == '[{"x": 320, "y": 570}, {"x": 500, "y": 555}]'
+        assert workflow["11"]["class_type"] == "MaskToSEGS"
+        assert workflow["11"]["inputs"]["crop_factor"] == 2.2
+        assert workflow["13"]["class_type"] == "DetailerForEach"
+        assert workflow["13"]["inputs"]["image"] == ["2", 0]
+        assert workflow["13"]["inputs"]["denoise"] == 0.38
+        assert workflow["90"]["class_type"] == "SaveImage"
+        assert workflow["99"]["class_type"] == "SaveImage"
+        assert result["success"] is True
+        assert result["workflow_key"] == "source_preserving_sam3_local_hand_tight_v1"
+        assert result["postprocess_preset"] == "sam3_local_hand_tight_v1"
+        assert result["evidence"]["face_detailer"]["enabled"] is False
+        assert result["evidence"]["hand_detailer"]["detector"] == "SAM3_Detect"
+        assert result["evidence"]["hand_detailer"]["scope"] == "hand_only"
+        assert result["evidence"]["hand_detailer"]["mask"]["positive_points"] == [{"x": 388, "y": 464}]
+        assert result["report_evidence"]["face_detailer"]["enabled"] is False
+        assert result["mask_output_image"]["filename"] == "sam3_postprocess_mask_00001_.png"
+        assert result["primary_image"] == "sam3_postprocess_v1.png"
         assert Path(result["image"]).exists()
 
     def test_generate_source_preserving_detailer_normalizes_operation_typo(self, monkeypatch, tmp_path):
@@ -1005,10 +1460,10 @@ class TestComfyLocalImageGenProviderGenerate:
 
         comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
         source_image = tmp_path / "source.png"
-        source_image.write_bytes(PNG_1PX)
+        source_image.write_bytes(PNG_1PX_VALID_SOURCE)
         output_dir = Path(tmp_path / "comfy-output")
         output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "masked_00001_.png").write_bytes(PNG_1PX)
+        (output_dir / "masked_00001_.png").write_bytes(PNG_1PX_EDITED)
 
         calls = {"post": [], "get": []}
         upload_names = iter(("source.png", "mask.png"))
@@ -1106,6 +1561,9 @@ class TestComfyLocalImageGenProviderGenerate:
         assert result["actual_width"] == 1
         assert result["actual_height"] == 1
         assert result["output_resolution"] == "1x1"
+        assert result["masked_inpaint_source_lock"]["masked_inpaint_post_composite_applied"] is True
+        assert result["masked_inpaint_source_lock"]["masked_inpaint_outside_source_locked"] is True
+        assert result["masked_inpaint_source_lock"]["masked_inpaint_locality"]["changed_outside_mask_pixels"] == 0
         assert result["report_evidence"] == {
             "operation": "masked_inpaint",
             "workflow_key": "source_masked_inpaint_v1",
@@ -1118,6 +1576,14 @@ class TestComfyLocalImageGenProviderGenerate:
             "mask_shape": "rectangle",
             "mask_coverage_ratio": 1.0,
             "masked_inpaint_requires_visual_review": True,
+            "masked_inpaint_source_locked": True,
+            "masked_inpaint_locality": result["masked_inpaint_source_lock"]["masked_inpaint_locality"],
+            "seed": 20260625,
+            "steps": 18,
+            "cfg": 6.0,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "denoise": 0.3,
             "output_image": result["primary_image"],
             "artifact_path": result["artifact_path"],
             "output_resolution": "1x1",
@@ -1128,6 +1594,107 @@ class TestComfyLocalImageGenProviderGenerate:
         assert metadata["report_evidence"] == result["report_evidence"]
         assert Path(result["image"]).exists()
 
+    def test_generate_masked_inpaint_source_locks_pixels_outside_rectangle(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
+        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "comfy-output"))
+
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        source_image = tmp_path / "source.png"
+        write_solid_png(source_image, (4, 4), (10, 20, 30, 255))
+        output_dir = Path(tmp_path / "comfy-output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        write_solid_png(output_dir / "masked_locality_00001_.png", (4, 4), (230, 240, 250, 255))
+
+        calls = {"post": [], "get": []}
+        upload_names = iter(("source.png", "mask.png"))
+
+        class Response:
+            def __init__(self, payload):
+                self._payload = payload
+                self.content = PNG_1PX
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, timeout=None):
+            calls["get"].append(url)
+            if url.endswith("/system_stats"):
+                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
+            if url.endswith("/models/checkpoints"):
+                return Response(["pornmasterAnime_ilV5.safetensors"])
+            if "/history/" in url:
+                return Response(
+                    {
+                        "pid-mask-locality": {
+                            "status": {"completed": True, "status_str": "success"},
+                            "outputs": {
+                                "99": {
+                                    "images": [
+                                        {
+                                            "filename": "masked_locality_00001_.png",
+                                            "subfolder": "",
+                                            "type": "output",
+                                        }
+                                    ]
+                                }
+                            },
+                        }
+                    }
+                )
+            raise AssertionError(f"unexpected GET {url}")
+
+        def fake_post(url, json=None, files=None, data=None, timeout=None):
+            calls["post"].append((url, json, files, data, timeout))
+            if url.endswith("/upload/image"):
+                assert files and "image" in files
+                assert data == {"overwrite": "true", "type": "input"}
+                return Response({"name": next(upload_names), "subfolder": "", "type": "input"})
+            if url.endswith("/prompt"):
+                return Response({"prompt_id": "pid-mask-locality", "number": 0, "node_errors": {}})
+            raise AssertionError(f"unexpected POST {url}")
+
+        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
+        monkeypatch.setattr(comfy_mod.requests, "post", fake_post)
+        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
+        import agent.image_gen_provider as provider_mod
+        monkeypatch.setattr(provider_mod, "queue_nas_sync_hook", lambda **kwargs: True)
+
+        result = ComfyLocalImageGenProvider().generate(
+            "preserve original character, fix only the center test patch",
+            aspect_ratio="portrait",
+            model="pornmasterAnime_ilV5.safetensors",
+            project_name="angelica_masked_inpaint_locality_test",
+            artifact_name="masked_locality",
+            operation="masked_inpaint",
+            source_image_path=str(source_image),
+            mask_target="left_hand",
+            mask_box={"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5},
+            mask_feather_px=0,
+            grow_mask_by=0,
+            denoise=0.3,
+        )
+
+        assert result["success"] is True
+        source_lock = result["masked_inpaint_source_lock"]
+        assert source_lock["masked_inpaint_post_composite_applied"] is True
+        assert source_lock["masked_inpaint_outside_source_locked"] is True
+        assert source_lock["masked_inpaint_locality"]["changed_inside_mask_pixels"] == 4
+        assert source_lock["masked_inpaint_locality"]["changed_outside_mask_pixels"] == 0
+
+        from PIL import Image
+
+        with Image.open(result["image"]) as final_image:
+            final = final_image.convert("RGBA")
+            for y in range(4):
+                for x in range(4):
+                    expected = (230, 240, 250, 255) if 1 <= x <= 2 and 1 <= y <= 2 else (10, 20, 30, 255)
+                    assert final.getpixel((x, y)) == expected
+
     def test_generate_masked_inpaint_local_hand_uses_safer_defaults(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
         monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
@@ -1136,10 +1703,10 @@ class TestComfyLocalImageGenProviderGenerate:
 
         comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
         source_image = tmp_path / "source.png"
-        source_image.write_bytes(PNG_1PX)
+        source_image.write_bytes(PNG_1PX_VALID_SOURCE)
         output_dir = Path(tmp_path / "comfy-output")
         output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "masked_safe_00001_.png").write_bytes(PNG_1PX)
+        (output_dir / "masked_safe_00001_.png").write_bytes(PNG_1PX_EDITED)
 
         calls = {"post": [], "get": []}
         upload_names = iter(("source.png", "mask.png"))
@@ -1227,10 +1794,10 @@ class TestComfyLocalImageGenProviderGenerate:
 
         comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
         source_image = tmp_path / "source.png"
-        source_image.write_bytes(PNG_1PX)
+        source_image.write_bytes(PNG_1PX_VALID_SOURCE)
         output_dir = Path(tmp_path / "comfy-output")
         output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "masked_detailer_00001_.png").write_bytes(PNG_1PX)
+        (output_dir / "masked_detailer_00001_.png").write_bytes(PNG_1PX_EDITED)
 
         calls = {"post": [], "get": []}
 
@@ -1316,6 +1883,89 @@ class TestComfyLocalImageGenProviderGenerate:
         assert result["masked_inpaint_safety"]["mask_source"] == "detailer_bbox"
         assert result["masked_inpaint_safety"]["detailer_detector"]["model_name"] == "bbox/hand_yolov9c.pt"
         assert "experimental_detailer_bbox_mask_source_requires_visual_review" in result["masked_inpaint_safety"]["warnings"]
+
+    def test_generate_masked_inpaint_rejects_identical_output_pixels(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork"))
+        monkeypatch.setenv("COMFY_LOCAL_IMAGE_BASE_URL", "http://172.22.224.1:8188")
+        monkeypatch.setenv("COMFY_LOCAL_OUTPUT_DIR", str(tmp_path / "comfy-output"))
+
+        comfy_mod = importlib.import_module("plugins.image_gen.comfy-local")
+        source_image = tmp_path / "source.png"
+        source_image.write_bytes(PNG_1PX_VALID_SOURCE)
+        output_dir = Path(tmp_path / "comfy-output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "masked_noop_00001_.png").write_bytes(PNG_1PX_VALID_SOURCE)
+
+        calls = {"post": [], "get": []}
+
+        class Response:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        def fake_get(url, timeout=None):
+            calls["get"].append(url)
+            if url.endswith("/system_stats"):
+                return Response({"system": {"os": "win32"}, "devices": [{"name": "GPU"}]})
+            if url.endswith("/models/checkpoints"):
+                return Response(["pornmasterAnime_ilV5.safetensors"])
+            if "/history/" in url:
+                return Response(
+                    {
+                        "pid-mask-noop": {
+                            "status": {"completed": True, "status_str": "success"},
+                            "outputs": {
+                                "99": {
+                                    "images": [
+                                        {"filename": "masked_noop_00001_.png", "subfolder": "", "type": "output"}
+                                    ]
+                                }
+                            },
+                        }
+                    }
+                )
+            raise AssertionError(f"unexpected GET {url}")
+
+        def fake_post(url, json=None, files=None, data=None, timeout=None):
+            calls["post"].append((url, json, files, data, timeout))
+            if url.endswith("/upload/image"):
+                assert files and "image" in files
+                assert data == {"overwrite": "true", "type": "input"}
+                return Response({"name": "source.png", "subfolder": "", "type": "input"})
+            if url.endswith("/prompt"):
+                return Response({"prompt_id": "pid-mask-noop", "number": 0, "node_errors": {}})
+            raise AssertionError(f"unexpected POST {url}")
+
+        monkeypatch.setattr(comfy_mod.requests, "get", fake_get)
+        monkeypatch.setattr(comfy_mod.requests, "post", fake_post)
+        monkeypatch.setattr(comfy_mod.time, "sleep", lambda *_args, **_kwargs: None)
+
+        result = ComfyLocalImageGenProvider().generate(
+            "preserve original character, repair only the left hand",
+            aspect_ratio="portrait",
+            model="pornmasterAnime_ilV5.safetensors",
+            project_name="angelica_masked_inpaint_noop_test",
+            artifact_name="masked_noop",
+            operation="masked_inpaint",
+            source_image_path=str(source_image),
+            mask_source="detailer_bbox",
+            mask_target="left_hand",
+        )
+
+        assert result["success"] is False
+        assert result["error_type"] == "no_effect"
+        assert "output pixels are identical to source" in result["error"]
+        assert result["workflow_key"] == "source_detailer_bbox_masked_inpaint_v1"
+        assert result["mask_source"] == "detailer_bbox"
+        assert result["mask_target"] == "left_hand"
+        assert result["mask_shape"] == "detailer_bbox_segs"
+        assert result["completion_report_forbidden"] is True
 
     def test_generate_resolves_missing_smoke_e2e_checkpoint_to_remote_default(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))

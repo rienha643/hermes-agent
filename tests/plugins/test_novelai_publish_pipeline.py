@@ -49,6 +49,8 @@ def test_novelai_default_request_builder_uses_policy_defaults() -> None:
     assert payload["input"].startswith("best quality")
     assert "subculture illustration" in payload["input"]
     assert "anime illustration" in payload["input"]
+    assert "5 fingers on each visible hand" in payload["input"]
+    assert "clean separate fingers" in payload["input"]
     assert payload["input"].endswith("safe prompt")
     assert payload["model"] == novelai.DEFAULT_MODEL
     assert payload["action"] == "generate"
@@ -73,6 +75,8 @@ def test_novelai_default_request_builder_uses_policy_defaults() -> None:
         "bad anatomy",
         "bad hands",
         "malformed fingers",
+        "extra fingers",
+        "fused fingers",
         "extra digits",
         "bad feet",
         "JPEG artifacts",

@@ -81,6 +81,11 @@ _COMMANDER_IMAGE_ARG_KEYS = {
     "mask_box",
     "mask_feather_px",
     "grow_mask_by",
+    "sam3_positive_coords",
+    "sam3_negative_coords",
+    "sam3_threshold",
+    "sam3_refine_iterations",
+    "sam3_detail_denoise",
 }
 
 
@@ -1173,8 +1178,8 @@ IMAGE_GENERATE_SCHEMA = {
             },
             "operation": {
                 "type": "string",
-                "enum": ["generate", "txt2img", "postprocess", "source_preserving_postprocess", "upscale", "reference_identity_txt2img"],
-                "description": "Optional provider operation. Use `source_preserving_postprocess` only when the user explicitly asks to preserve an existing source image and apply localized postprocess/editing. Use `upscale` only for source-image upscaling. Use `reference_identity_txt2img` only with an explicit temporary reference identity experiment workflow and reference_image_path.",
+                "enum": ["generate", "txt2img", "postprocess", "source_preserving_postprocess", "upscale", "masked_inpaint", "reference_identity_txt2img"],
+                "description": "Optional provider operation. Use `source_preserving_postprocess` only when the user explicitly asks to preserve an existing source image and apply broad postprocess/detail correction. Use `masked_inpaint` only for local source-image edits with mask_source/mask_target or mask_box. Use `upscale` only for source-image upscaling. Use `reference_identity_txt2img` only with an explicit temporary reference identity experiment workflow and reference_image_path.",
                 "default": "generate",
             },
             "output_type": {
@@ -1201,12 +1206,105 @@ IMAGE_GENERATE_SCHEMA = {
             },
             "postprocess_preset": {
                 "type": "string",
-                "enum": ["face8m_d035_hand9c_d025", "depth50_canny100_face8m_hand9c_v1"],
-                "description": "Optional ComfyUI source-preserving postprocess preset. `face8m_d035_hand9c_d025` applies FaceDetailer face_yolov8m denoise 0.35 plus hand_yolov9c denoise 0.25. `depth50_canny100_face8m_hand9c_v1` adds the promoted Depth+Canny structure-preserving stack before face/hand detail correction.",
+                "enum": [
+                    "face8m_d035_hand9c_d025",
+                    "face8m_d035_pithand_d025",
+                    "hand9c_d025_only",
+                    "pithand_d025_only",
+                    "depth50_canny100_face8m_hand9c_v1",
+                    "sam3_local_hand_tight_v1",
+                ],
+                "description": "Optional ComfyUI source-preserving postprocess preset. `face8m_d035_hand9c_d025` applies FaceDetailer face_yolov8m denoise 0.35 plus hand_yolov9c denoise 0.25. `face8m_d035_pithand_d025` keeps the same face route and uses PitHandDetailer-v1 segmentation for hand detail correction as a candidate route. `hand9c_d025_only` and `pithand_d025_only` skip face detail correction and apply only hand-region detail correction. `depth50_canny100_face8m_hand9c_v1` adds the promoted Depth+Canny structure-preserving stack before face/hand detail correction. `sam3_local_hand_tight_v1` is an experimental coordinate-guided SAM3 local hand mask route and requires sam3_positive_coords.",
             },
             "upscale_model": {
                 "type": "string",
                 "description": "Optional ComfyUI upscale model for operation=`upscale`, for example `4x-UltraSharp.pth`.",
+            },
+            "mask_source": {
+                "type": "string",
+                "enum": ["rectangle", "detailer_bbox"],
+                "description": "Optional ComfyUI mask source for operation=`masked_inpaint`. Use `detailer_bbox` for detector-derived face/hand masks; use `rectangle` only when mask_box is explicitly supplied.",
+            },
+            "mask_target": {
+                "type": "string",
+                "description": "Optional target label for operation=`masked_inpaint`, for example `hand`, `left_hand`, `right_hand`, or `face`. With mask_source=`detailer_bbox`, this selects the detector family.",
+            },
+            "mask_box": {
+                "description": "Optional normalized rectangle for operation=`masked_inpaint` with mask_source=`rectangle`. Accepts an object with x/y/w/h, a 4-item array, or an 'x,y,w,h' string. Not required for mask_source=`detailer_bbox`.",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number"},
+                            "y": {"type": "number"},
+                            "w": {"type": "number"},
+                            "h": {"type": "number"},
+                            "width": {"type": "number"},
+                            "height": {"type": "number"}
+                        }
+                    },
+                    {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 4,
+                        "maxItems": 4
+                    },
+                    {"type": "string"}
+                ],
+            },
+            "mask_feather_px": {
+                "type": "integer",
+                "description": "Optional feather radius in pixels for operation=`masked_inpaint`.",
+            },
+            "grow_mask_by": {
+                "type": "integer",
+                "description": "Optional mask growth in pixels for operation=`masked_inpaint`.",
+            },
+            "sam3_positive_coords": {
+                "description": "Optional coordinate points for postprocess_preset=`sam3_local_hand_tight_v1`. Use source-image pixel coordinates, for example [{\"x\": 388, \"y\": 464}]. Required for the SAM3 local hand preset.",
+                "oneOf": [
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "x": {"type": "number"},
+                                "y": {"type": "number"}
+                            },
+                            "required": ["x", "y"]
+                        }
+                    },
+                    {"type": "string"}
+                ],
+            },
+            "sam3_negative_coords": {
+                "description": "Optional negative coordinate points for postprocess_preset=`sam3_local_hand_tight_v1`. Use source-image pixel coordinates to exclude forearm, props, background, or adjacent body regions.",
+                "oneOf": [
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "x": {"type": "number"},
+                                "y": {"type": "number"}
+                            },
+                            "required": ["x", "y"]
+                        }
+                    },
+                    {"type": "string"}
+                ],
+            },
+            "sam3_threshold": {
+                "type": "number",
+                "description": "Optional SAM3 detection threshold for postprocess_preset=`sam3_local_hand_tight_v1`. Higher values tend to tighten masks.",
+            },
+            "sam3_refine_iterations": {
+                "type": "integer",
+                "description": "Optional SAM3 refine iteration count for postprocess_preset=`sam3_local_hand_tight_v1`.",
+            },
+            "sam3_detail_denoise": {
+                "type": "number",
+                "description": "Optional detailer denoise for postprocess_preset=`sam3_local_hand_tight_v1`. Use lower values for conservative local repair.",
             },
             "workflow_key": {
                 "type": "string",
@@ -1363,8 +1461,19 @@ def _dispatch_to_plugin_provider(
     style_preset: str | None = None,
     lora_preset: str | None = None,
     cfg_scale: float | int | None = None,
+    denoise: float | int | None = None,
     sampler_name: str | None = None,
     scheduler: str | None = None,
+    mask_target: str | None = None,
+    mask_source: str | None = None,
+    mask_box: Any | None = None,
+    mask_feather_px: int | None = None,
+    grow_mask_by: int | None = None,
+    sam3_positive_coords: Any | None = None,
+    sam3_negative_coords: Any | None = None,
+    sam3_threshold: float | int | None = None,
+    sam3_refine_iterations: int | None = None,
+    sam3_detail_denoise: float | int | None = None,
 ):
     """Route the call to a plugin-registered provider when one is selected.
 
@@ -1514,10 +1623,32 @@ def _dispatch_to_plugin_provider(
             kwargs["lora_preset"] = lora_preset
         if cfg_scale is not None:
             kwargs["cfg_scale"] = cfg_scale
+        if denoise is not None:
+            kwargs["denoise"] = denoise
         if sampler_name is not None:
             kwargs["sampler_name"] = sampler_name
         if scheduler is not None:
             kwargs["scheduler"] = scheduler
+        if mask_target is not None:
+            kwargs["mask_target"] = mask_target
+        if mask_source is not None:
+            kwargs["mask_source"] = mask_source
+        if mask_box is not None:
+            kwargs["mask_box"] = mask_box
+        if mask_feather_px is not None:
+            kwargs["mask_feather_px"] = mask_feather_px
+        if grow_mask_by is not None:
+            kwargs["grow_mask_by"] = grow_mask_by
+        if sam3_positive_coords is not None:
+            kwargs["sam3_positive_coords"] = sam3_positive_coords
+        if sam3_negative_coords is not None:
+            kwargs["sam3_negative_coords"] = sam3_negative_coords
+        if sam3_threshold is not None:
+            kwargs["sam3_threshold"] = sam3_threshold
+        if sam3_refine_iterations is not None:
+            kwargs["sam3_refine_iterations"] = sam3_refine_iterations
+        if sam3_detail_denoise is not None:
+            kwargs["sam3_detail_denoise"] = sam3_detail_denoise
         result = provider.generate(**kwargs)
     except Exception as exc:
         logger.warning(
@@ -1597,8 +1728,19 @@ def _handle_image_generate(args, **kw):
     style_preset = args.get("style_preset")
     lora_preset = args.get("lora_preset")
     cfg_scale = args.get("cfg_scale")
+    denoise = args.get("denoise")
     sampler_name = args.get("sampler_name")
     scheduler = args.get("scheduler")
+    mask_target = args.get("mask_target")
+    mask_source = args.get("mask_source")
+    mask_box = args.get("mask_box")
+    mask_feather_px = args.get("mask_feather_px")
+    grow_mask_by = args.get("grow_mask_by")
+    sam3_positive_coords = args.get("sam3_positive_coords")
+    sam3_negative_coords = args.get("sam3_negative_coords")
+    sam3_threshold = args.get("sam3_threshold")
+    sam3_refine_iterations = args.get("sam3_refine_iterations")
+    sam3_detail_denoise = args.get("sam3_detail_denoise")
     if task_project_name:
         project_name = task_project_name
     if task_artifact_name:
@@ -1612,6 +1754,24 @@ def _handle_image_generate(args, **kw):
 
     # Route to a plugin-registered provider if one is active (and it's
     # not the in-tree FAL path).
+    def _coerce_nonnegative_int(value):
+        if isinstance(value, bool):
+            return None
+        try:
+            coerced = int(value)
+        except (TypeError, ValueError):
+            return None
+        return coerced if coerced >= 0 else None
+
+    def _coerce_positive_float(value):
+        if isinstance(value, bool):
+            return None
+        try:
+            coerced = float(value)
+        except (TypeError, ValueError):
+            return None
+        return coerced if coerced > 0 else None
+
     dispatched = _dispatch_to_plugin_provider(
         prompt,
         aspect_ratio,
@@ -1649,9 +1809,20 @@ def _handle_image_generate(args, **kw):
         workflow_key=str(workflow_key).strip() if isinstance(workflow_key, str) and workflow_key.strip() else None,
         style_preset=str(style_preset).strip() if isinstance(style_preset, str) and style_preset.strip() else None,
         lora_preset=str(lora_preset).strip() if isinstance(lora_preset, str) and lora_preset.strip() else None,
-        cfg_scale=cfg_scale if isinstance(cfg_scale, (int, float)) and cfg_scale > 0 else None,
+        cfg_scale=_coerce_positive_float(cfg_scale),
+        denoise=_coerce_positive_float(denoise),
         sampler_name=str(sampler_name).strip() if isinstance(sampler_name, str) and sampler_name.strip() else None,
         scheduler=str(scheduler).strip() if isinstance(scheduler, str) and scheduler.strip() else None,
+        mask_target=str(mask_target).strip() if isinstance(mask_target, str) and mask_target.strip() else None,
+        mask_source=str(mask_source).strip() if isinstance(mask_source, str) and mask_source.strip() else None,
+        mask_box=mask_box if mask_box not in (None, "", [], {}) else None,
+        mask_feather_px=_coerce_nonnegative_int(mask_feather_px),
+        grow_mask_by=_coerce_nonnegative_int(grow_mask_by),
+        sam3_positive_coords=sam3_positive_coords if sam3_positive_coords not in (None, "", [], {}) else None,
+        sam3_negative_coords=sam3_negative_coords if sam3_negative_coords not in (None, "", []) else None,
+        sam3_threshold=_coerce_positive_float(sam3_threshold),
+        sam3_refine_iterations=_coerce_nonnegative_int(sam3_refine_iterations),
+        sam3_detail_denoise=_coerce_positive_float(sam3_detail_denoise),
     )
     if dispatched is not None:
         return dispatched

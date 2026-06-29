@@ -37,6 +37,23 @@ live_generation_approved=True
 | SMEA | `ON` |
 | DYN | `ON` |
 
+## NAI default positive prompt
+
+Use this positive prompt prefix as the NovelAI default baseline:
+
+```text
+best quality,
+high quality,
+subculture illustration,
+anime illustration,
+clean lineart,
+detailed face,
+expressive eyes,
+natural hand anatomy,
+5 fingers on each visible hand,
+clean separate fingers
+```
+
 ## NAI default negative prompt
 
 Use this negative prompt as the NovelAI default baseline:
@@ -52,6 +69,8 @@ bad hands,
 malformed hands,
 malformed fingers,
 missing fingers,
+extra fingers,
+fused fingers,
 extra digits,
 fewer digits,
 watermark,

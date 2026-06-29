@@ -56,6 +56,9 @@ DEFAULT_DENOISE = 1.0
 DEFAULT_SEED = 123456789
 DEFAULT_CATEGORY = "txt2img"
 POSTPROCESS_CATEGORY = "postprocess"
+DETECTOR_ONLY_CHECKPOINTS: Tuple[str, ...] = (
+    "sam3.1_multiplex_fp16.safetensors",
+)
 
 DEFAULT_STABLE_STYLE_LORA = r"00_illustrious_style_candidates\pornmaster-Aesthetics-v2-lora.safetensors"
 DEFAULT_STABLE_STYLE_LORA_WEIGHT = 0.15
@@ -270,7 +273,11 @@ MASKED_INPAINT_OPERATION = "masked_inpaint"
 UPSCALE_OPERATION = "upscale"
 REFERENCE_IDENTITY_TXT2IMG_OPERATION = "reference_identity_txt2img"
 FACE8M_HAND9C_POSTPROCESS_PRESET = "face8m_d035_hand9c_d025"
+FACE8M_PITHAND_POSTPROCESS_PRESET = "face8m_d035_pithand_d025"
+HAND9C_ONLY_POSTPROCESS_PRESET = "hand9c_d025_only"
+PITHAND_ONLY_POSTPROCESS_PRESET = "pithand_d025_only"
 DEPTH50_CANNY100_FACE8M_HAND9C_POSTPROCESS_PRESET = "depth50_canny100_face8m_hand9c_v1"
+SAM3_LOCAL_HAND_TIGHT_POSTPROCESS_PRESET = "sam3_local_hand_tight_v1"
 DEFAULT_UPSCALE_MODEL = "4x-UltraSharp.pth"
 DEFAULT_WORKFLOW_KEY = "txt2img_minimal_v1"
 CHARACTER_KEY_VISUAL_WORKFLOW_KEY = "character_key_visual_txt2img_v1"
@@ -279,7 +286,11 @@ CHARACTER_REFERENCE_FULLBODY_EXPERIMENTAL_WORKFLOW_KEY = "fullbody_v8_reference_
 PORTRAIT_WORKFLOW_KEY = "portrait_round_v1_txt2img_v1"
 FULLBODY_V8_WORKFLOW_KEY = "fullbody_v8_scene_txt2img_v2"
 SOURCE_PRESERVING_FACE_HAND_WORKFLOW_KEY = "source_preserving_face8m_hand9c_v1"
+SOURCE_PRESERVING_FACE_PITHAND_WORKFLOW_KEY = "source_preserving_face8m_pithand_v1"
+SOURCE_PRESERVING_HAND9C_ONLY_WORKFLOW_KEY = "source_preserving_hand9c_only_v1"
+SOURCE_PRESERVING_PITHAND_ONLY_WORKFLOW_KEY = "source_preserving_pithand_only_v1"
 SOURCE_PRESERVING_DEPTH50_CANNY100_FACE_HAND_WORKFLOW_KEY = "source_preserving_depth50_canny100_face8m_hand9c_v1"
+SOURCE_PRESERVING_SAM3_LOCAL_HAND_WORKFLOW_KEY = "source_preserving_sam3_local_hand_tight_v1"
 SOURCE_MASKED_INPAINT_WORKFLOW_KEY = "source_masked_inpaint_v1"
 SOURCE_DETAILER_BBOX_MASKED_INPAINT_WORKFLOW_KEY = "source_detailer_bbox_masked_inpaint_v1"
 SOURCE_IMAGE_UPSCALE_WORKFLOW_KEY = "source_image_4x_ultrasharp_v1"
@@ -301,6 +312,8 @@ FULLBODY_PRODUCTION_WIDTH = 1024
 FULLBODY_PRODUCTION_HEIGHT = 1536
 SOURCE_PRESERVING_DEPTH_CONTROLNET = "controlnet_zoe_depth_sdxl_1_0.safetensors"
 SOURCE_PRESERVING_CANNY_CONTROLNET = "illustriousXLCanny_v10.safetensors"
+SAM3_LOCAL_HAND_CHECKPOINT = "sam3.1_multiplex_fp16.safetensors"
+PITHAND_DETAILER_MODEL = "segm/PitHandDetailer-v1-seg.pt"
 REFERENCE_IDENTITY_IPADAPTER_MODEL = "ip-adapter-plus-face_sdxl_vit-h.safetensors"
 REFERENCE_IDENTITY_CLIP_VISION = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
 REFERENCE_IDENTITY_IPADAPTER_WEIGHT = 0.42
@@ -374,12 +387,16 @@ KEY_VISUAL_SUBCULTURE_STYLE_BASELINE = (
     "premium mobile game promotional art, clean lineart, polished eyes, expressive faces, "
     "refined hair flow, rich costume detail, cinematic bloom lighting, commercial splash art finish"
 )
+HAND_FINGER_ANATOMY_POSITIVE_GUARD = (
+    "natural hand anatomy, 5 fingers on each visible hand, clean separate fingers"
+)
 CHARACTER_PRODUCTION_POSITIVE_SKELETON = (
     "1girl, solo, full body, standing, looking at viewer, character focus, centered character, "
     "large character, detailed face, detailed eyes, detailed outfit, beautiful young adult woman, "
     "gacha game heroine, RPG protagonist, protagonist-grade heroine, attractive face, clear facial features, "
     "readable expression, refined anime illustration, premium game character illustration, ornate fantasy outfit, "
     "detailed costume design, elegant silhouette, clean silhouette, full-body character art, vertical portrait, "
+    "natural hand anatomy, 5 fingers on each visible hand, clean separate fingers, "
     "simple background, background secondary, safe, masterpiece, high score, great score, absurdres"
 )
 PROFILE_ICON_PRODUCTION_POSITIVE_SKELETON = (
@@ -389,17 +406,20 @@ PROFILE_ICON_PRODUCTION_POSITIVE_SKELETON = (
 )
 PORTRAIT_PRODUCTION_POSITIVE_SKELETON = (
     "single adult character, beautiful face, expressive face, detailed expressive eyes, detailed outfit, "
-    "anime illustration, upper body portrait, commercial quality, clean lineart, "
+    "anime illustration, upper body portrait, natural hand anatomy, 5 fingers on each visible hand, "
+    "clean separate fingers, commercial quality, clean lineart, "
     "subculture illustration, light novel cover art, anime key visual"
 )
 DIALOGUE_BUST_PRODUCTION_POSITIVE_SKELETON = (
     "subculture anime game dialogue bust, waist-up character art, upper body visible, expressive face, "
-    "readable emotion, clean outfit upper details, visual novel dialogue portrait source, "
+    "readable emotion, clean outfit upper details, natural hand anatomy, 5 fingers on each visible hand, "
+    "clean separate fingers, visual novel dialogue portrait source, "
     "simple clean background, polished cel shading, clean lineart, commercial quality"
 )
 UPPER_BODY_PRODUCTION_POSITIVE_SKELETON = (
     "subculture anime game illustration, upper body to knee-up composition, single character focus, "
-    "visible face, visible hands, hand and prop readable, detailed fingers, detailed outfit, "
+    "visible face, visible hands, hand and prop readable, detailed fingers, "
+    "natural hand anatomy, 5 fingers on each visible hand, clean separate fingers, detailed outfit, "
     "readable silhouette, polished cel shading, clean lineart, commercial quality"
 )
 FULLBODY_PRODUCTION_POSITIVE_SKELETON = (
@@ -410,23 +430,26 @@ FULLBODY_PRODUCTION_POSITIVE_SKELETON = (
     "dimensional lighting, rich but controlled lighting, commercial quality, "
     "full body character art, head-to-toe visible, full feet visible, centered character, "
     "shoes fully visible, bottom margin around shoes, readable full silhouette, balanced body proportions, "
-    "visible face, visible hands"
+    "visible face, visible hands, natural hand anatomy, 5 fingers on each visible hand, clean separate fingers"
 )
 STANDING_SPRITE_PRODUCTION_POSITIVE_SKELETON = (
     "subculture anime game illustration, game standing sprite, full body standing character art, "
     "single character focus, centered character, neutral standing pose, readable full silhouette, "
-    "visible face, visible hands, clean outfit shapes, production-ready sprite source, "
+    "visible face, visible hands, natural hand anatomy, 5 fingers on each visible hand, "
+    "clean separate fingers, clean outfit shapes, production-ready sprite source, "
     "simple clean background, polished cel shading, clean lineart, commercial quality"
 )
 INGAME_CG_PRODUCTION_POSITIVE_SKELETON = (
     "subculture anime game event CG, cinematic story scene, character and background relationship readable, "
-    "expressive face, clear focal character, rich but controlled background, dramatic lighting, "
+    "expressive face, clear focal character, natural hand anatomy, 5 fingers on each visible hand, "
+    "clean separate fingers, rich but controlled background, dramatic lighting, "
     "visual novel CG quality, polished cel shading, clean lineart, commercial quality"
 )
 CHARACTER_PRODUCTION_NEGATIVE_BASELINE = (
     "low quality, worst quality, bad quality, normal quality, lowres, blurry, watermark, text, signature, "
     "username, bad anatomy, bad hands, malformed hands, malformed fingers, missing fingers, extra digits, "
-    "fewer digits, bad feet, bad proportions, duplicate, mutation, disfigured, deformed, extra arms, extra legs, "
+    "extra fingers, fewer digits, fused fingers, bad feet, bad proportions, duplicate, mutation, disfigured, "
+    "deformed, extra arms, extra legs, "
     "abstract, symbolic, tiny person, tiny character, distant character, silhouette-only character, background focus, "
     "scenery focus, environment focus, unreadable face, face out of frame, head out of frame, cropped body, "
     "cropped legs, covered face, wings covering body, overwhelming background, symbolic art first, "
@@ -982,6 +1005,373 @@ def _build_face8m_hand9c_postprocess_workflow(
     }
 
 
+def _build_face8m_pithand_postprocess_workflow(
+    *,
+    checkpoint: str,
+    source_image_name: str,
+    positive_prompt: str,
+    negative_prompt: str,
+    filename_prefix: str,
+) -> Dict[str, Any]:
+    return {
+        "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
+        "2": {"inputs": {"image": source_image_name}, "class_type": "LoadImage"},
+        "3": {"inputs": {"text": positive_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "4": {"inputs": {"text": negative_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "5": {"inputs": {"model_name": "bbox/face_yolov8m.pt"}, "class_type": "UltralyticsDetectorProvider"},
+        "6": {
+            "inputs": {
+                "image": ["2", 0],
+                "model": ["1", 0],
+                "clip": ["1", 1],
+                "vae": ["1", 2],
+                "guide_size": 512,
+                "guide_size_for": True,
+                "max_size": 1024,
+                "seed": 20260643,
+                "steps": 16,
+                "cfg": 5.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "positive": ["3", 0],
+                "negative": ["4", 0],
+                "denoise": 0.35,
+                "feather": 6,
+                "noise_mask": True,
+                "force_inpaint": True,
+                "bbox_threshold": 0.45,
+                "bbox_dilation": 8,
+                "bbox_crop_factor": 3.0,
+                "sam_detection_hint": "center-1",
+                "sam_dilation": 0,
+                "sam_threshold": 0.93,
+                "sam_bbox_expansion": 0,
+                "sam_mask_hint_threshold": 0.7,
+                "sam_mask_hint_use_negative": "False",
+                "drop_size": 10,
+                "bbox_detector": ["5", 0],
+                "wildcard": "",
+                "cycle": 1,
+            },
+            "class_type": "FaceDetailer",
+        },
+        "7": {
+            "inputs": {
+                "text": (
+                    "masterpiece, best quality, high quality, anime illustration, natural hand anatomy, "
+                    "5 fingers on each visible hand, clean separate fingers, elegant fingers, natural hand pose, "
+                    "clean lineart, polished cel shading, preserve original hand position, preserve original prop grip"
+                ),
+                "clip": ["1", 1],
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "8": {
+            "inputs": {
+                "text": (
+                    "low quality, blurry, bad hands, malformed hands, extra fingers, missing fingers, "
+                    "fused fingers, broken fingers, mutated fingers, deformed palm, distorted hand, duplicated hand, "
+                    "changing pose, changing character identity, changing outfit, changing prop"
+                ),
+                "clip": ["1", 1],
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "9": {"inputs": {"model_name": PITHAND_DETAILER_MODEL}, "class_type": "UltralyticsDetectorProvider"},
+        "10": {
+            "inputs": {
+                "segm_detector": ["9", 1],
+                "image": ["6", 0],
+                "threshold": 0.35,
+                "dilation": 10,
+                "crop_factor": 3.0,
+                "drop_size": 12,
+                "labels": "all",
+            },
+            "class_type": "SegmDetectorSEGS",
+        },
+        "11": {"inputs": {"segs": ["10", 0]}, "class_type": "SegsToCombinedMask"},
+        "12": {"inputs": {"mask": ["11", 0]}, "class_type": "MaskToImage"},
+        "13": {
+            "inputs": {
+                "image": ["6", 0],
+                "segs": ["10", 0],
+                "model": ["1", 0],
+                "clip": ["1", 1],
+                "vae": ["1", 2],
+                "guide_size": 384,
+                "guide_size_for": True,
+                "max_size": 768,
+                "seed": 20260697,
+                "steps": 14,
+                "cfg": 5.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "positive": ["7", 0],
+                "negative": ["8", 0],
+                "denoise": 0.25,
+                "feather": 5,
+                "noise_mask": True,
+                "force_inpaint": True,
+                "wildcard": "",
+                "cycle": 1,
+            },
+            "class_type": "DetailerForEach",
+        },
+        "90": {"inputs": {"images": ["12", 0], "filename_prefix": f"{filename_prefix}_pithand_mask"}, "class_type": "SaveImage"},
+        "99": {"inputs": {"images": ["13", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
+    }
+
+
+def _build_hand9c_only_postprocess_workflow(
+    *,
+    checkpoint: str,
+    source_image_name: str,
+    positive_prompt: str,
+    negative_prompt: str,
+    filename_prefix: str,
+) -> Dict[str, Any]:
+    return {
+        "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
+        "2": {"inputs": {"image": source_image_name}, "class_type": "LoadImage"},
+        "3": {"inputs": {"text": positive_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "4": {"inputs": {"text": negative_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "9": {"inputs": {"model_name": "bbox/hand_yolov9c.pt"}, "class_type": "UltralyticsDetectorProvider"},
+        "10": {
+            "inputs": {
+                "bbox_detector": ["9", 0],
+                "image": ["2", 0],
+                "threshold": 0.35,
+                "dilation": 10,
+                "crop_factor": 3.0,
+                "drop_size": 12,
+                "labels": "all",
+            },
+            "class_type": "BboxDetectorSEGS",
+        },
+        "11": {"inputs": {"segs": ["10", 0]}, "class_type": "SegsToCombinedMask"},
+        "12": {"inputs": {"mask": ["11", 0]}, "class_type": "MaskToImage"},
+        "13": {
+            "inputs": {
+                "image": ["2", 0],
+                "segs": ["10", 0],
+                "model": ["1", 0],
+                "clip": ["1", 1],
+                "vae": ["1", 2],
+                "guide_size": 384,
+                "guide_size_for": True,
+                "max_size": 768,
+                "seed": 20260697,
+                "steps": 14,
+                "cfg": 5.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "positive": ["3", 0],
+                "negative": ["4", 0],
+                "denoise": 0.25,
+                "feather": 5,
+                "noise_mask": True,
+                "force_inpaint": True,
+                "wildcard": "",
+                "cycle": 1,
+            },
+            "class_type": "DetailerForEach",
+        },
+        "90": {"inputs": {"images": ["12", 0], "filename_prefix": f"{filename_prefix}_hand9c_mask"}, "class_type": "SaveImage"},
+        "99": {"inputs": {"images": ["13", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
+    }
+
+
+def _build_pithand_only_postprocess_workflow(
+    *,
+    checkpoint: str,
+    source_image_name: str,
+    positive_prompt: str,
+    negative_prompt: str,
+    filename_prefix: str,
+) -> Dict[str, Any]:
+    return {
+        "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
+        "2": {"inputs": {"image": source_image_name}, "class_type": "LoadImage"},
+        "3": {"inputs": {"text": positive_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "4": {"inputs": {"text": negative_prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "9": {"inputs": {"model_name": PITHAND_DETAILER_MODEL}, "class_type": "UltralyticsDetectorProvider"},
+        "10": {
+            "inputs": {
+                "segm_detector": ["9", 1],
+                "image": ["2", 0],
+                "threshold": 0.35,
+                "dilation": 10,
+                "crop_factor": 3.0,
+                "drop_size": 12,
+                "labels": "all",
+            },
+            "class_type": "SegmDetectorSEGS",
+        },
+        "11": {"inputs": {"segs": ["10", 0]}, "class_type": "SegsToCombinedMask"},
+        "12": {"inputs": {"mask": ["11", 0]}, "class_type": "MaskToImage"},
+        "13": {
+            "inputs": {
+                "image": ["2", 0],
+                "segs": ["10", 0],
+                "model": ["1", 0],
+                "clip": ["1", 1],
+                "vae": ["1", 2],
+                "guide_size": 384,
+                "guide_size_for": True,
+                "max_size": 768,
+                "seed": 20260697,
+                "steps": 14,
+                "cfg": 5.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "positive": ["3", 0],
+                "negative": ["4", 0],
+                "denoise": 0.25,
+                "feather": 5,
+                "noise_mask": True,
+                "force_inpaint": True,
+                "wildcard": "",
+                "cycle": 1,
+            },
+            "class_type": "DetailerForEach",
+        },
+        "90": {"inputs": {"images": ["12", 0], "filename_prefix": f"{filename_prefix}_pithand_mask"}, "class_type": "SaveImage"},
+        "99": {"inputs": {"images": ["13", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
+    }
+
+
+def _normalize_sam3_coords(value: Any, *, field_name: str) -> Tuple[str, List[Dict[str, int]]]:
+    """Normalize SAM3 point prompts to the JSON string expected by the node."""
+    raw = value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise ValueError(f"{field_name} must not be empty")
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{field_name} must be JSON list of point objects") from exc
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"{field_name} must be a non-empty list")
+
+    points: List[Dict[str, int]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            x_value = item.get("x")
+            y_value = item.get("y")
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            x_value, y_value = item
+        else:
+            raise ValueError(f"{field_name} entries must be {{x,y}} objects or [x,y] pairs")
+        try:
+            x = int(round(float(x_value)))
+            y = int(round(float(y_value)))
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"{field_name} coordinates must be numeric") from exc
+        if x < 0 or y < 0:
+            raise ValueError(f"{field_name} coordinates must be non-negative pixel values")
+        points.append({"x": x, "y": y})
+    return json.dumps(points, ensure_ascii=False), points
+
+
+def _build_sam3_local_hand_postprocess_workflow(
+    *,
+    checkpoint: str,
+    source_image_name: str,
+    positive_prompt: str,
+    negative_prompt: str,
+    filename_prefix: str,
+    sam3_positive_coords: str,
+    sam3_negative_coords: str,
+    sam3_threshold: float,
+    sam3_refine_iterations: int,
+    hand_denoise: float,
+) -> Dict[str, Any]:
+    # Hand-only/source-locked SAM3 repair route.
+    #
+    # This intentionally does not reuse the face8m+hand9c workflow. The user
+    # expects this preset to leave the face/background/outfit untouched and
+    # repair only the coordinate-selected hand mask region.
+    return {
+        "1": {"inputs": {"ckpt_name": checkpoint}, "class_type": "CheckpointLoaderSimple"},
+        "2": {"inputs": {"image": source_image_name}, "class_type": "LoadImage"},
+        "7": {
+            "inputs": {
+                "text": positive_prompt,
+                "clip": ["1", 1],
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "8": {
+            "inputs": {
+                "text": negative_prompt,
+                "clip": ["1", 1],
+            },
+            "class_type": "CLIPTextEncode",
+        },
+        "9": {"inputs": {"ckpt_name": SAM3_LOCAL_HAND_CHECKPOINT}, "class_type": "CheckpointLoaderSimple"},
+        "10": {
+            "inputs": {
+                "model": ["9", 0],
+                "image": ["2", 0],
+                "threshold": sam3_threshold,
+                "refine_iterations": sam3_refine_iterations,
+                "individual_masks": False,
+                "positive_coords": sam3_positive_coords,
+                "negative_coords": sam3_negative_coords,
+            },
+            "class_type": "SAM3_Detect",
+        },
+        "11": {
+            "inputs": {
+                "mask": ["10", 0],
+                "combined": False,
+                "crop_factor": 2.2,
+                "bbox_fill": False,
+                "drop_size": 8,
+                "contour_fill": False,
+            },
+            "class_type": "MaskToSEGS",
+        },
+        "12": {"inputs": {"mask": ["10", 0]}, "class_type": "MaskToImage"},
+        "13": {
+            "inputs": {
+                "image": ["2", 0],
+                "segs": ["11", 0],
+                "model": ["1", 0],
+                "clip": ["1", 1],
+                "vae": ["1", 2],
+                "guide_size": 384,
+                "guide_size_for": True,
+                "max_size": 768,
+                "seed": 20260701,
+                "steps": 18,
+                "cfg": 5.5,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "positive": ["7", 0],
+                "negative": ["8", 0],
+                "denoise": hand_denoise,
+                "feather": 4,
+                "noise_mask": True,
+                "force_inpaint": True,
+                "wildcard": "",
+                "cycle": 1,
+            },
+            "class_type": "DetailerForEach",
+        },
+        "90": {"inputs": {"images": ["13", 0], "filename_prefix": filename_prefix}, "class_type": "SaveImage"},
+        "99": {
+            "inputs": {
+                "images": ["12", 0],
+                "filename_prefix": f"{filename_prefix}_sam3_mask",
+            },
+            "class_type": "SaveImage",
+        },
+    }
+
+
 def _build_depth50_canny100_face8m_hand9c_postprocess_workflow(
     *,
     checkpoint: str,
@@ -1371,10 +1761,25 @@ def _parse_mask_box(mask_box: Any) -> Tuple[float, float, float, float]:
     elif isinstance(mask_box, (list, tuple)) and len(mask_box) == 4:
         raw = tuple(mask_box)
     elif isinstance(mask_box, str) and mask_box.strip():
-        parts = [part.strip() for part in re.split(r"[\s,]+", mask_box.strip()) if part.strip()]
-        if len(parts) != 4:
-            raise ValueError("mask_box string must contain exactly 4 numbers: x,y,w,h")
-        raw = tuple(parts)
+        value = mask_box.strip()
+        if value.startswith("{"):
+            try:
+                parsed = json.loads(value)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError("mask_box JSON object string must contain x/y/w/h numbers") from exc
+            if not isinstance(parsed, dict):
+                raise ValueError("mask_box JSON string must decode to an object with x/y/w/h")
+            raw = (
+                parsed.get("x"),
+                parsed.get("y"),
+                parsed.get("w", parsed.get("width")),
+                parsed.get("h", parsed.get("height")),
+            )
+        else:
+            parts = [part.strip() for part in re.split(r"[\s,]+", value) if part.strip()]
+            if len(parts) != 4:
+                raise ValueError("mask_box string must contain exactly 4 numbers: x,y,w,h")
+            raw = tuple(parts)
     else:
         raise ValueError("mask_box is required and must be dict, list, tuple, or 'x,y,w,h' string")
 
@@ -1944,6 +2349,7 @@ def _build_character_production_runtime(
             _sanitize_sfw_prompt_terms(prompt),
             V8_STYLE_SUBJECT_BASELINE,
             V8_STYLE_COMPOSITION_GUARD,
+            HAND_FINGER_ANATOMY_POSITIVE_GUARD,
         )
         final_negative_prompt = _merge_comma_terms(
             PORTRAIT_PRODUCTION_NEGATIVE_BASELINE,
@@ -1980,6 +2386,7 @@ def _build_character_production_runtime(
         source_prompt = _merge_comma_terms(
             sanitized_prompt,
             KEY_VISUAL_SUBCULTURE_STYLE_BASELINE,
+            HAND_FINGER_ANATOMY_POSITIVE_GUARD,
         )
         final_negative_prompt = KEY_VISUAL_SUBCULTURE_NEGATIVE_BASELINE
         if is_reference_key_visual:
@@ -2382,6 +2789,11 @@ def _checkpoint_key(name: str) -> str:
     return "".join(ch.casefold() for ch in _checkpoint_stem(name) if ch.isalnum())
 
 
+def _is_detector_only_checkpoint(name: str) -> bool:
+    requested_key = _checkpoint_key(name)
+    return any(requested_key == _checkpoint_key(item) for item in DETECTOR_ONLY_CHECKPOINTS)
+
+
 def _partial_alias_keys(requested: str) -> List[str]:
     key = _checkpoint_key(requested)
     keys = [key] if key else []
@@ -2423,6 +2835,21 @@ def _resolution_payload(
     return payload
 
 
+def _detector_only_checkpoint_payload(base: Dict[str, Any], candidates: List[str]) -> Dict[str, Any]:
+    checkpoint = candidates[0] if candidates else str(base.get("requested_checkpoint") or "")
+    return _resolution_payload(
+        base=base,
+        ok=False,
+        mode="detector_only_forbidden",
+        candidates=candidates,
+        resolved_checkpoint=None,
+        error_type="detector_only_checkpoint",
+        error=(
+            f"Requested checkpoint is detector-only and cannot be used as a generation model: {checkpoint}"
+        ),
+    )
+
+
 def resolve_checkpoint(
     requested_checkpoint: str,
     checkpoints: Any,
@@ -2445,6 +2872,8 @@ def resolve_checkpoint(
     }
 
     if requested in available:
+        if _is_detector_only_checkpoint(requested):
+            return _detector_only_checkpoint_payload(base, [requested])
         return _resolution_payload(
             base=base,
             ok=True,
@@ -2455,6 +2884,8 @@ def resolve_checkpoint(
 
     extension_matches = [name for name in available if requested == _checkpoint_stem(name)]
     if len(extension_matches) == 1:
+        if _is_detector_only_checkpoint(extension_matches[0]):
+            return _detector_only_checkpoint_payload(base, extension_matches)
         return _resolution_payload(
             base=base,
             ok=True,
@@ -2476,6 +2907,8 @@ def resolve_checkpoint(
     requested_key = _checkpoint_key(requested)
     normalized_matches = [name for name in available if requested_key and requested_key == _checkpoint_key(name)]
     if len(normalized_matches) == 1:
+        if _is_detector_only_checkpoint(normalized_matches[0]):
+            return _detector_only_checkpoint_payload(base, normalized_matches)
         return _resolution_payload(
             base=base,
             ok=True,
@@ -2501,6 +2934,8 @@ def resolve_checkpoint(
         if any(alias_key in checkpoint_key for alias_key in alias_keys):
             partial_matches.append(name)
     if len(partial_matches) == 1:
+        if _is_detector_only_checkpoint(partial_matches[0]):
+            return _detector_only_checkpoint_payload(base, partial_matches)
         return _resolution_payload(
             base=base,
             ok=True,
@@ -2579,6 +3014,25 @@ def _first_output_image(history_payload: Dict[str, Any], prompt_id: str) -> Opti
     return None
 
 
+def _output_image_for_node(history_payload: Dict[str, Any], prompt_id: str, node_id: str) -> Optional[Dict[str, Any]]:
+    entry = history_payload.get(prompt_id)
+    if not isinstance(entry, dict):
+        return None
+    outputs = entry.get("outputs")
+    if not isinstance(outputs, dict):
+        return None
+    node_data = outputs.get(str(node_id))
+    if not isinstance(node_data, dict):
+        return None
+    images = node_data.get("images")
+    if not isinstance(images, list):
+        return None
+    for image in images:
+        if isinstance(image, dict) and isinstance(image.get("filename"), str):
+            return image
+    return None
+
+
 def _history_completed_successfully(history_payload: Dict[str, Any], prompt_id: str) -> bool:
     entry = history_payload.get(prompt_id)
     if not isinstance(entry, dict):
@@ -2598,6 +3052,144 @@ def _read_png_dimensions(path: Path) -> tuple[int | None, int | None]:
     except Exception:  # noqa: BLE001
         return None, None
     return None, None
+
+
+def _images_have_identical_pixels(left_path: Path, right_path: Path) -> Optional[bool]:
+    """Return whether two image files render to the same pixels, ignoring metadata."""
+    try:
+        from PIL import Image, ImageChops
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pillow_unavailable_for_pixel_compare left=%s right=%s err=%s", left_path, right_path, exc)
+        return None
+    try:
+        with Image.open(left_path) as left_image, Image.open(right_path) as right_image:
+            left = left_image.convert("RGB")
+            right = right_image.convert("RGB")
+            if left.size != right.size:
+                return False
+            return ImageChops.difference(left, right).getbbox() is None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pixel_compare_failed left=%s right=%s err=%s", left_path, right_path, exc)
+        return None
+
+
+def _masked_inpaint_pixel_diff_stats(
+    source_path: Path,
+    output_path: Path,
+    mask_path: Path,
+) -> Optional[Dict[str, Any]]:
+    """Measure changed pixels inside/outside a mask for localized inpaint verification."""
+    try:
+        from PIL import Image, ImageChops
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "pillow_unavailable_for_masked_diff source=%s output=%s mask=%s err=%s",
+            source_path,
+            output_path,
+            mask_path,
+            exc,
+        )
+        return None
+
+    try:
+        with (
+            Image.open(source_path) as source_image,
+            Image.open(output_path) as output_image,
+            Image.open(mask_path) as mask_image,
+        ):
+            source = source_image.convert("RGB")
+            output = output_image.convert("RGB")
+            mask = mask_image.convert("L")
+            resized_output = False
+            resized_mask = False
+            if output.size != source.size:
+                output = output.resize(source.size)
+                resized_output = True
+            if mask.size != source.size:
+                mask = mask.resize(source.size)
+                resized_mask = True
+
+            changed = ImageChops.difference(source, output).convert("L").point(lambda value: 255 if value else 0)
+            inside_mask = mask.point(lambda value: 255 if value else 0)
+            outside_mask = ImageChops.invert(inside_mask)
+            changed_inside = ImageChops.multiply(changed, inside_mask).histogram()[255]
+            changed_outside = ImageChops.multiply(changed, outside_mask).histogram()[255]
+            inside_total = inside_mask.histogram()[255]
+            outside_total = outside_mask.histogram()[255]
+            changed_total = changed.histogram()[255]
+            total_pixels = max(1, source.size[0] * source.size[1])
+            return {
+                "source_size": {"width": source.size[0], "height": source.size[1]},
+                "output_size": {"width": output_image.size[0], "height": output_image.size[1]},
+                "mask_size": {"width": mask_image.size[0], "height": mask_image.size[1]},
+                "resized_output_for_compare": resized_output,
+                "resized_mask_for_compare": resized_mask,
+                "changed_pixels": changed_total,
+                "changed_pixel_ratio": round(changed_total / total_pixels, 6),
+                "changed_inside_mask_pixels": changed_inside,
+                "changed_inside_mask_ratio": round(changed_inside / max(1, inside_total), 6),
+                "changed_outside_mask_pixels": changed_outside,
+                "changed_outside_mask_ratio": round(changed_outside / max(1, outside_total), 6),
+                "inside_mask_pixels": inside_total,
+                "outside_mask_pixels": outside_total,
+            }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "masked_diff_failed source=%s output=%s mask=%s err=%s",
+            source_path,
+            output_path,
+            mask_path,
+            exc,
+        )
+        return None
+
+
+def _composite_masked_inpaint_output_with_source(
+    *,
+    source_path: Path,
+    generated_path: Path,
+    mask_path: Path,
+    temp_prefix: str,
+) -> Tuple[Path, Dict[str, Any]]:
+    """Lock pixels outside the mask to the original source image before publishing."""
+    try:
+        from PIL import Image
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("Pillow is required to composite masked inpaint output") from exc
+
+    with (
+        Image.open(source_path) as source_image,
+        Image.open(generated_path) as generated_image,
+        Image.open(mask_path) as mask_image,
+    ):
+        source = source_image.convert("RGBA")
+        generated = generated_image.convert("RGBA")
+        mask = mask_image.convert("L")
+        resized_generated = False
+        resized_mask = False
+        if generated.size != source.size:
+            generated = generated.resize(source.size)
+            resized_generated = True
+        if mask.size != source.size:
+            mask = mask.resize(source.size)
+            resized_mask = True
+        composite = Image.composite(generated, source, mask)
+
+        fd, temp_path = tempfile.mkstemp(prefix=f"{temp_prefix}_", suffix="_source_locked.png")
+        os.close(fd)
+        composite_path = Path(temp_path)
+        composite.save(composite_path, "PNG")
+
+    diff_stats = _masked_inpaint_pixel_diff_stats(source_path, composite_path, mask_path)
+    return composite_path, {
+        "masked_inpaint_post_composite_applied": True,
+        "masked_inpaint_outside_source_locked": True,
+        "pre_composite_output_source_path": str(generated_path),
+        "post_composite_output_source_path": str(composite_path),
+        "resized_generated_for_composite": resized_generated,
+        "resized_mask_for_composite": resized_mask,
+        "masked_inpaint_locality": diff_stats,
+    }
 
 
 def _update_metadata_report_evidence(metadata_path: Path, report_evidence: Dict[str, Any]) -> None:
@@ -2846,7 +3438,11 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             operation in {"postprocess", SOURCE_PRESERVING_POSTPROCESS_OPERATION, LOCAL_RETOUCH_OPERATION}
             or postprocess_preset in {
                 FACE8M_HAND9C_POSTPROCESS_PRESET,
+                FACE8M_PITHAND_POSTPROCESS_PRESET,
+                HAND9C_ONLY_POSTPROCESS_PRESET,
+                PITHAND_ONLY_POSTPROCESS_PRESET,
                 DEPTH50_CANNY100_FACE8M_HAND9C_POSTPROCESS_PRESET,
+                SAM3_LOCAL_HAND_TIGHT_POSTPROCESS_PRESET,
             }
             or (bool(source_image_path) and not source_image_upscale and not masked_inpaint)
         )
@@ -3111,7 +3707,11 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     aspect_ratio=aspect,
                 )
 
-            output_image = _first_output_image(history_payload or {}, prompt_id)
+            output_image = (
+                _output_image_for_node(history_payload or {}, prompt_id, "90")
+                if preset_name == SAM3_LOCAL_HAND_TIGHT_POSTPROCESS_PRESET
+                else None
+            ) or _first_output_image(history_payload or {}, prompt_id)
             if not output_image:
                 return error_response(
                     error="ComfyUI upscale history success did not contain an output image",
@@ -3361,8 +3961,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     aspect_ratio=aspect,
                     extra=source_resolution,
                 )
-            feather_px = int(kwargs.get("mask_feather_px") or 10)
-            grow_mask_by = int(kwargs.get("grow_mask_by") or 8)
+            feather_px = int(kwargs.get("mask_feather_px")) if kwargs.get("mask_feather_px") is not None else 10
+            grow_mask_by = int(kwargs.get("grow_mask_by")) if kwargs.get("grow_mask_by") is not None else 8
             inpaint_target = str(kwargs.get("mask_target") or kwargs.get("mask_label") or "").strip() or None
             mask_source = str(kwargs.get("mask_source") or kwargs.get("mask_mode") or "").strip()
             if not mask_source:
@@ -3579,7 +4179,11 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     aspect_ratio=aspect,
                 )
 
-            output_image = _first_output_image(history_payload or {}, prompt_id)
+            output_image = (
+                _output_image_for_node(history_payload or {}, prompt_id, "90")
+                if preset_name == SAM3_LOCAL_HAND_TIGHT_POSTPROCESS_PRESET
+                else None
+            ) or _first_output_image(history_payload or {}, prompt_id)
             if not output_image:
                 if mask_path is not None:
                     try:
@@ -3629,6 +4233,113 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     aspect_ratio=aspect,
                 )
 
+            source_lock_evidence: Dict[str, Any]
+            if mask_path is not None:
+                try:
+                    output_source_path, source_lock_evidence = _composite_masked_inpaint_output_with_source(
+                        source_path=source_input_path,
+                        generated_path=output_source_path,
+                        mask_path=mask_path,
+                        temp_prefix=filename_prefix,
+                    )
+                    source_origin = f"{source_origin}+local_mask_source_lock"
+                except Exception as exc:  # noqa: BLE001
+                    if mask_path is not None:
+                        try:
+                            mask_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                    return error_response(
+                        error=f"ComfyUI masked inpaint source-lock composite failed: {exc}",
+                        error_type="locality_guard_error",
+                        provider=self.name,
+                        model=checkpoint,
+                        prompt=prompt,
+                        aspect_ratio=aspect,
+                        extra={
+                            "workflow_key": workflow_key,
+                            "prompt_id": prompt_id,
+                            "source_image_path": str(source_input_path),
+                            "mask_source": mask_source,
+                            "mask_target": inpaint_target,
+                            "mask_box": mask_info["normalized"],
+                            "mask_box_px": mask_info["pixel_box"],
+                            "mask_shape": mask_info["mask_shape"],
+                            "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
+                        },
+                    )
+                locality_stats = source_lock_evidence.get("masked_inpaint_locality")
+                if (
+                    isinstance(locality_stats, dict)
+                    and int(locality_stats.get("changed_outside_mask_pixels") or 0) > 0
+                ):
+                    try:
+                        mask_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    return error_response(
+                        error="ComfyUI masked inpaint locality guard detected pixel drift outside mask after composite",
+                        error_type="locality_violation",
+                        provider=self.name,
+                        model=checkpoint,
+                        prompt=prompt,
+                        aspect_ratio=aspect,
+                        extra={
+                            "workflow_key": workflow_key,
+                            "prompt_id": prompt_id,
+                            "source_image_path": str(source_input_path),
+                            "output_source_path": str(output_source_path),
+                            "output_source_origin": source_origin,
+                            "mask_source": mask_source,
+                            "mask_target": inpaint_target,
+                            "mask_box": mask_info["normalized"],
+                            "mask_box_px": mask_info["pixel_box"],
+                            "mask_shape": mask_info["mask_shape"],
+                            "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
+                            "masked_inpaint_source_lock": source_lock_evidence,
+                        },
+                    )
+            else:
+                source_lock_evidence = {
+                    "masked_inpaint_post_composite_applied": False,
+                    "masked_inpaint_outside_source_locked": False,
+                    "reason": "no_local_mask_available_for_detailer_bbox",
+                }
+
+            pixel_identical = _images_have_identical_pixels(source_input_path, output_source_path)
+            if pixel_identical is True:
+                if mask_path is not None:
+                    try:
+                        mask_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                return error_response(
+                    error=(
+                        "ComfyUI masked inpaint completed but output pixels are identical to source; "
+                        "mask may be empty or detector missed the target"
+                    ),
+                    error_type="no_effect",
+                    provider=self.name,
+                    model=checkpoint,
+                    prompt=prompt,
+                    aspect_ratio=aspect,
+                    extra={
+                        "workflow_key": workflow_key,
+                        "prompt_id": prompt_id,
+                        "source_image_path": str(source_input_path),
+                        "output_source_path": str(output_source_path),
+                        "output_source_origin": source_origin,
+                        "mask_source": mask_source,
+                        "mask_target": inpaint_target,
+                        "mask_box": mask_info["normalized"],
+                        "mask_box_px": mask_info["pixel_box"],
+                        "mask_shape": mask_info["mask_shape"],
+                        "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
+                        "masked_inpaint_safety": mask_safety,
+                        "masked_inpaint_source_lock": source_lock_evidence,
+                    },
+                )
+
             actual_width, actual_height = _read_png_dimensions(output_source_path)
             output_resolution = (
                 f"{actual_width}x{actual_height}"
@@ -3654,6 +4365,13 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
                 "grow_mask_by": max(0, grow_mask_by),
                 "masked_inpaint_safety": mask_safety,
+                "masked_inpaint_source_lock": source_lock_evidence,
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
                 "actual_width": actual_width,
                 "actual_height": actual_height,
                 "output_resolution": output_resolution,
@@ -3684,9 +4402,16 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
                 "grow_mask_by": max(0, grow_mask_by),
                 "masked_inpaint_safety": mask_safety,
+                "masked_inpaint_source_lock": source_lock_evidence,
                 "uploaded_source": uploaded_source,
                 "uploaded_mask": uploaded_mask,
                 "negative_prompt": negative_prompt,
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
                 "vae": None,
                 "loras": [],
                 "controlnet_used": False,
@@ -3743,6 +4468,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
                 "grow_mask_by": max(0, grow_mask_by),
                 "masked_inpaint_safety": mask_safety,
+                "masked_inpaint_source_lock": source_lock_evidence,
                 "seed": seed,
                 "steps": steps,
                 "cfg": cfg,
@@ -3768,6 +4494,14 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "mask_shape": mask_info["mask_shape"],
                 "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
                 "masked_inpaint_requires_visual_review": mask_safety["requires_visual_review"],
+                "masked_inpaint_source_locked": bool(source_lock_evidence.get("masked_inpaint_outside_source_locked")),
+                "masked_inpaint_locality": source_lock_evidence.get("masked_inpaint_locality"),
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": denoise,
                 "output_image": bundle["primary_image"],
                 "artifact_path": str(bundle["primary_image_path"]),
                 "output_resolution": output_resolution,
@@ -3802,6 +4536,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     "mask_coverage_ratio": mask_info["mask_coverage_ratio"],
                     "grow_mask_by": max(0, grow_mask_by),
                     "masked_inpaint_safety": mask_safety,
+                    "masked_inpaint_source_lock": source_lock_evidence,
                     "masked_inpaint_requires_visual_review": mask_safety["requires_visual_review"],
                     "local_status": "국소 인페인트 완료",
                     "publish_status": "HermesWork publish 완료",
@@ -3843,7 +4578,11 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
         if source_preserving_postprocess:
             supported_postprocess_presets = {
                 FACE8M_HAND9C_POSTPROCESS_PRESET,
+                FACE8M_PITHAND_POSTPROCESS_PRESET,
+                HAND9C_ONLY_POSTPROCESS_PRESET,
+                PITHAND_ONLY_POSTPROCESS_PRESET,
                 DEPTH50_CANNY100_FACE8M_HAND9C_POSTPROCESS_PRESET,
+                SAM3_LOCAL_HAND_TIGHT_POSTPROCESS_PRESET,
             }
             if postprocess_preset and postprocess_preset not in supported_postprocess_presets:
                 return error_response(
@@ -3894,6 +4633,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             effective_loras: List[Dict[str, Any]] = []
             controlnet_used = False
             controlnet_stack: List[Dict[str, Any]] = []
+            sam3_config: Optional[Dict[str, Any]] = None
             if preset_name == DEPTH50_CANNY100_FACE8M_HAND9C_POSTPROCESS_PRESET:
                 workflow_key = SOURCE_PRESERVING_DEPTH50_CANNY100_FACE_HAND_WORKFLOW_KEY
                 effective_checkpoint = SOURCE_PRESERVING_DEPTH_CANNY_CHECKPOINT
@@ -3942,6 +4682,121 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     negative_prompt=negative_prompt,
                     filename_prefix=filename_prefix,
                     seed=DEFAULT_SEED,
+                )
+            elif preset_name in {HAND9C_ONLY_POSTPROCESS_PRESET, PITHAND_ONLY_POSTPROCESS_PRESET}:
+                workflow_key = (
+                    SOURCE_PRESERVING_HAND9C_ONLY_WORKFLOW_KEY
+                    if preset_name == HAND9C_ONLY_POSTPROCESS_PRESET
+                    else SOURCE_PRESERVING_PITHAND_ONLY_WORKFLOW_KEY
+                )
+                if not negative_prompt:
+                    negative_prompt = (
+                        "low quality, blurry, bad hands, malformed hands, extra fingers, missing fingers, "
+                        "fused fingers, broken fingers, mutated fingers, deformed palm, distorted hand, duplicated hand, "
+                        "changing pose, changing character identity, changing outfit, changing background, changing face, "
+                        "text, watermark, photorealistic, 3d render"
+                    )
+                hand_only_builder = (
+                    _build_hand9c_only_postprocess_workflow
+                    if preset_name == HAND9C_ONLY_POSTPROCESS_PRESET
+                    else _build_pithand_only_postprocess_workflow
+                )
+                workflow = hand_only_builder(
+                    checkpoint=effective_checkpoint,
+                    source_image_name=str(uploaded_source["name"]),
+                    positive_prompt=prompt_for_generation,
+                    negative_prompt=negative_prompt,
+                    filename_prefix=filename_prefix,
+                )
+            elif preset_name == SAM3_LOCAL_HAND_TIGHT_POSTPROCESS_PRESET:
+                workflow_key = SOURCE_PRESERVING_SAM3_LOCAL_HAND_WORKFLOW_KEY
+                negative_coords_value = kwargs.get("sam3_negative_coords")
+                try:
+                    sam3_positive_coords, positive_points = _normalize_sam3_coords(
+                        kwargs.get("sam3_positive_coords"),
+                        field_name="sam3_positive_coords",
+                    )
+                    if negative_coords_value in (None, "", []):
+                        sam3_negative_coords, negative_points = "[]", []
+                    else:
+                        sam3_negative_coords, negative_points = _normalize_sam3_coords(
+                            negative_coords_value,
+                            field_name="sam3_negative_coords",
+                        )
+                except ValueError as exc:
+                    return error_response(
+                        error=str(exc),
+                        error_type="invalid_argument",
+                        provider=self.name,
+                        model=checkpoint,
+                        prompt=prompt,
+                        aspect_ratio=aspect,
+                    )
+                try:
+                    sam3_threshold = float(kwargs.get("sam3_threshold", 0.68))
+                except Exception:
+                    sam3_threshold = 0.68
+                sam3_threshold = min(0.95, max(0.05, sam3_threshold))
+                try:
+                    sam3_refine_iterations = int(kwargs.get("sam3_refine_iterations", 1))
+                except Exception:
+                    sam3_refine_iterations = 1
+                sam3_refine_iterations = max(0, min(4, sam3_refine_iterations))
+                try:
+                    sam3_detail_denoise = float(kwargs.get("sam3_detail_denoise", kwargs.get("denoise", 0.42)))
+                except Exception:
+                    sam3_detail_denoise = 0.42
+                sam3_detail_denoise = min(0.75, max(0.05, sam3_detail_denoise))
+                if not negative_prompt:
+                    negative_prompt = (
+                        "low quality, worst quality, blurry, bad anatomy, bad hands, malformed hands, extra fingers, "
+                        "missing fingers, fused fingers, broken fingers, mutated fingers, deformed palm, distorted hand, "
+                        "duplicated hand, changing pose, changing character identity, changing outfit, changing lantern, "
+                        "text, watermark, photorealistic, 3d render"
+                    )
+                sam3_config = {
+                    "sam3_checkpoint": SAM3_LOCAL_HAND_CHECKPOINT,
+                    "positive_points": positive_points,
+                    "negative_points": negative_points,
+                    "threshold": sam3_threshold,
+                    "refine_iterations": sam3_refine_iterations,
+                    "detail_denoise": sam3_detail_denoise,
+                    "mask_to_segs": {
+                        "combined": False,
+                        "crop_factor": 2.2,
+                        "bbox_fill": False,
+                        "drop_size": 8,
+                        "contour_fill": False,
+                    },
+                    "role": "manual/local hand mask repair candidate; not a default postprocess route",
+                }
+                workflow = _build_sam3_local_hand_postprocess_workflow(
+                    checkpoint=effective_checkpoint,
+                    source_image_name=str(uploaded_source["name"]),
+                    positive_prompt=prompt_for_generation,
+                    negative_prompt=negative_prompt,
+                    filename_prefix=filename_prefix,
+                    sam3_positive_coords=sam3_positive_coords,
+                    sam3_negative_coords=sam3_negative_coords,
+                    sam3_threshold=sam3_threshold,
+                    sam3_refine_iterations=sam3_refine_iterations,
+                    hand_denoise=sam3_detail_denoise,
+                )
+            elif preset_name == FACE8M_PITHAND_POSTPROCESS_PRESET:
+                workflow_key = SOURCE_PRESERVING_FACE_PITHAND_WORKFLOW_KEY
+                if not negative_prompt:
+                    negative_prompt = (
+                        "low quality, worst quality, blurry, bad anatomy, bad hands, malformed hands, extra fingers, "
+                        "missing fingers, fused fingers, broken fingers, mutated fingers, deformed palm, distorted hand, "
+                        "duplicated hand, distorted face, text, watermark, changing pose, changing character identity, "
+                        "changing outfit, changing prop"
+                    )
+                workflow = _build_face8m_pithand_postprocess_workflow(
+                    checkpoint=effective_checkpoint,
+                    source_image_name=str(uploaded_source["name"]),
+                    positive_prompt=prompt_for_generation,
+                    negative_prompt=negative_prompt,
+                    filename_prefix=filename_prefix,
                 )
             else:
                 if not negative_prompt:
@@ -4012,7 +4867,17 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     aspect_ratio=aspect,
                 )
 
-            output_image = _first_output_image(history_payload or {}, prompt_id)
+            if preset_name == SAM3_LOCAL_HAND_TIGHT_POSTPROCESS_PRESET:
+                output_image = _output_image_for_node(history_payload or {}, prompt_id, "90")
+            elif preset_name in {
+                FACE8M_PITHAND_POSTPROCESS_PRESET,
+                HAND9C_ONLY_POSTPROCESS_PRESET,
+                PITHAND_ONLY_POSTPROCESS_PRESET,
+            }:
+                output_image = _output_image_for_node(history_payload or {}, prompt_id, "99")
+            else:
+                output_image = None
+            output_image = output_image or _first_output_image(history_payload or {}, prompt_id)
             if not output_image:
                 return error_response(
                     error="ComfyUI history success did not contain an output image",
@@ -4052,8 +4917,83 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 if actual_width is not None and actual_height is not None
                 else None
             )
-            face_detailer_config = {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5}
+            hand_only_preset = preset_name in {
+                HAND9C_ONLY_POSTPROCESS_PRESET,
+                PITHAND_ONLY_POSTPROCESS_PRESET,
+                SAM3_LOCAL_HAND_TIGHT_POSTPROCESS_PRESET,
+            }
+            face_detailer_config: Dict[str, Any] = (
+                {
+                    "enabled": False,
+                    "reason": f"{preset_name} is hand-only/source-locked; face detailer is intentionally skipped",
+                }
+                if hand_only_preset
+                else {"model": "bbox/face_yolov8m.pt", "denoise": 0.35, "steps": 16, "cfg": 5.5}
+            )
             hand_detailer_config = {"model": "bbox/hand_yolov9c.pt", "denoise": 0.25, "steps": 14, "cfg": 5.5}
+            mask_output_image = (
+                _output_image_for_node(history_payload or {}, prompt_id, "99")
+                if preset_name == SAM3_LOCAL_HAND_TIGHT_POSTPROCESS_PRESET
+                else None
+            )
+            if preset_name == HAND9C_ONLY_POSTPROCESS_PRESET:
+                hand_detailer_config = {
+                    "model": "bbox/hand_yolov9c.pt",
+                    "detector": "BboxDetectorSEGS",
+                    "denoise": 0.25,
+                    "steps": 14,
+                    "cfg": 5.5,
+                    "threshold": 0.35,
+                    "dilation": 10,
+                    "crop_factor": 3.0,
+                    "drop_size": 12,
+                    "source_locked": True,
+                    "scope": "hand_only",
+                }
+                mask_output_image = _output_image_for_node(history_payload or {}, prompt_id, "90")
+            if preset_name == PITHAND_ONLY_POSTPROCESS_PRESET:
+                hand_detailer_config = {
+                    "model": PITHAND_DETAILER_MODEL,
+                    "detector": "SegmDetectorSEGS",
+                    "denoise": 0.25,
+                    "steps": 14,
+                    "cfg": 5.5,
+                    "threshold": 0.35,
+                    "dilation": 10,
+                    "crop_factor": 3.0,
+                    "drop_size": 12,
+                    "source_locked": True,
+                    "scope": "hand_only",
+                    "candidate": True,
+                    "role": "hand-only segmentation detailer candidate; not promoted until visual review",
+                }
+                mask_output_image = _output_image_for_node(history_payload or {}, prompt_id, "90")
+            if preset_name == FACE8M_PITHAND_POSTPROCESS_PRESET:
+                hand_detailer_config = {
+                    "model": PITHAND_DETAILER_MODEL,
+                    "detector": "SegmDetectorSEGS",
+                    "denoise": 0.25,
+                    "steps": 14,
+                    "cfg": 5.5,
+                    "threshold": 0.35,
+                    "dilation": 10,
+                    "crop_factor": 3.0,
+                    "drop_size": 12,
+                    "candidate": True,
+                    "role": "default-candidate hand segmentation detailer; not promoted until visual review",
+                }
+                mask_output_image = _output_image_for_node(history_payload or {}, prompt_id, "90")
+            if sam3_config:
+                hand_detailer_config = {
+                    "model": SAM3_LOCAL_HAND_CHECKPOINT,
+                    "detector": "SAM3_Detect",
+                    "denoise": sam3_config["detail_denoise"],
+                    "steps": 18,
+                    "cfg": 5.5,
+                    "mask": sam3_config,
+                    "source_locked": True,
+                    "scope": "hand_only",
+                }
 
             created_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
             prompt_payload = {
@@ -4077,6 +5017,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "loras": effective_loras,
                 "controlnet_used": controlnet_used,
                 "controlnet_stack": controlnet_stack,
+                "sam3_local_mask": sam3_config,
+                "mask_output_image": mask_output_image,
                 "raw_prompt_payload": {
                     "submit_payload": payload,
                     "submit_response": submit,
@@ -4106,6 +5048,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "loras": effective_loras,
                 "controlnet_used": controlnet_used,
                 "controlnet_stack": controlnet_stack,
+                "sam3_local_mask": sam3_config,
+                "mask_output_image": mask_output_image,
                 "created_at": created_at,
                 "category": POSTPROCESS_CATEGORY,
                 "output_source_path": str(output_source_path),
@@ -4157,6 +5101,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "loras": effective_loras,
                 "controlnet_used": controlnet_used,
                 "controlnet_stack": controlnet_stack,
+                "sam3_local_mask": sam3_config,
+                "mask_output_image": mask_output_image,
                 "face_detailer": face_detailer_config,
                 "hand_detailer": hand_detailer_config,
                 "output_image": output_image,
@@ -4185,6 +5131,9 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "face_detailer": face_detailer_config,
                 "hand_detailer": hand_detailer_config,
             }
+            if sam3_config:
+                report_evidence["sam3_local_mask"] = sam3_config
+                report_evidence["mask_output_image"] = mask_output_image
             _update_metadata_report_evidence(bundle["metadata_path"], report_evidence)
             nas_status = "동기화 요청됨" if bundle["nas_hook_requested"] else "동기화 요청 실패"
             return success_response(
@@ -4212,6 +5161,8 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     "loras": effective_loras,
                     "controlnet_used": controlnet_used,
                     "controlnet_stack": controlnet_stack,
+                    "sam3_local_mask": sam3_config,
+                    "mask_output_image": mask_output_image,
                     "local_status": "후보정 완료",
                     "publish_status": "HermesWork publish 완료",
                     "nas_status": nas_status,

@@ -55,6 +55,33 @@ class TestPluginDispatch:
         assert "directly asks" in description
         assert "internal flag" in description
 
+    def test_schema_exposes_masked_inpaint_args(self):
+        from tools import image_generation_tool
+
+        properties = image_generation_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]
+
+        assert "masked_inpaint" in properties["operation"]["enum"]
+        assert properties["mask_source"]["enum"] == ["rectangle", "detailer_bbox"]
+        assert "mask_target" in properties
+        assert "mask_box" in properties
+        assert "mask_feather_px" in properties
+        assert "grow_mask_by" in properties
+
+    def test_schema_exposes_sam3_local_hand_postprocess_args(self):
+        from tools import image_generation_tool
+
+        properties = image_generation_tool.IMAGE_GENERATE_SCHEMA["parameters"]["properties"]
+
+        assert "face8m_d035_pithand_d025" in properties["postprocess_preset"]["enum"]
+        assert "hand9c_d025_only" in properties["postprocess_preset"]["enum"]
+        assert "pithand_d025_only" in properties["postprocess_preset"]["enum"]
+        assert "sam3_local_hand_tight_v1" in properties["postprocess_preset"]["enum"]
+        assert "sam3_positive_coords" in properties
+        assert "sam3_negative_coords" in properties
+        assert "sam3_threshold" in properties
+        assert "sam3_refine_iterations" in properties
+        assert "sam3_detail_denoise" in properties
+
     def test_dispatch_routes_to_codex_provider(self, monkeypatch, tmp_path):
         from tools import image_generation_tool
         from agent import image_gen_registry as registry_module
@@ -468,6 +495,120 @@ class TestPluginDispatch:
         assert captured["output_type"] == "key_visual"
         assert captured["negative_prompt"] == "different character, text, logo"
         assert captured["live_generation_approved"] is True
+
+    def test_handle_image_generate_task_metadata_forwards_masked_inpaint_args(self, monkeypatch, tmp_path):
+        from tools import image_generation_tool
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        captured = {}
+
+        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None, **kwargs):
+            captured.update(
+                {
+                    "prompt": prompt,
+                    "aspect_ratio": aspect_ratio,
+                    "task_id": task_id,
+                    "project_name": project_name,
+                    "artifact_name": artifact_name,
+                    **kwargs,
+                }
+            )
+            return json.dumps({"success": True, "image": "/tmp/masked.png"})
+
+        monkeypatch.setattr(image_generation_tool, "_dispatch_to_plugin_provider", fake_dispatch)
+        image_generation_tool.register_image_task_metadata(
+            "masked-task-1",
+            image_args={
+                "operation": "masked_inpaint",
+                "source_image_path": "/Volumes/SSD_Hermes/HermesWork/Image/source.png",
+                "mask_source": "detailer_bbox",
+                "mask_target": "hand",
+                "mask_feather_px": "4",
+                "grow_mask_by": "0",
+                "denoise": "0.35",
+                "project_name": "angelica_masked_inpaint_passthrough",
+                "artifact_name": "left_hand_fix",
+                "prompt": "fix only the hand",
+                "negative_prompt": "extra fingers, changed face",
+            },
+        )
+
+        result = image_generation_tool._handle_image_generate(
+            {
+                "prompt": "model supplied prompt should not win",
+                "aspect_ratio": "portrait",
+                "operation": "masked_inpaint",
+            },
+            task_id="masked-task-1",
+        )
+
+        assert json.loads(result)["success"] is True
+        assert captured["prompt"] == "fix only the hand"
+        assert captured["operation"] == "masked_inpaint"
+        assert captured["source_image_path"] == "/Volumes/SSD_Hermes/HermesWork/Image/source.png"
+        assert captured["mask_source"] == "detailer_bbox"
+        assert captured["mask_target"] == "hand"
+        assert captured["mask_feather_px"] == 4
+        assert captured["grow_mask_by"] == 0
+        assert captured["denoise"] == 0.35
+        assert captured["project_name"] == "angelica_masked_inpaint_passthrough"
+        assert captured["artifact_name"] == "left_hand_fix"
+        assert captured["negative_prompt"] == "extra fingers, changed face"
+
+    def test_handle_image_generate_task_metadata_forwards_sam3_postprocess_args(self, monkeypatch, tmp_path):
+        from tools import image_generation_tool
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        captured = {}
+
+        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None, **kwargs):
+            captured.update(
+                {
+                    "prompt": prompt,
+                    "aspect_ratio": aspect_ratio,
+                    "task_id": task_id,
+                    "project_name": project_name,
+                    "artifact_name": artifact_name,
+                    **kwargs,
+                }
+            )
+            return json.dumps({"success": True, "image": "/tmp/sam3.png"})
+
+        monkeypatch.setattr(image_generation_tool, "_dispatch_to_plugin_provider", fake_dispatch)
+        image_generation_tool.register_image_task_metadata(
+            "sam3-task-1",
+            image_args={
+                "operation": "source_preserving_postprocess",
+                "source_image_path": "/Volumes/SSD_Hermes/HermesWork/Image/source.png",
+                "postprocess_preset": "sam3_local_hand_tight_v1",
+                "sam3_positive_coords": [{"x": 388, "y": 464}],
+                "sam3_negative_coords": [{"x": 320, "y": 570}],
+                "sam3_threshold": "0.72",
+                "sam3_refine_iterations": "1",
+                "sam3_detail_denoise": "0.38",
+                "project_name": "angelica_sam3_passthrough",
+                "artifact_name": "sam3_hand",
+                "prompt": "repair only the hand",
+            },
+        )
+
+        result = image_generation_tool._handle_image_generate(
+            {"prompt": "placeholder", "aspect_ratio": "portrait"},
+            task_id="sam3-task-1",
+        )
+
+        assert json.loads(result)["success"] is True
+        assert captured["prompt"] == "repair only the hand"
+        assert captured["operation"] == "source_preserving_postprocess"
+        assert captured["postprocess_preset"] == "sam3_local_hand_tight_v1"
+        assert captured["source_image_path"] == "/Volumes/SSD_Hermes/HermesWork/Image/source.png"
+        assert captured["sam3_positive_coords"] == [{"x": 388, "y": 464}]
+        assert captured["sam3_negative_coords"] == [{"x": 320, "y": 570}]
+        assert captured["sam3_threshold"] == 0.72
+        assert captured["sam3_refine_iterations"] == 1
+        assert captured["sam3_detail_denoise"] == 0.38
 
     def test_dispatch_single_output_mode_reuses_cached_result_for_non_forge_provider(self, monkeypatch, tmp_path):
         from tools import image_generation_tool

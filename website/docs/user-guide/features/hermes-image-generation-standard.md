@@ -27,7 +27,15 @@ live_generation_approved=True
 
 ## 1. Global Image Baseline
 
-Hermes image workflows should use a shared anatomy/extremity quality baseline when the backend supports negative prompts or equivalent prompt constraints.
+Hermes image workflows should use a shared anatomy/extremity quality baseline when the backend supports positive/negative prompts or equivalent prompt constraints.
+
+Recommended shared positive hand baseline:
+
+```text
+natural hand anatomy,
+5 fingers on each visible hand,
+clean separate fingers
+```
 
 Recommended shared negative baseline:
 
@@ -37,6 +45,8 @@ bad hands,
 malformed hands,
 malformed fingers,
 missing fingers,
+extra fingers,
+fused fingers,
 extra digits,
 fewer digits,
 bad feet,
