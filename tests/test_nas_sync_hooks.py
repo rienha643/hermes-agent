@@ -104,6 +104,48 @@ def test_queue_nas_sync_hook_launches_and_debounces(monkeypatch, tmp_path):
     assert metadata == event
 
 
+def test_queue_nas_sync_hook_launches_with_resolved_symlink_paths(monkeypatch, tmp_path):
+    script = tmp_path / "hermes_nas_backup.py"
+    script.write_text("print('ok')\n", encoding="utf-8")
+
+    launched: list[list[str]] = []
+
+    class DummyPopen:
+        def __init__(self, cmd, **kwargs):
+            launched.append(cmd)
+            self.pid = 4243
+
+    real_root = tmp_path / "Volumes" / "SSD_Hermes" / "HermesWork" / "Image" / "NAI" / "run-001"
+    real_root.mkdir(parents=True)
+    artifact_path = real_root / "named.png"
+    artifact_path.write_bytes(b"x")
+    symlink_root = tmp_path / "Users" / "hermes" / "HermesWork"
+    symlink_root.parent.mkdir(parents=True)
+    symlink_root.symlink_to(tmp_path / "Volumes" / "SSD_Hermes" / "HermesWork", target_is_directory=True)
+    symlink_source_root = symlink_root / "Image" / "NAI" / "run-001"
+
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_script", lambda: script)
+    monkeypatch.setattr(nas_sync_hooks, "_resolve_nas_hook_state_dir", lambda: tmp_path / "state" / "nas-sync")
+    monkeypatch.setattr(nas_sync_hooks.subprocess, "Popen", DummyPopen)
+    monkeypatch.setattr(nas_sync_hooks, "_IN_PROCESS_LAST_LAUNCH", {})
+
+    assert nas_sync_hooks.queue_nas_sync_hook(
+        category="image",
+        scope="NAI/run-001",
+        artifact_path=symlink_source_root / "named.png",
+        source_root=symlink_source_root,
+    )
+
+    assert launched
+    assert launched[0][2:6] == ["--hook", str(real_root.resolve(strict=False)), "--category", "image"]
+    assert launched[0][6:10] == [
+        "--scope",
+        "NAI/run-001",
+        "--artifact-path",
+        str(artifact_path.resolve(strict=False)),
+    ]
+
+
 def test_queue_nas_sync_hook_records_launch_failure(monkeypatch, tmp_path):
     script = tmp_path / "hermes_nas_backup.py"
     script.write_text("print('ok')\n", encoding="utf-8")

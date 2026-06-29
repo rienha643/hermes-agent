@@ -189,11 +189,12 @@ def queue_nas_sync_hook(
         return False
 
     normalized_scope = _normalized_story_scope(scope) if normalized_category == "story" else scope.strip()
+    normalized_artifact_path = artifact_path.resolve(strict=False)
     normalized_source_root = (
         _normalized_story_source_root(source_root, artifact_path)
         if normalized_category == "story"
         else (source_root if source_root.is_dir() else source_root.parent)
-    )
+    ).resolve(strict=False)
 
     key = _source_hook_key(normalized_category, normalized_scope, normalized_source_root)
     key_hash = _hook_key_hash(key)
@@ -225,7 +226,7 @@ def queue_nas_sync_hook(
             "--scope",
             normalized_scope,
             "--artifact-path",
-            str(artifact_path),
+            str(normalized_artifact_path),
             "--debounce-seconds",
             str(int(debounce_seconds)),
         ]
@@ -268,7 +269,7 @@ def queue_nas_sync_hook(
                         "category": normalized_category,
                         "scope": normalized_scope,
                         "source_root": str(normalized_source_root),
-                        "artifact_path": str(artifact_path),
+                        "artifact_path": str(normalized_artifact_path),
                         "state_path": str(state_path),
                         "cmd": cmd,
                         "error": str(exc),
@@ -288,7 +289,7 @@ def queue_nas_sync_hook(
             "category": normalized_category,
             "scope": normalized_scope,
             "source_root": str(normalized_source_root),
-            "artifact_path": str(artifact_path),
+            "artifact_path": str(normalized_artifact_path),
             "state_path": str(state_path),
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
