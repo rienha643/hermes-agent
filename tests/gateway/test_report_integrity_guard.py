@@ -135,6 +135,18 @@ def test_seir_no_artifact_guard_blocks_generation_progress_without_tool_call():
     assert "생성 중" not in guarded
 
 
+def test_no_artifact_guard_response_does_not_get_extra_governance_ping():
+    guarded, applied = _guard_unverified_image_generation_claim(
+        "[WORKER_RESULT: Seir]\n바로 생성을 시작합니다.",
+        active_profile="artist_grok",
+        turn_tool_names=[],
+    )
+
+    assert applied is True
+    assert "BLOCKED_UNVERIFIED_GENERATION" in guarded
+    assert _evaluate_gateway_user_report_governance(guarded) == ""
+
+
 def test_seir_no_artifact_guard_blocks_mixed_blocker_and_fake_success_claim():
     text = """[WORKER RESULT: Seir]
 

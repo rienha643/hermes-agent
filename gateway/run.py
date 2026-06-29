@@ -1281,6 +1281,14 @@ def _gateway_report_omitted_present(text: str) -> bool:
     return any(marker in body for marker in _GATEWAY_OMISSION_MARKERS)
 
 
+def _is_no_artifact_generation_guard_response(text: str) -> bool:
+    body = str(text or "")
+    return (
+        "[NO-ARTIFACT COMPLETION GUARD]" in body
+        and "BLOCKED_UNVERIFIED_GENERATION" in body
+    )
+
+
 def _gateway_report_language(text: str) -> str:
     """Classify the user-facing report language for GOVLAWLIVEWIP checks."""
     body = str(text or "")
@@ -1306,6 +1314,8 @@ def _looks_like_governed_user_report(text: str) -> bool:
 
 def _evaluate_gateway_user_report_governance(text: str) -> str:
     """Return a GOVLAWLIVEWIP PING for final-report language/omission drift."""
+    if _is_no_artifact_generation_guard_response(text):
+        return ""
     if not _looks_like_governed_user_report(text):
         return ""
     if "GOVERNANCE PING" in str(text or ""):
