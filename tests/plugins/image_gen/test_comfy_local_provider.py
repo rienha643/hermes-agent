@@ -255,6 +255,26 @@ class TestComfyLocalLoraPresetResolution:
             },
         ]
 
+    def test_portrait_stable_alias_uses_user_selected_f_stack(self):
+        stack = COMFY_MOD._resolve_lora_stack(
+            {"style_preset": "portrait_stable"},
+            runtime_preset={"preset": "portrait_production"},
+        )
+
+        assert [item["preset"] for item in stack] == ["portrait_primary", "portrait_primary_detail"]
+        assert stack[0]["name"] == COMFY_MOD.DEFAULT_VIDEO_SOURCE_STYLE_LORA
+        assert stack[0]["weight"] == COMFY_MOD.DEFAULT_VIDEO_SOURCE_STYLE_LORA_WEIGHT
+        assert stack[1]["name"] == COMFY_MOD.DEFAULT_ADD_MICRO_DETAILS_LORA
+        assert stack[1]["weight"] == COMFY_MOD.DEFAULT_ADD_MICRO_DETAILS_LORA_WEIGHT
+
+    def test_unknown_style_preset_does_not_clear_runtime_default_lora_stack(self):
+        stack = COMFY_MOD._resolve_lora_stack(
+            {"style_preset": "stale_or_mistyped_portrait_alias"},
+            runtime_preset={"preset": "portrait_production"},
+        )
+
+        assert [item["preset"] for item in stack] == ["portrait_primary", "portrait_primary_detail"]
+
     def test_key_art_style_preset_uses_pornmaster_key_visual_weight(self):
         stack = COMFY_MOD._resolve_lora_stack({"style_preset": "key_art"}, runtime_preset=None)
 

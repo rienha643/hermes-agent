@@ -119,6 +119,8 @@ STYLE_PRESET_LORAS: Dict[str, Any] = {
     "default": _stable_lora_preset_entry(),
     "portrait_primary": _portrait_primary_lora_preset_entries(),
     "portrait_closeup": _portrait_primary_lora_preset_entries(),
+    "portrait_stable": _portrait_primary_lora_preset_entries(),
+    "portrait_production": _portrait_primary_lora_preset_entries(),
     "key_art": {
         "preset": "key_art",
         "name": DEFAULT_KEY_ART_LORA,
@@ -2299,25 +2301,28 @@ def _resolve_lora_stack(kwargs: Dict[str, Any], *, runtime_preset: Optional[Dict
 
     preset_key = str(kwargs.get("lora_preset") or kwargs.get("style_preset") or "").strip().casefold().replace("-", "_").replace(" ", "_")
     runtime_preset_name = str((runtime_preset or {}).get("preset") or "")
+    runtime_default_preset_key = ""
+    if runtime_preset_name == PORTRAIT_PRODUCTION_PRESET:
+        runtime_default_preset_key = "portrait_primary"
+    elif runtime_preset_name in {
+        KEY_VISUAL_SUBCULTURE_PRESET,
+        REFERENCE_IDENTITY_EXPERIMENTAL_PRESET,
+        REFERENCE_IDENTITY_FULLBODY_EXPERIMENTAL_PRESET,
+        CHARACTER_PRODUCTION_PRESET,
+        PROFILE_ICON_PRODUCTION_PRESET,
+        DIALOGUE_BUST_PRODUCTION_PRESET,
+        UPPER_BODY_PRODUCTION_PRESET,
+        FULLBODY_PRODUCTION_PRESET,
+        STANDING_SPRITE_PRODUCTION_PRESET,
+        INGAME_CG_PRODUCTION_PRESET,
+    }:
+        runtime_default_preset_key = "stable"
     if not preset_key:
-        if runtime_preset_name == PORTRAIT_PRODUCTION_PRESET:
-            preset_key = "portrait_primary"
-        elif runtime_preset_name in {
-            KEY_VISUAL_SUBCULTURE_PRESET,
-            REFERENCE_IDENTITY_EXPERIMENTAL_PRESET,
-            REFERENCE_IDENTITY_FULLBODY_EXPERIMENTAL_PRESET,
-        }:
-            preset_key = "stable"
-        elif runtime_preset_name in {
-            CHARACTER_PRODUCTION_PRESET,
-            PROFILE_ICON_PRODUCTION_PRESET,
-            DIALOGUE_BUST_PRODUCTION_PRESET,
-            UPPER_BODY_PRODUCTION_PRESET,
-            FULLBODY_PRODUCTION_PRESET,
-            STANDING_SPRITE_PRODUCTION_PRESET,
-            INGAME_CG_PRODUCTION_PRESET,
-        }:
-            preset_key = "stable"
+        preset_key = runtime_default_preset_key
+    elif runtime_default_preset_key and preset_key not in STYLE_PRESET_LORAS:
+        # A typo or stale alias must not silently erase the production preset's
+        # selected LoRA stack.
+        preset_key = runtime_default_preset_key
     if preset_key in STYLE_PRESET_LORAS:
         preset_config = STYLE_PRESET_LORAS[preset_key]
         preset_items = preset_config if isinstance(preset_config, list) else [preset_config]
