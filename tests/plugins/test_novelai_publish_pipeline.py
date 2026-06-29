@@ -132,6 +132,19 @@ def test_novelai_parameter_overrides_are_preserved_in_payload() -> None:
     assert params["dynamic_thresholding"] is False
 
 
+def test_novelai_cfg_scale_alias_maps_to_scale() -> None:
+    import plugins.image_gen.novelai as novelai
+
+    payload = novelai.build_novelai_request_payload(
+        prompt="safe prompt",
+        cfg_scale=6.25,
+    )
+
+    params = payload["parameters"]
+    assert params["scale"] == 6.25
+    assert "cfg_scale" not in params
+
+
 def test_novelai_reference_image_path_is_encoded_into_reference_arrays(tmp_path: Path) -> None:
     import plugins.image_gen.novelai as novelai
 
@@ -150,6 +163,42 @@ def test_novelai_reference_image_path_is_encoded_into_reference_arrays(tmp_path:
     assert base64.b64decode(params["reference_image_multiple"][0]).startswith(b"\x89PNG\r\n\x1a\n")
     assert params["reference_strength_multiple"] == [0.72]
     assert params["reference_information_extracted_multiple"] == [0.88]
+
+
+def test_novelai_reference_alias_resolves_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    reference = tmp_path / "reference.png"
+    manifest = tmp_path / "manifest.json"
+    _write_png(reference)
+    manifest.write_text(
+        json.dumps(
+            {
+                "asset_set": "unit_style_set",
+                "items": [
+                    {
+                        "alias": "style_ref_unit",
+                        "external_ssd_path": str(reference),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(novelai.NAI_REFERENCE_MANIFESTS_ENV, str(manifest))
+
+    payload = novelai.build_novelai_request_payload(
+        prompt="safe prompt",
+        reference_image_path="unit_style_set:style_ref_unit",
+        reference_strength=0.42,
+        reference_information_extracted=0.91,
+        experimental_reference_images=True,
+    )
+    params = payload["parameters"]
+
+    assert base64.b64decode(params["reference_image_multiple"][0]).startswith(b"\x89PNG\r\n\x1a\n")
+    assert params["reference_strength_multiple"] == [0.42]
+    assert params["reference_information_extracted_multiple"] == [0.91]
 
 
 def test_novelai_dry_run_reference_image_path_is_encoded(tmp_path: Path) -> None:
@@ -231,10 +280,17 @@ def test_novelai_style_preset_env_merges_sfw_subculture_baseline(monkeypatch: py
     params = payload["parameters"]
 
     assert payload["policy"]["style_preset"] == "game_default_subculture"
-    assert "polished cel shading" in payload["input"]
+    assert "polished anime game illustration" in payload["input"]
+    assert "soft gradient anime shading" in payload["input"]
     assert "fantasy game character art" in payload["input"]
     assert "rich game illustration" in payload["input"]
+    assert "vivid color palette" in payload["input"]
     assert "premium mobile game key art" in payload["input"]
+    assert "premium gacha game illustration" in payload["input"]
+    assert "subculture mobile game key visual" in payload["input"]
+    assert "anime key visual" in payload["input"]
+    assert "commercial splash art finish" in payload["input"]
+    assert "clear readable face" in payload["input"]
     assert payload["input"].count("cinematic lighting") == 1
     assert payload["input"].endswith("safe prompt")
     assert params["negative_prompt"].startswith("flat lighting")
@@ -242,6 +298,11 @@ def test_novelai_style_preset_env_merges_sfw_subculture_baseline(monkeypatch: py
     assert "realistic skin texture" in params["negative_prompt"]
     assert "plain background" in params["negative_prompt"]
     assert "simple gradient background" in params["negative_prompt"]
+    assert "character sheet" in params["negative_prompt"]
+    assert "flat anime screenshot" in params["negative_prompt"]
+    assert "low color depth" in params["negative_prompt"]
+    assert "black face" in params["negative_prompt"]
+    assert "asymmetrical eyes" in params["negative_prompt"]
     assert params["negative_prompt"].count("flat lighting") == 1
     assert params["v4_prompt"]["caption"]["base_caption"] == payload["input"]
     assert params["v4_negative_prompt"]["caption"]["base_caption"] == params["negative_prompt"]
@@ -255,7 +316,7 @@ def test_novelai_unknown_style_preset_env_does_not_change_payload(monkeypatch: p
     payload = novelai.build_novelai_request_payload(prompt="safe prompt")
 
     assert payload["policy"]["style_preset"] is None
-    assert "polished cel shading" not in payload["input"]
+    assert "polished anime game illustration" not in payload["input"]
     assert "photorealistic" not in payload["parameters"]["negative_prompt"]
 
 
@@ -807,3 +868,42 @@ def test_novelai_live_generation_preserves_explicit_seed_in_sidecar(
     metadata = json.loads((Path(result["sidecar_dir"]) / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["seed"] == 987654321
     assert metadata["seed_source"] == "provided"
+
+
+def test_novelai_live_generation_preserves_requested_artifact_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    response_png = tmp_path / "response.png"
+    _write_png(response_png)
+
+    def fake_post(payload, *, api_key, endpoint, timeout):
+        return novelai.NovelAIHTTPResponse(
+            status=200,
+            headers={"content-type": "image/png"},
+            body=response_png.read_bytes(),
+        )
+
+    monkeypatch.setenv("NOVELAI_API_KEY", "test-key-not-printed")
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork" / "Image"))
+    monkeypatch.setattr(novelai, "_post_novelai_generation", fake_post)
+    monkeypatch.setattr(novelai, "queue_nas_sync_hook", lambda **kwargs: False)
+
+    result = novelai.NovelAIImageGenProvider().generate(
+        "safe prompt",
+        run_id="live-named",
+        artifact_name="seir_nai_smoke_20260630_v1.png",
+        live_generation_approved=True,
+    )
+
+    published = tmp_path / "HermesWork" / "Image" / "NAI" / "live-named" / "seir_nai_smoke_20260630_v1.png"
+    assert result["success"] is True
+    assert result["image"] == str(published)
+    assert result["media_files"] == [str(published)]
+    assert result["report_evidence"]["output_image"] == "seir_nai_smoke_20260630_v1.png"
+    assert result["report_evidence"]["artifact_path"] == str(published)
+    metadata = json.loads((Path(result["sidecar_dir"]) / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["artifact_name"] == "seir_nai_smoke_20260630_v1.png"
+    assert metadata["output_image"] == "seir_nai_smoke_20260630_v1.png"

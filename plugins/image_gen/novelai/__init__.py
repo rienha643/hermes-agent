@@ -101,31 +101,76 @@ JPEG artifacts,
 chromatic aberration,
 scan artifacts"""
 NAI_STYLE_PRESET_ENV = "HERMES_NAI_STYLE_PRESET"
+NAI_REFERENCE_MANIFESTS_ENV = "HERMES_NAI_REFERENCE_MANIFESTS"
+NAI_REFERENCE_MANIFEST_DEFAULTS = (
+    Path("/Volumes/SSD_Hermes/HermesCodexControl/reference_assets/nai_style_selected20_260630/manifest.json"),
+)
 NAI_STYLE_PRESETS: Dict[str, Dict[str, str]] = {
     "game_default_subculture": {
-        "positive": """polished cel shading,
+        "positive": """polished anime game illustration,
+soft gradient anime shading,
+delicate painterly anime rendering,
 cinematic lighting,
 detailed hair,
 appealing character design,
 fantasy game character art,
 clean anime shading,
 rich game illustration,
+vivid color palette,
+rich color harmony,
+warm and cool color contrast,
 layered background,
 detailed environment,
 dramatic rim light,
 soft ambient occlusion,
+soft bloom lighting,
 refined costume detail,
 premium mobile game key art,
-soft ambient background detail""",
+soft ambient background detail,
+subculture mobile game key visual,
+light novel cover art,
+anime key visual,
+premium mobile game promotional art,
+premium gacha game illustration,
+polished eyes,
+glossy detailed eyes,
+expressive face,
+refined hair flow,
+rich costume detail,
+cinematic bloom lighting,
+commercial splash art finish,
+clear readable face,
+stable character silhouette,
+clean separate fingers""",
         "negative": """photorealistic,
 realistic skin texture,
 flat lighting,
+flat cel coloring,
+flat anime screenshot,
+low color depth,
+posterized shading,
+thick black outline,
+webtoon screenshot,
+anime screenshot,
 low-detail background,
 plain background,
 empty background,
 simple gradient background,
 low-detail costume,
-uncanny face""",
+muddy color,
+washed out color,
+uncanny face,
+card frame,
+trading card,
+character sheet,
+turnaround sheet,
+copied layout,
+copied character design,
+cropped face,
+face out of frame,
+unreadable face,
+black face,
+asymmetrical eyes""",
     }
 }
 
@@ -195,6 +240,50 @@ def _coerce_seed(value: Any) -> int:
     return seed
 
 
+def _reference_manifest_paths() -> list[Path]:
+    """Return configured reference manifests, keeping stable project defaults last."""
+    paths: list[Path] = []
+    raw = os.environ.get(NAI_REFERENCE_MANIFESTS_ENV, "")
+    for item in raw.split(os.pathsep):
+        value = item.strip()
+        if value:
+            paths.append(Path(value).expanduser())
+    paths.extend(NAI_REFERENCE_MANIFEST_DEFAULTS)
+    return paths
+
+
+def _resolve_reference_image_alias(alias: str) -> Path | None:
+    """Resolve a policy-managed reference alias without exposing local paths in Slack."""
+    value = alias.strip()
+    if not value:
+        return None
+    requested_asset_set: str | None = None
+    requested_alias = value
+    if ":" in value:
+        requested_asset_set, requested_alias = (part.strip() for part in value.split(":", 1))
+    for manifest_path in _reference_manifest_paths():
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        asset_set = str(manifest.get("asset_set") or "")
+        if requested_asset_set and requested_asset_set != asset_set:
+            continue
+        for item in manifest.get("items") or []:
+            if str(item.get("alias") or "") != requested_alias:
+                continue
+            candidate = item.get("external_ssd_path") or item.get("path")
+            if not candidate:
+                raise ValueError(f"NovelAI reference alias has no path: {requested_alias}")
+            path = Path(str(candidate)).expanduser()
+            if not path.exists():
+                raise ValueError(f"NovelAI reference alias file is missing: {requested_alias}")
+            return path.resolve(strict=True)
+    return None
+
+
 def _extract_reference_image_config(parameter_overrides: Dict[str, Any]) -> tuple[list[str], list[float], list[float]]:
     requested = any(
         key in parameter_overrides
@@ -238,10 +327,19 @@ def _extract_reference_image_config(parameter_overrides: Dict[str, Any]) -> tupl
                 raise ValueError(f"NovelAI reference image must be a PNG: {path}")
             raw_image_base64.append(base64.b64encode(data).decode("ascii"))
         elif isinstance(item, str):
+            alias_path = _resolve_reference_image_alias(item)
+            if alias_path is not None:
+                data = alias_path.read_bytes()
+                if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                    raise ValueError(f"NovelAI reference alias is not a PNG: {item.strip()}")
+                raw_image_base64.append(base64.b64encode(data).decode("ascii"))
+                continue
             try:
                 base64.b64decode(item, validate=True)
             except Exception as exc:
-                raise ValueError("NovelAI reference_image string must be an existing PNG path or base64 data") from exc
+                raise ValueError(
+                    "NovelAI reference_image string must be an existing PNG path, a registered reference alias, or base64 data"
+                ) from exc
             raw_image_base64.append(item)
         else:
             raise ValueError("NovelAI reference_image entries must be paths or base64 strings")
@@ -353,6 +451,14 @@ def _merge_negative_prompt(negative_prompt: str | None) -> str:
     return _merge_prompt_baseline(baseline, negative_prompt, baseline_first=False)
 
 
+def _normalize_parameter_aliases(parameter_overrides: Dict[str, Any]) -> Dict[str, Any]:
+    """Map cross-backend image tool aliases onto NovelAI's API parameter names."""
+    normalized = dict(parameter_overrides)
+    if "scale" not in normalized and "cfg_scale" in normalized:
+        normalized["scale"] = normalized.pop("cfg_scale")
+    return normalized
+
+
 def build_novelai_request_payload(
     *,
     prompt: str,
@@ -392,7 +498,7 @@ def build_novelai_request_payload(
     else:
         request_seed = _coerce_seed(seed)
         seed_source = "provided"
-    parameter_overrides = dict(parameter_overrides)
+    parameter_overrides = _normalize_parameter_aliases(dict(parameter_overrides))
     _coerce_reference_images(parameter_overrides)
 
     parameters: Dict[str, Any] = {
@@ -604,6 +710,17 @@ def _default_dimensions_for_aspect_ratio(aspect_ratio: str) -> tuple[int, int]:
 
 def _default_run_id() -> str:
     return time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+
+
+def _normalize_artifact_name(value: Any, default: str = "image_000.png") -> str:
+    """Return a safe PNG filename for a published NovelAI artifact."""
+    raw = str(value or "").strip() or default
+    name = Path(raw).name.strip()
+    if not name or name in {".", ".."}:
+        name = default
+    if not name.lower().endswith(".png"):
+        name = f"{name}.png"
+    return name
 
 
 def _response_headers_dict(headers: Dict[str, str]) -> Dict[str, str]:
@@ -842,6 +959,7 @@ def _generate_live_novelai_image(
     high_resolution: bool,
     seed: int | None,
     save_raw_response: bool,
+    artifact_name: str,
     endpoint: str,
     timeout: int,
     parameter_overrides: Dict[str, Any],
@@ -896,7 +1014,7 @@ def _generate_live_novelai_image(
         prompt=prompt,
         model=model,
         aspect_ratio=aspect_ratio,
-        artifact_name="image_000.png",
+        artifact_name=artifact_name,
         save_raw_response=save_raw_response,
     )
     _write_live_response_metadata(Path(result["sidecar_dir"]), raw_metadata, Path(result["image"]))
@@ -1042,12 +1160,18 @@ def _write_metadata_report_fields(
     actual_width: int | None,
     actual_height: int | None,
     output_resolution: str | None,
+    output_image: str | None = None,
+    artifact_name: str | None = None,
 ) -> None:
     metadata_path = published_sidecar_dir / "metadata.json"
     metadata = _load_json(metadata_path)
     metadata["actual_width"] = actual_width
     metadata["actual_height"] = actual_height
     metadata["output_resolution"] = output_resolution
+    if output_image:
+        metadata["output_image"] = output_image
+    if artifact_name:
+        metadata["artifact_name"] = artifact_name
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -1139,6 +1263,7 @@ def publish_existing_generation(
         else source.parent / "sidecar"
     )
 
+    artifact_name = _normalize_artifact_name(artifact_name)
     image_root = Path(work_root).expanduser() if work_root is not None else _resolve_image_work_root()
     published_dir = image_root / "NAI" / run_id
     published_dir.mkdir(parents=True, exist_ok=True)
@@ -1171,6 +1296,8 @@ def publish_existing_generation(
         actual_width=actual_width,
         actual_height=actual_height,
         output_resolution=output_resolution,
+        output_image=published_png.name,
+        artifact_name=artifact_name,
     )
 
     nas_hook_requested = queue_nas_sync_hook(
@@ -1352,7 +1479,7 @@ class NovelAIImageGenProvider(ImageGenProvider):
                 prompt=prompt,
                 model=model,
                 aspect_ratio=aspect_ratio,
-                artifact_name=str(kwargs.get("artifact_name") or "image_000.png"),
+                artifact_name=_normalize_artifact_name(kwargs.get("artifact_name")),
                 save_raw_response=kwargs.get("save_raw_response"),
             )
 
@@ -1410,6 +1537,7 @@ class NovelAIImageGenProvider(ImageGenProvider):
                     if kwargs.get("save_raw_response") is None
                     else bool(kwargs.get("save_raw_response"))
                 ),
+                artifact_name=_normalize_artifact_name(kwargs.get("artifact_name")),
                 endpoint=str(
                     kwargs.get("endpoint")
                     or (NOVELAI_GENERATE_STREAM_ENDPOINT if model.startswith("nai-diffusion-4") else NOVELAI_GENERATE_ENDPOINT)

@@ -1192,7 +1192,20 @@ IMAGE_GENERATE_SCHEMA = {
             },
             "reference_image_path": {
                 "type": "string",
-                "description": "Optional absolute local reference image path. For ComfyUI this is allowed only with explicit operation=`reference_identity_txt2img` and workflow_key=`character_reference_key_visual_experimental_v1` or `fullbody_v8_reference_identity_experimental_v1`; it must not be used for default generation. Match the reference image workflow family unless `allow_reference_workflow_family_change=true` is intentionally set.",
+                "description": "Optional reference image path or registered reference alias. For NovelAI this may be a policy-managed alias such as `style_ref_00001` when `experimental_reference_images=true` is explicitly requested. For ComfyUI this is allowed only with explicit operation=`reference_identity_txt2img` and workflow_key=`character_reference_key_visual_experimental_v1` or `fullbody_v8_reference_identity_experimental_v1`; it must not be used for default generation. Match the reference image workflow family unless `allow_reference_workflow_family_change=true` is intentionally set.",
+            },
+            "experimental_reference_images": {
+                "type": "boolean",
+                "description": "NovelAI-only explicit validation flag for Precise Reference / vibe reference image generation. Use only when the user has explicitly requested a NovelAI reference-image test or workflow.",
+                "default": False,
+            },
+            "reference_strength": {
+                "type": "number",
+                "description": "NovelAI-only reference image strength for Precise Reference / vibe reference tests. Omit to use the provider default.",
+            },
+            "reference_information_extracted": {
+                "type": "number",
+                "description": "NovelAI-only information/fidelity extraction value for Precise Reference / vibe reference tests. Omit to use the provider default.",
             },
             "experimental_reference_identity": {
                 "type": "boolean",
@@ -1450,6 +1463,9 @@ def _dispatch_to_plugin_provider(
     source_image_path: str | None = None,
     reference_image_path: str | None = None,
     reference_image: str | None = None,
+    experimental_reference_images: bool | None = None,
+    reference_strength: float | int | None = None,
+    reference_information_extracted: float | int | None = None,
     experimental_reference_identity: bool | None = None,
     allow_reference_workflow_family_change: bool | None = None,
     postprocess_preset: str | None = None,
@@ -1599,6 +1615,12 @@ def _dispatch_to_plugin_provider(
             kwargs["reference_image_path"] = reference_image_path
         if reference_image is not None:
             kwargs["reference_image"] = reference_image
+        if experimental_reference_images is not None:
+            kwargs["experimental_reference_images"] = experimental_reference_images
+        if reference_strength is not None:
+            kwargs["reference_strength"] = reference_strength
+        if reference_information_extracted is not None:
+            kwargs["reference_information_extracted"] = reference_information_extracted
         if experimental_reference_identity is not None:
             kwargs["experimental_reference_identity"] = experimental_reference_identity
         if allow_reference_workflow_family_change is not None:
@@ -1717,6 +1739,9 @@ def _handle_image_generate(args, **kw):
     source_image_path = args.get("source_image_path")
     reference_image_path = args.get("reference_image_path")
     reference_image = args.get("reference_image")
+    experimental_reference_images = args.get("experimental_reference_images")
+    reference_strength = args.get("reference_strength")
+    reference_information_extracted = args.get("reference_information_extracted")
     experimental_reference_identity = args.get("experimental_reference_identity")
     allow_reference_workflow_family_change = args.get("allow_reference_workflow_family_change")
     postprocess_preset = args.get("postprocess_preset")
@@ -1799,6 +1824,9 @@ def _handle_image_generate(args, **kw):
         source_image_path=str(source_image_path).strip() if isinstance(source_image_path, str) and source_image_path.strip() else None,
         reference_image_path=str(reference_image_path).strip() if isinstance(reference_image_path, str) and reference_image_path.strip() else None,
         reference_image=str(reference_image).strip() if isinstance(reference_image, str) and reference_image.strip() else None,
+        experimental_reference_images=experimental_reference_images if isinstance(experimental_reference_images, bool) else None,
+        reference_strength=_coerce_positive_float(reference_strength),
+        reference_information_extracted=_coerce_positive_float(reference_information_extracted),
         experimental_reference_identity=experimental_reference_identity if isinstance(experimental_reference_identity, bool) else None,
         allow_reference_workflow_family_change=allow_reference_workflow_family_change if isinstance(allow_reference_workflow_family_change, bool) else None,
         postprocess_preset=str(postprocess_preset).strip() if isinstance(postprocess_preset, str) and postprocess_preset.strip() else None,
