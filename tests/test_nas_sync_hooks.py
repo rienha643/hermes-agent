@@ -437,6 +437,114 @@ def test_run_artifact_hook_writes_success_state_with_verified_hash(monkeypatch, 
     assert artifact_state["dest_sha256"] == expected_hash
 
 
+def test_run_artifact_hook_image_uses_canonical_image_root(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    state_dir = tmp_path / "state" / "nas-sync"
+    monkeypatch.setenv("HERMES_NAS_HOOK_STATE_DIR", str(state_dir))
+
+    source_root = tmp_path / "HermesWork" / "Image" / "260629_final_artifact"
+    source_root.mkdir(parents=True)
+    artifact_path = source_root / "final.png"
+    artifact_path.write_bytes(b"image")
+    expected_hash = backup_mod._sha256_path(artifact_path).lower()
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(backup_mod, "_acquire_hook_lock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(backup_mod, "_release_hook_lock", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backup_mod, "load_credentials", lambda: backup_mod.Credential(host="hyungwoo", username="user", password="pass"))
+    monkeypatch.setattr(backup_mod, "_share_file_sha256", lambda *args, **kwargs: expected_hash)
+
+    def fake_sync(cred, src, dest_unc, *, mirror=False):
+        captured["src"] = src
+        captured["dest"] = dest_unc
+        captured["mirror"] = mirror
+        return 1, "ok"
+
+    monkeypatch.setattr(backup_mod, "sync_source_to_share", fake_sync)
+
+    ok, summary = backup_mod.run_artifact_hook(
+        category="image",
+        scope="260629_final_artifact",
+        source_root=source_root,
+        artifact_path=artifact_path,
+    )
+
+    assert ok
+    assert "result=success" in summary
+    assert captured["src"] == source_root
+    assert str(captured["dest"]).endswith("\\Hermes\\Image\\260629_final_artifact")
+    state = json.loads(next(state_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert state["destination_root"].endswith("\\Hermes\\Image\\260629_final_artifact")
+    assert state["destination_artifact"].endswith("\\Hermes\\Image\\260629_final_artifact\\final.png")
+    assert state["destination_policy"] == {"category_dir": "Image", "evidence_quarantine": False}
+
+
+def test_run_artifact_hook_image_test_evidence_goes_to_evidence_bucket(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    state_dir = tmp_path / "state" / "nas-sync"
+    monkeypatch.setenv("HERMES_NAS_HOOK_STATE_DIR", str(state_dir))
+
+    source_root = tmp_path / "HermesWork" / "Image" / "260629_angelica_compact_dispatch_live_verify_20260629"
+    source_root.mkdir(parents=True)
+    artifact_path = source_root / "verify.png"
+    artifact_path.write_bytes(b"image")
+    expected_hash = backup_mod._sha256_path(artifact_path).lower()
+    evidence_bucket = f"{backup_mod.NOW().strftime('%Y-%m')}-test-runs"
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(backup_mod, "_acquire_hook_lock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(backup_mod, "_release_hook_lock", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backup_mod, "load_credentials", lambda: backup_mod.Credential(host="hyungwoo", username="user", password="pass"))
+    monkeypatch.setattr(backup_mod, "_share_file_sha256", lambda *args, **kwargs: expected_hash)
+
+    def fake_sync(cred, src, dest_unc, *, mirror=False):
+        captured["src"] = src
+        captured["dest"] = dest_unc
+        captured["mirror"] = mirror
+        return 1, "ok"
+
+    monkeypatch.setattr(backup_mod, "sync_source_to_share", fake_sync)
+
+    ok, summary = backup_mod.run_artifact_hook(
+        category="image",
+        scope="260629_angelica_compact_dispatch_live_verify_20260629",
+        source_root=source_root,
+        artifact_path=artifact_path,
+    )
+
+    assert ok
+    assert "result=success" in summary
+    expected_suffix = (
+        "\\Hermes\\Image\\_evidence\\"
+        f"{evidence_bucket}\\260629_angelica_compact_dispatch_live_verify_20260629"
+    )
+    assert str(captured["dest"]).endswith(expected_suffix)
+    state = json.loads(next(state_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert state["destination_root"].endswith(expected_suffix)
+    assert state["destination_artifact"].endswith(f"{expected_suffix}\\verify.png")
+    assert state["destination_policy"] == {
+        "category_dir": "Image",
+        "evidence_quarantine": True,
+        "evidence_bucket": evidence_bucket,
+    }
+
+
+def test_hook_destination_root_normalizes_scope_separators(tmp_path):
+    backup_mod = _load_backup_script_module()
+
+    dest, policy = backup_mod._hook_destination_root(
+        "documents",
+        "_evidence/2026-06-hook-verify",
+        tmp_path / "Documents" / "_evidence" / "2026-06-hook-verify",
+    )
+
+    assert dest.endswith("\\Hermes\\documents\\_evidence\\2026-06-hook-verify")
+    assert "/" not in dest.removeprefix("\\\\hyungwoo\\\\Hermes")
+    assert policy == {"category_dir": "documents", "evidence_quarantine": False}
+
+
 def test_run_artifact_hook_writes_failed_state_on_hash_mismatch(monkeypatch, tmp_path):
     backup_mod = _load_backup_script_module()
     state_dir = tmp_path / "state" / "nas-sync"
