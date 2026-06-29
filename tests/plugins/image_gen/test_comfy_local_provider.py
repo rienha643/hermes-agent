@@ -2429,18 +2429,24 @@ class TestComfyLocalCharacterProductionPreset:
         assert captured["prompt_payload"]["height"] == 1536
         assert captured["workflow_json"]["2"]["inputs"]["width"] == 1024
         assert captured["workflow_json"]["2"]["inputs"]["height"] == 1536
-        assert captured["metadata"]["checkpoint"] == "pornmasterAnime_ilV5.safetensors"
+        assert captured["metadata"]["checkpoint"] == "waiIllustriousSDXL_v170.safetensors"
         assert captured["metadata"]["vae"] == "Anime SDXL VAE DPipe Prototype.safetensors"
         assert captured["metadata"]["loras"][0]["preset"] == "stable"
         assert captured["metadata"]["loras"][0]["name"] == r"00_illustrious_style_candidates\pornmaster-Aesthetics-v2-lora.safetensors"
         assert captured["metadata"]["loras"][0]["weight"] == 0.15
         prompt_text = captured["workflow_json"]["3"]["inputs"]["text"]
+        assert "1girl" in prompt_text
+        assert "solo" in prompt_text
+        assert "only one person" in prompt_text
         assert "full body character art" in prompt_text
         assert "head-to-toe visible" in prompt_text
         assert "full feet visible" in prompt_text
         assert "fantasy academy heroine" in prompt_text
         assert "upper body portrait" not in prompt_text
         negative_text = captured["workflow_json"]["4"]["inputs"]["text"]
+        assert "multiple characters" in negative_text
+        assert "2girls" in negative_text
+        assert "duo" in negative_text
         assert "portrait" in negative_text
         assert "close-up" in negative_text
         assert "cropped feet" in negative_text

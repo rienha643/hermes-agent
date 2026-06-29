@@ -293,6 +293,8 @@ PORTRAIT_PRIMARY_CHECKPOINT = SOURCE_PRESERVING_DEPTH_CANNY_CHECKPOINT
 PORTRAIT_PRIMARY_VAE = SOURCE_PRESERVING_DEPTH_CANNY_VAE
 PORTRAIT_PRIMARY_WIDTH = 1024
 PORTRAIT_PRIMARY_HEIGHT = 1216
+FULLBODY_PRIMARY_CHECKPOINT = SOURCE_PRESERVING_DEPTH_CANNY_CHECKPOINT
+FULLBODY_PRIMARY_VAE = SOURCE_PRESERVING_DEPTH_CANNY_VAE
 WIDER_CHARACTER_PRIMARY_CHECKPOINT = "pornmasterAnime_ilV5.safetensors"
 WIDER_CHARACTER_PRIMARY_VAE = SOURCE_PRESERVING_DEPTH_CANNY_VAE
 FULLBODY_PRODUCTION_WIDTH = 1024
@@ -2117,8 +2119,8 @@ def _build_character_production_runtime(
             "subject_dominance": None,
             "subject_dominance_ratio": None,
             "subject_dominance_rule": None,
-            "checkpoint": WIDER_CHARACTER_PRIMARY_CHECKPOINT,
-            "vae": WIDER_CHARACTER_PRIMARY_VAE,
+            "checkpoint": FULLBODY_PRIMARY_CHECKPOINT,
+            "vae": FULLBODY_PRIMARY_VAE,
             "width": FULLBODY_PRODUCTION_WIDTH,
             "height": FULLBODY_PRODUCTION_HEIGHT,
             "steps": CHARACTER_PRODUCTION_STEPS,
@@ -2605,8 +2607,37 @@ def _update_metadata_report_evidence(metadata_path: Path, report_evidence: Dict[
             metadata = {}
         metadata["report_evidence"] = report_evidence
         metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        artifact_metadata_path = metadata.get("artifact_metadata_sidecar_path")
+        if artifact_metadata_path:
+            artifact_path = Path(str(artifact_metadata_path))
+            if artifact_path != metadata_path and artifact_path.exists():
+                artifact_metadata = json.loads(artifact_path.read_text(encoding="utf-8"))
+                if not isinstance(artifact_metadata, dict):
+                    artifact_metadata = {}
+                artifact_metadata["report_evidence"] = report_evidence
+                artifact_path.write_text(
+                    json.dumps(artifact_metadata, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not update Comfy metadata report_evidence: %s", exc)
+
+
+def _bundle_artifact_sidecar_extra(bundle: Dict[str, Any]) -> Dict[str, Any]:
+    def _path_value(key: str) -> Optional[str]:
+        value = bundle.get(key)
+        return str(value) if value else None
+
+    return {
+        "artifact_sidecar_dir": _path_value("artifact_sidecar_dir"),
+        "artifact_workflow_path": _path_value("artifact_workflow_path"),
+        "artifact_prompt_path": _path_value("artifact_prompt_path"),
+        "artifact_metadata_path": _path_value("artifact_metadata_path"),
+        "artifact_manifest_path": _path_value("artifact_manifest_path"),
+        "artifact_integrity_path": _path_value("artifact_integrity_path"),
+        "stable_metadata_path": _path_value("artifact_metadata_path"),
+        "artifact_sidecars": bundle.get("artifact_sidecars"),
+    }
 
 
 class ComfyLocalImageGenProvider(ImageGenProvider):
@@ -3267,6 +3298,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     "media_files": media_files,
                     "slack_preview_image": str(slack_preview_path) if slack_preview_path is not None else None,
                     "sidecars": bundle["sidecars"],
+                    **_bundle_artifact_sidecar_extra(bundle),
                     "artifact_files": artifact_files,
                     "file_sha256": bundle.get("file_sha256"),
                     "integrity_path": str(bundle["integrity_path"]),
@@ -3783,6 +3815,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     "primary_image": bundle["primary_image"],
                     "media_files": [str(bundle["primary_image_path"])],
                     "sidecars": bundle["sidecars"],
+                    **_bundle_artifact_sidecar_extra(bundle),
                     "artifact_files": [
                         str(bundle["primary_image_path"]),
                         str(bundle["workflow_path"]),
@@ -4191,6 +4224,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                     "primary_image": bundle["primary_image"],
                     "media_files": [str(bundle["primary_image_path"])],
                     "sidecars": bundle["sidecars"],
+                    **_bundle_artifact_sidecar_extra(bundle),
                     "artifact_files": [
                         str(bundle["primary_image_path"]),
                         str(bundle["workflow_path"]),
@@ -4889,6 +4923,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
                 "primary_image": bundle["primary_image"],
                 "media_files": [str(bundle["primary_image_path"])],
                 "sidecars": bundle["sidecars"],
+                **_bundle_artifact_sidecar_extra(bundle),
                 "artifact_path": str(bundle["primary_image_path"]),
                 "artifact_files": [
                     str(bundle["primary_image_path"]),

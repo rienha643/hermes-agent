@@ -80,6 +80,12 @@ def test_publish_filesystem_image_bundle_creates_versioned_bundle_and_manifest(m
     assert bundle["metadata_path"] == expected_dir / "sidecar" / "metadata.json"
     assert bundle["manifest_path"] == expected_dir / "sidecar" / "manifest.json"
     assert bundle["sidecar_dir"] == expected_dir / "sidecar"
+    assert bundle["artifact_sidecar_dir"] == expected_dir / "sidecar" / "artifacts" / "angelica_smoke_v1"
+    assert bundle["artifact_workflow_path"] == bundle["artifact_sidecar_dir"] / "workflow.json"
+    assert bundle["artifact_prompt_path"] == bundle["artifact_sidecar_dir"] / "prompt.json"
+    assert bundle["artifact_metadata_path"] == bundle["artifact_sidecar_dir"] / "metadata.json"
+    assert bundle["artifact_manifest_path"] == bundle["artifact_sidecar_dir"] / "manifest.json"
+    assert bundle["artifact_integrity_path"] == bundle["artifact_sidecar_dir"] / "integrity.json"
     assert sorted(path.name for path in expected_dir.iterdir() if path.is_file()) == ["angelica_smoke_v1.png"]
     assert not list(expected_dir.glob("*.json"))
     assert bundle["storage_verification"]["logical_path"] == str(expected_dir.parent)
@@ -92,12 +98,17 @@ def test_publish_filesystem_image_bundle_creates_versioned_bundle_and_manifest(m
     prompt_payload = _read_json(bundle["prompt_path"])
     metadata = _read_json(bundle["metadata_path"])
     manifest = _read_json(bundle["manifest_path"])
+    artifact_metadata = _read_json(bundle["artifact_metadata_path"])
+    artifact_manifest = _read_json(bundle["artifact_manifest_path"])
 
     assert workflow["8"]["class_type"] == "SaveImage"
     assert prompt_payload["seed"] == 123
     assert metadata["published_primary_path"] == str(bundle["primary_image_path"])
     assert metadata["published_dir"] == str(expected_dir)
     assert metadata["published_sidecar_dir"] == str(expected_dir / "sidecar")
+    assert metadata["artifact_metadata_sidecar_path"] == str(bundle["artifact_metadata_path"])
+    assert artifact_metadata["published_primary_path"] == str(bundle["primary_image_path"])
+    assert artifact_metadata["artifact_metadata_sidecar_path"] == str(bundle["artifact_metadata_path"])
     assert metadata["storage_verification"]["logical_path"] == str(expected_dir.parent)
     assert metadata["storage_verification"]["is_ssd_root"] in (True, False)
     assert metadata["nas_hook_requested"] is True
@@ -109,11 +120,15 @@ def test_publish_filesystem_image_bundle_creates_versioned_bundle_and_manifest(m
     assert "sidecar/prompt.json" in manifest["files"]
     assert "sidecar/metadata.json" in manifest["files"]
     assert "sidecar/manifest.json" in manifest["files"]
+    assert "sidecar/artifacts/angelica_smoke_v1/metadata.json" in manifest["files"]
     assert manifest["sidecars"]["workflow"] == "workflow.json"
     assert manifest["sidecars"]["prompt"] == "prompt.json"
     assert manifest["sidecars"]["metadata"] == "metadata.json"
     assert manifest["sidecars"]["manifest"] == "manifest.json"
     assert manifest["sidecars"]["dir"] == str(expected_dir / "sidecar")
+    assert manifest["artifact_sidecars"]["metadata"] == "artifacts/angelica_smoke_v1/metadata.json"
+    assert artifact_manifest["primary_image"] == "angelica_smoke_v1.png"
+    assert artifact_manifest["latest_sidecars"]["metadata"] == "metadata.json"
     assert manifest["nas_evidence"]["hook_requested"] is True
     assert manifest["nas_evidence"]["mirror_verified"] is False
     assert manifest["status"]["nas_hook_requested"] is True
@@ -458,8 +473,12 @@ def test_slack_upload_evidence_is_persisted_to_sidecars(monkeypatch, tmp_path):
 
     assert evidence_path == bundle["sidecar_dir"] / "slack_evidence.json"
     assert evidence_path is not None
+    artifact_evidence_path = bundle["artifact_sidecar_dir"] / "slack_evidence.json"
+    assert artifact_evidence_path.exists()
     evidence = _read_json(evidence_path)
+    artifact_evidence = _read_json(artifact_evidence_path)
     assert evidence["message_id"] == "1781687569.697899"
+    assert artifact_evidence["message_id"] == "1781687569.697899"
     assert evidence["thread_ts"] == "1781687569.000000"
     assert evidence["filename"] == bundle["primary_image_path"].name
     assert evidence["source_path"] == str(bundle["primary_image_path"])
@@ -467,10 +486,16 @@ def test_slack_upload_evidence_is_persisted_to_sidecars(monkeypatch, tmp_path):
     assert evidence["files_count"] == 1
     manifest = _read_json(bundle["manifest_path"])
     integrity = _read_json(bundle["integrity_path"])
+    artifact_manifest = _read_json(bundle["artifact_manifest_path"])
+    artifact_integrity = _read_json(bundle["artifact_integrity_path"])
     assert manifest["slack_upload_evidence"]["message_id"] == "1781687569.697899"
     assert manifest["status"]["slack_status"] == "Pass"
     assert "sidecar/slack_evidence.json" in manifest["files"]
     assert "slack_evidence.json" in integrity["files"]
+    assert artifact_manifest["slack_upload_evidence"]["message_id"] == "1781687569.697899"
+    assert artifact_manifest["status"]["slack_status"] == "Pass"
+    assert f"sidecar/artifacts/{bundle['primary_image_path'].stem}/slack_evidence.json" in artifact_manifest["files"]
+    assert f"artifacts/{bundle['primary_image_path'].stem}/slack_evidence.json" in artifact_integrity["files"]
 
 
 def test_publish_filesystem_image_bundle_groups_multiple_artifacts_under_same_project(monkeypatch, tmp_path):
@@ -554,6 +579,11 @@ def test_publish_filesystem_image_bundle_groups_multiple_artifacts_under_same_pr
     assert any(path.suffix == ".json" for path in sidecar_dir.iterdir())
     # All sidecar JSONs are contained under sidecar, not mixed into root scope
     assert bundle_a["workflow_path"].parent == sidecar_dir
+    assert _read_json(bundle_a["artifact_metadata_path"])["prompt_id"] == "pid-a"
+    assert _read_json(bundle_b["artifact_metadata_path"])["prompt_id"] == "pid-b"
+    assert _read_json(bundle_c["artifact_metadata_path"])["prompt_id"] == "pid-c"
+    assert _read_json(sidecar_dir / "metadata.json")["prompt_id"] == "pid-c"
+    assert bundle_a["artifact_metadata_path"] != bundle_b["artifact_metadata_path"] != bundle_c["artifact_metadata_path"]
 
 
 def test_run_manifest_and_qualification_report_can_be_written_for_grouped_publish(monkeypatch, tmp_path):
@@ -837,4 +867,3 @@ def test_publish_root_can_be_forced_to_ssd_when_env_is_not_set(monkeypatch, tmp_
     assert bundle["sidecar_dir"] == bundle["published_dir"] / "sidecar"
     assert "/Users/hermes/HermesWork/Image" not in str(bundle["primary_image_path"])
     assert "sidecar" in [p.name for p in bundle["published_dir"].iterdir()]
-

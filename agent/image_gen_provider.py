@@ -438,14 +438,24 @@ def _load_existing_bundle(
     metadata_name = str(sidecars.get("metadata") or "")
     manifest_name = str(sidecars.get("manifest") or "manifest.json")
     integrity_name = str(sidecars.get("integrity") or "integrity.json")
+    primary_image = str(manifest_payload.get("primary_image") or "")
 
     workflow_path = sidecar_dir / workflow_name
     prompt_path = sidecar_dir / prompt_name
     metadata_path = sidecar_dir / metadata_name
     manifest_path = sidecar_dir / manifest_name
     integrity_path = sidecar_dir / integrity_name
+    artifact_sidecars = manifest_payload.get("artifact_sidecars")
+    if not isinstance(artifact_sidecars, dict):
+        artifact_sidecars = {}
+    artifact_sidecar_dir_value = artifact_sidecars.get("dir") or metadata_payload.get("artifact_sidecar_dir")
+    artifact_sidecar_dir = Path(str(artifact_sidecar_dir_value)) if artifact_sidecar_dir_value else sidecar_dir / "artifacts" / Path(primary_image).stem
+    artifact_workflow_path = artifact_sidecar_dir / Path(str(artifact_sidecars.get("workflow") or "workflow.json")).name
+    artifact_prompt_path = artifact_sidecar_dir / Path(str(artifact_sidecars.get("prompt") or "prompt.json")).name
+    artifact_metadata_path = artifact_sidecar_dir / Path(str(artifact_sidecars.get("metadata") or "metadata.json")).name
+    artifact_manifest_path = artifact_sidecar_dir / Path(str(artifact_sidecars.get("manifest") or "manifest.json")).name
+    artifact_integrity_path = artifact_sidecar_dir / Path(str(artifact_sidecars.get("integrity") or "integrity.json")).name
 
-    primary_image = str(manifest_payload.get("primary_image") or "")
     nas_evidence = metadata_payload.get("nas_evidence")
     if not isinstance(nas_evidence, dict):
         nas_evidence = _build_nas_evidence(
@@ -461,6 +471,11 @@ def _load_existing_bundle(
         "metadata_path": metadata_path,
         "manifest_path": manifest_path,
         "integrity_path": integrity_path,
+        "artifact_workflow_path": artifact_workflow_path,
+        "artifact_prompt_path": artifact_prompt_path,
+        "artifact_metadata_path": artifact_metadata_path,
+        "artifact_manifest_path": artifact_manifest_path,
+        "artifact_integrity_path": artifact_integrity_path,
         "primary_image": primary_image,
         "sidecars": {
             "workflow": workflow_name,
@@ -470,9 +485,11 @@ def _load_existing_bundle(
             "integrity": integrity_name,
             "dir": str(sidecar_dir),
         },
+        "artifact_sidecars": artifact_sidecars,
         "file_sha256": str((manifest_payload.get("integrity") or {}).get("primary_image_sha256") or metadata_payload.get("file_sha256") or ""),
         "storage_verification": _verify_image_storage_root(published_dir),
         "sidecar_dir": sidecar_dir,
+        "artifact_sidecar_dir": artifact_sidecar_dir,
         "nas_hook_requested": bool(metadata_payload.get("nas_hook_requested", False)),
         "nas_evidence": nas_evidence,
     }
@@ -527,11 +544,18 @@ def publish_filesystem_image_bundle(
     versioned_stem = primary_image_path.stem
     sidecar_dir = published_dir / "sidecar"
     sidecar_dir.mkdir(parents=True, exist_ok=True)
+    artifact_sidecar_dir = sidecar_dir / "artifacts" / versioned_stem
+    artifact_sidecar_dir.mkdir(parents=True, exist_ok=True)
     workflow_path = sidecar_dir / "workflow.json"
     prompt_path = sidecar_dir / "prompt.json"
     metadata_path = sidecar_dir / "metadata.json"
     manifest_path = sidecar_dir / "manifest.json"
     integrity_path = sidecar_dir / "integrity.json"
+    artifact_workflow_path = artifact_sidecar_dir / "workflow.json"
+    artifact_prompt_path = artifact_sidecar_dir / "prompt.json"
+    artifact_metadata_path = artifact_sidecar_dir / "metadata.json"
+    artifact_manifest_path = artifact_sidecar_dir / "manifest.json"
+    artifact_integrity_path = artifact_sidecar_dir / "integrity.json"
     primary_image_sha256 = _sha256_file(primary_image_path)
 
     metadata_payload = dict(metadata)
@@ -548,6 +572,12 @@ def publish_filesystem_image_bundle(
             "metadata_sidecar_path": str(metadata_path),
             "manifest_path": str(manifest_path),
             "integrity_path": str(integrity_path),
+            "artifact_sidecar_dir": str(artifact_sidecar_dir),
+            "artifact_workflow_path": str(artifact_workflow_path),
+            "artifact_prompt_path": str(artifact_prompt_path),
+            "artifact_metadata_sidecar_path": str(artifact_metadata_path),
+            "artifact_manifest_path": str(artifact_manifest_path),
+            "artifact_integrity_path": str(artifact_integrity_path),
             "file_sha256": primary_image_sha256,
             "requested_width": prompt_payload.get("width"),
             "requested_height": prompt_payload.get("height"),
@@ -559,6 +589,8 @@ def publish_filesystem_image_bundle(
 
     workflow_path.write_text(json.dumps(workflow_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     prompt_path.write_text(json.dumps(prompt_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    artifact_workflow_path.write_text(json.dumps(workflow_json, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    artifact_prompt_path.write_text(json.dumps(prompt_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     nas_hook_requested = queue_nas_sync_hook(
         category="image",
@@ -570,6 +602,7 @@ def publish_filesystem_image_bundle(
     metadata_payload["nas_hook_requested"] = nas_hook_requested
     metadata_payload["nas_evidence"] = nas_evidence
     metadata_path.write_text(json.dumps(metadata_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    artifact_metadata_path.write_text(json.dumps(metadata_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     manifest_payload = {
         "project_id": project_record.project_id,
@@ -584,6 +617,11 @@ def publish_filesystem_image_bundle(
             f"{sidecar_dir.name}/{metadata_path.name}",
             f"{sidecar_dir.name}/{manifest_path.name}",
             f"{sidecar_dir.name}/{integrity_path.name}",
+            f"{sidecar_dir.name}/artifacts/{versioned_stem}/{artifact_workflow_path.name}",
+            f"{sidecar_dir.name}/artifacts/{versioned_stem}/{artifact_prompt_path.name}",
+            f"{sidecar_dir.name}/artifacts/{versioned_stem}/{artifact_metadata_path.name}",
+            f"{sidecar_dir.name}/artifacts/{versioned_stem}/{artifact_manifest_path.name}",
+            f"{sidecar_dir.name}/artifacts/{versioned_stem}/{artifact_integrity_path.name}",
         ],
         "sidecars": {
             "workflow": workflow_path.name,
@@ -592,6 +630,14 @@ def publish_filesystem_image_bundle(
             "manifest": manifest_path.name,
             "integrity": integrity_path.name,
             "dir": str(sidecar_dir),
+        },
+        "artifact_sidecars": {
+            "workflow": f"artifacts/{versioned_stem}/{artifact_workflow_path.name}",
+            "prompt": f"artifacts/{versioned_stem}/{artifact_prompt_path.name}",
+            "metadata": f"artifacts/{versioned_stem}/{artifact_metadata_path.name}",
+            "manifest": f"artifacts/{versioned_stem}/{artifact_manifest_path.name}",
+            "integrity": f"artifacts/{versioned_stem}/{artifact_integrity_path.name}",
+            "dir": str(artifact_sidecar_dir),
         },
         "integrity": {
             "primary_image_sha256": primary_image_sha256,
@@ -619,6 +665,20 @@ def publish_filesystem_image_bundle(
         "nas_evidence": nas_evidence,
     }
     manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    artifact_manifest_payload = dict(manifest_payload)
+    artifact_manifest_payload["sidecars"] = {
+        "workflow": artifact_workflow_path.name,
+        "prompt": artifact_prompt_path.name,
+        "metadata": artifact_metadata_path.name,
+        "manifest": artifact_manifest_path.name,
+        "integrity": artifact_integrity_path.name,
+        "dir": str(artifact_sidecar_dir),
+    }
+    artifact_manifest_payload["latest_sidecars"] = manifest_payload["sidecars"]
+    artifact_manifest_path.write_text(
+        json.dumps(artifact_manifest_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     integrity_payload = {
         "artifact_name": artifact_key,
         "primary_image": primary_image_path.name,
@@ -630,6 +690,12 @@ def publish_filesystem_image_bundle(
         "status": "Pass",
     }
     integrity_path.write_text(json.dumps(integrity_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    artifact_integrity_payload = dict(integrity_payload)
+    artifact_integrity_payload["manifest_path"] = str(artifact_manifest_path)
+    artifact_integrity_path.write_text(
+        json.dumps(artifact_integrity_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     return {
         "project_id": project_record.project_id,
@@ -640,11 +706,18 @@ def publish_filesystem_image_bundle(
         "metadata_path": metadata_path,
         "manifest_path": manifest_path,
         "integrity_path": integrity_path,
+        "artifact_workflow_path": artifact_workflow_path,
+        "artifact_prompt_path": artifact_prompt_path,
+        "artifact_metadata_path": artifact_metadata_path,
+        "artifact_manifest_path": artifact_manifest_path,
+        "artifact_integrity_path": artifact_integrity_path,
         "primary_image": primary_image_path.name,
         "sidecars": manifest_payload["sidecars"],
+        "artifact_sidecars": manifest_payload["artifact_sidecars"],
         "file_sha256": primary_image_sha256,
         "storage_verification": storage_verification,
         "sidecar_dir": sidecar_dir,
+        "artifact_sidecar_dir": artifact_sidecar_dir,
         "nas_hook_requested": nas_hook_requested,
         "nas_evidence": nas_evidence,
     }
@@ -685,29 +758,59 @@ def record_slack_upload_evidence(
 
     evidence_path = sidecar_dir / "slack_evidence.json"
     evidence_path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    artifact_sidecar_dir = sidecar_dir / "artifacts" / source_path.stem
+    artifact_evidence_path = artifact_sidecar_dir / "slack_evidence.json"
+    if artifact_sidecar_dir.exists():
+        artifact_evidence_path.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    for path in (manifest_path, integrity_path, metadata_path):
-        if not path.exists():
-            continue
-        payload = _load_json_file(path)
-        payload["slack_upload_evidence"] = evidence
-        if path == manifest_path:
-            sidecars = dict(payload.get("sidecars") or {})
-            sidecars["slack_evidence"] = evidence_path.name
-            payload["sidecars"] = sidecars
-            files = list(payload.get("files") or [])
-            slack_rel = f"{sidecar_dir.name}/{evidence_path.name}"
-            if slack_rel not in files:
-                files.append(slack_rel)
-            payload["files"] = files
-            status = dict(payload.get("status") or {})
-            status["slack_status"] = "Pass" if evidence.get("message_id") and files_count > 0 else "Pending"
-            payload["status"] = status
-        elif path == integrity_path:
-            files = dict(payload.get("files") or {})
-            files[evidence_path.name] = {"sha256": _sha256_file(evidence_path), "bytes": evidence_path.stat().st_size}
-            payload["files"] = files
-        _write_json_file(path, payload)
+    def _persist_evidence_to_sidecars(
+        paths: tuple[Path, Path, Path],
+        *,
+        evidence_file: Path,
+        evidence_rel: str,
+        integrity_key: str,
+    ) -> None:
+        manifest_file, integrity_file, metadata_file = paths
+        for path in (manifest_file, integrity_file, metadata_file):
+            if not path.exists():
+                continue
+            payload = _load_json_file(path)
+            payload["slack_upload_evidence"] = evidence
+            if path == manifest_file:
+                sidecars = dict(payload.get("sidecars") or {})
+                sidecars["slack_evidence"] = evidence_file.name
+                payload["sidecars"] = sidecars
+                files = list(payload.get("files") or [])
+                if evidence_rel not in files:
+                    files.append(evidence_rel)
+                payload["files"] = files
+                status = dict(payload.get("status") or {})
+                status["slack_status"] = "Pass" if evidence.get("message_id") and files_count > 0 else "Pending"
+                payload["status"] = status
+            elif path == integrity_file:
+                files = dict(payload.get("files") or {})
+                files[integrity_key] = {"sha256": _sha256_file(evidence_file), "bytes": evidence_file.stat().st_size}
+                payload["files"] = files
+            _write_json_file(path, payload)
+
+    _persist_evidence_to_sidecars(
+        (manifest_path, integrity_path, metadata_path),
+        evidence_file=evidence_path,
+        evidence_rel=f"{sidecar_dir.name}/{evidence_path.name}",
+        integrity_key=evidence_path.name,
+    )
+
+    artifact_manifest_path = artifact_sidecar_dir / "manifest.json"
+    artifact_integrity_path = artifact_sidecar_dir / "integrity.json"
+    artifact_metadata_path = artifact_sidecar_dir / "metadata.json"
+    if artifact_sidecar_dir.exists():
+        _persist_evidence_to_sidecars(
+            (artifact_manifest_path, artifact_integrity_path, artifact_metadata_path),
+            evidence_file=artifact_evidence_path,
+            evidence_rel=f"{sidecar_dir.name}/artifacts/{source_path.stem}/{artifact_evidence_path.name}",
+            integrity_key=f"artifacts/{source_path.stem}/{artifact_evidence_path.name}",
+        )
+
     return evidence_path
 
 
