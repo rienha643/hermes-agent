@@ -3056,9 +3056,16 @@ def launchd_restart():
 
     try:
         pid = get_running_pid()
-        if pid is not None and _request_gateway_self_restart(pid):
-            print("✓ Service restart requested")
-            return
+        if pid is not None:
+            print(f"⏳ Launchd service restarting gracefully (PID {pid})...")
+            if _graceful_restart_via_sigusr1(pid, drain_timeout + 5):
+                subprocess.run(["launchctl", "kickstart", target], check=False, timeout=30)
+                print("✓ Service restart requested")
+                return
+            print(
+                f"⚠ Graceful restart did not complete within {int(drain_timeout + 5)}s; "
+                "forcing a launchd restart..."
+            )
         if pid is not None:
             try:
                 terminate_pid(pid, force=False)
