@@ -496,6 +496,63 @@ class TestPluginDispatch:
         assert captured["negative_prompt"] == "different character, text, logo"
         assert captured["live_generation_approved"] is True
 
+    def test_handle_image_generate_task_metadata_applies_nai_reference_style_args(self, monkeypatch, tmp_path):
+        from tools import image_generation_tool
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        captured = {}
+
+        def fake_dispatch(prompt, aspect_ratio, task_id=None, project_name=None, artifact_name=None, **kwargs):
+            captured.update(
+                {
+                    "prompt": prompt,
+                    "aspect_ratio": aspect_ratio,
+                    "task_id": task_id,
+                    "project_name": project_name,
+                    "artifact_name": artifact_name,
+                    **kwargs,
+                }
+            )
+            return json.dumps({"success": True, "image": "/tmp/result.png"})
+
+        monkeypatch.setattr(image_generation_tool, "_dispatch_to_plugin_provider", fake_dispatch)
+        image_generation_tool.register_image_task_metadata(
+            "nai-style-task-1",
+            image_args={
+                "operation": "txt2img",
+                "reference_image_path": "nai_style_candidate_pool_260630:nai45f_micro_0049",
+                "experimental_reference_images": True,
+                "reference_strength": "0.40",
+                "reference_information_extracted": "0.85",
+                "project_name": "seir_auto_profile_regen_0049_3dcg_sfw",
+                "artifact_name": "seir_auto_profile_0049_3dcg_sfw",
+                "prompt": "SFW style-only reference test",
+                "negative_prompt": "same character as reference",
+                "live_generation_approved": True,
+            },
+        )
+
+        result = image_generation_tool._handle_image_generate(
+            {
+                "prompt": "model supplied prompt should not win",
+                "aspect_ratio": "portrait",
+            },
+            task_id="nai-style-task-1",
+        )
+
+        assert json.loads(result)["success"] is True
+        assert captured["prompt"] == "SFW style-only reference test"
+        assert captured["operation"] == "txt2img"
+        assert captured["reference_image_path"] == "nai_style_candidate_pool_260630:nai45f_micro_0049"
+        assert captured["experimental_reference_images"] is True
+        assert captured["reference_strength"] == 0.4
+        assert captured["reference_information_extracted"] == 0.85
+        assert captured["project_name"] == "seir_auto_profile_regen_0049_3dcg_sfw"
+        assert captured["artifact_name"] == "seir_auto_profile_0049_3dcg_sfw"
+        assert captured["negative_prompt"] == "same character as reference"
+        assert captured["live_generation_approved"] is True
+
     def test_handle_image_generate_task_metadata_forwards_masked_inpaint_args(self, monkeypatch, tmp_path):
         from tools import image_generation_tool
 

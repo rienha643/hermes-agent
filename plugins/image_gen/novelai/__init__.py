@@ -103,6 +103,7 @@ scan artifacts"""
 NAI_STYLE_PRESET_ENV = "HERMES_NAI_STYLE_PRESET"
 NAI_REFERENCE_MANIFESTS_ENV = "HERMES_NAI_REFERENCE_MANIFESTS"
 NAI_REFERENCE_MANIFEST_DEFAULTS = (
+    Path("/Volumes/SSD_Hermes/HermesCodexControl/reference_assets/nai_style_candidate_pool_260630/style_profile_manifest_v1.json"),
     Path("/Volumes/SSD_Hermes/HermesCodexControl/reference_assets/nai_style_selected20_260630/manifest.json"),
 )
 NAI_STYLE_PRESETS: Dict[str, Dict[str, str]] = {
@@ -272,7 +273,11 @@ def _resolve_reference_image_alias(alias: str) -> Path | None:
         if requested_asset_set and requested_asset_set != asset_set:
             continue
         for item in manifest.get("items") or []:
-            if str(item.get("alias") or "") != requested_alias:
+            item_aliases = [str(item.get("alias") or "")]
+            aliases = item.get("aliases")
+            if isinstance(aliases, list):
+                item_aliases.extend(str(value) for value in aliases if str(value).strip())
+            if requested_alias not in item_aliases:
                 continue
             candidate = item.get("external_ssd_path") or item.get("path")
             if not candidate:
@@ -282,6 +287,140 @@ def _resolve_reference_image_alias(alias: str) -> Path | None:
                 raise ValueError(f"NovelAI reference alias file is missing: {requested_alias}")
             return path.resolve(strict=True)
     return None
+
+
+def _reference_items_from_manifests() -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for manifest_path in _reference_manifest_paths():
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        asset_set = str(manifest.get("asset_set") or "")
+        for item in manifest.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            enriched = dict(item)
+            if asset_set:
+                enriched["_asset_set"] = asset_set
+            items.append(enriched)
+    return items
+
+
+def _reference_item_aliases(item: dict[str, Any]) -> list[str]:
+    aliases: list[str] = []
+    alias = str(item.get("alias") or "").strip()
+    if alias:
+        aliases.append(alias)
+    raw_aliases = item.get("aliases")
+    if isinstance(raw_aliases, list):
+        aliases.extend(str(value).strip() for value in raw_aliases if str(value).strip())
+    asset_set = str(item.get("_asset_set") or "").strip()
+    if asset_set:
+        aliases.extend(f"{asset_set}:{value}" for value in list(aliases) if ":" not in value)
+    return aliases
+
+
+def _reference_item_path(item: dict[str, Any]) -> Path | None:
+    candidate = item.get("external_ssd_path") or item.get("path")
+    if not candidate:
+        return None
+    try:
+        return Path(str(candidate)).expanduser().resolve()
+    except Exception:
+        return Path(str(candidate)).expanduser()
+
+
+def _resolve_reference_item(value: str | Path) -> dict[str, Any] | None:
+    raw = str(value).strip()
+    if not raw:
+        return None
+    requested_asset_set: str | None = None
+    requested_alias = raw
+    if ":" in raw and not Path(raw).expanduser().exists():
+        requested_asset_set, requested_alias = (part.strip() for part in raw.split(":", 1))
+    requested_path: Path | None = None
+    try:
+        path = Path(raw).expanduser()
+        if path.exists():
+            requested_path = path.resolve()
+    except Exception:
+        requested_path = None
+
+    for item in _reference_items_from_manifests():
+        if requested_asset_set and str(item.get("_asset_set") or "") != requested_asset_set:
+            continue
+        aliases = _reference_item_aliases(item)
+        if requested_alias in aliases or raw in aliases:
+            return item
+        item_path = _reference_item_path(item)
+        if requested_path is not None and item_path is not None and item_path == requested_path:
+            return item
+    return None
+
+
+def _reference_images_from_overrides(parameter_overrides: Dict[str, Any]) -> list[Any]:
+    raw_images = (
+        parameter_overrides.get("reference_images")
+        or parameter_overrides.get("reference_image_paths")
+        or parameter_overrides.get("reference_image")
+        or parameter_overrides.get("reference_image_path")
+    )
+    if raw_images is None:
+        return []
+    if isinstance(raw_images, (str, Path)):
+        return [raw_images]
+    if isinstance(raw_images, list):
+        return raw_images
+    return []
+
+
+def _reference_style_profiles_from_overrides(parameter_overrides: Dict[str, Any]) -> list[dict[str, Any]]:
+    if str(parameter_overrides.pop("reference_style_profile", "auto")).strip().lower() in {"0", "false", "off", "none", "disabled"}:
+        return []
+    profiles: list[dict[str, Any]] = []
+    for reference in _reference_images_from_overrides(parameter_overrides):
+        if not isinstance(reference, (str, Path)):
+            continue
+        item = _resolve_reference_item(reference)
+        if not item:
+            continue
+        profile = item.get("style_profile")
+        if isinstance(profile, dict):
+            profiles.append(profile)
+    return profiles
+
+
+def _primary_reference_style_profile(profiles: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not profiles:
+        return None
+    return profiles[0]
+
+
+def _apply_reference_style_profile_defaults(
+    parameter_overrides: Dict[str, Any],
+    profile: dict[str, Any] | None,
+) -> None:
+    if not profile:
+        return
+    if (
+        "reference_strength" not in parameter_overrides
+        and "reference_strengths" not in parameter_overrides
+        and "reference_strength_multiple" not in parameter_overrides
+    ):
+        default_strength = profile.get("reference_strength_default")
+        if default_strength is not None:
+            parameter_overrides["reference_strength"] = default_strength
+    if (
+        "reference_information_extracted" not in parameter_overrides
+        and "reference_information_extracteds" not in parameter_overrides
+        and "reference_information_extracted_multiple" not in parameter_overrides
+    ):
+        default_information = profile.get("reference_information_extracted_default")
+        if default_information is not None:
+            parameter_overrides["reference_information_extracted"] = default_information
 
 
 def _extract_reference_image_config(parameter_overrides: Dict[str, Any]) -> tuple[list[str], list[float], list[float]]:
@@ -425,6 +564,35 @@ def _merge_prompt_baseline(baseline: str, prompt: str | None, *, baseline_first:
     return ",\n".join(merged)
 
 
+def _style_profile_terms(profile: dict[str, Any] | None, key: str) -> str | None:
+    if not profile:
+        return None
+    value = profile.get(key)
+    if isinstance(value, list):
+        joined = ", ".join(str(item).strip() for item in value if str(item).strip())
+        return joined or None
+    if isinstance(value, str):
+        return value.strip() or None
+    return None
+
+
+def _remove_prompt_terms(prompt: str, terms: list[str]) -> str:
+    if not prompt or not terms:
+        return prompt
+    blocked = {term.strip().lower() for term in terms if term.strip()}
+    if not blocked:
+        return prompt
+    kept: list[str] = []
+    for raw in re.split(r",|\n", prompt):
+        item = raw.strip()
+        if not item:
+            continue
+        if item.lower() in blocked:
+            continue
+        kept.append(item)
+    return ",\n".join(kept)
+
+
 def _configured_style_preset() -> tuple[str | None, Dict[str, str] | None]:
     name = os.environ.get(NAI_STYLE_PRESET_ENV, "").strip()
     if not name:
@@ -435,20 +603,31 @@ def _configured_style_preset() -> tuple[str | None, Dict[str, str] | None]:
     return name, preset
 
 
-def _merge_positive_prompt(prompt: str) -> str:
+def _merge_positive_prompt(prompt: str, *, style_profile: dict[str, Any] | None = None) -> str:
     _, preset = _configured_style_preset()
     baseline = NAI_DEFAULT_POSITIVE_PROMPT_PREFIX
     if preset:
         baseline = _merge_prompt_baseline(baseline, preset.get("positive"), baseline_first=True)
+    style_terms = _style_profile_terms(style_profile, "positive_style_tags")
+    if style_terms:
+        baseline = _merge_prompt_baseline(baseline, style_terms, baseline_first=True)
     return _merge_prompt_baseline(baseline, prompt, baseline_first=True)
 
 
-def _merge_negative_prompt(negative_prompt: str | None) -> str:
+def _merge_negative_prompt(
+    negative_prompt: str | None,
+    *,
+    style_profile: dict[str, Any] | None = None,
+) -> str:
     _, preset = _configured_style_preset()
     baseline = NAI_DEFAULT_NEGATIVE_PROMPT
     if preset:
         baseline = _merge_prompt_baseline(baseline, preset.get("negative"), baseline_first=True)
-    return _merge_prompt_baseline(baseline, negative_prompt, baseline_first=False)
+    merged = _merge_prompt_baseline(baseline, negative_prompt, baseline_first=False)
+    suppress_terms = style_profile.get("negative_terms_to_suppress", []) if style_profile else []
+    if isinstance(suppress_terms, list):
+        merged = _remove_prompt_terms(merged, [str(term) for term in suppress_terms])
+    return merged
 
 
 def _normalize_parameter_aliases(parameter_overrides: Dict[str, Any]) -> Dict[str, Any]:
@@ -489,8 +668,18 @@ def build_novelai_request_payload(
         if not high_res_approved:
             raise NovelAIResolutionApprovalRequired(width=width, height=height, reason=approval_reason)
     require_safe_1024_range(width, height, high_res_approved=high_res_approved, reason=approval_reason)
-    merged_prompt = _merge_positive_prompt(prompt)
-    merged_negative_prompt = _merge_negative_prompt(negative_prompt)
+    parameter_overrides = _normalize_parameter_aliases(dict(parameter_overrides))
+    raw_reference_style_profiles = parameter_overrides.pop("reference_style_profile_records", None)
+    if isinstance(raw_reference_style_profiles, list):
+        reference_style_profiles = [profile for profile in raw_reference_style_profiles if isinstance(profile, dict)]
+        parameter_overrides.pop("reference_style_profile", None)
+    else:
+        reference_style_profiles = _reference_style_profiles_from_overrides(parameter_overrides)
+    reference_style_profile = _primary_reference_style_profile(reference_style_profiles)
+    _apply_reference_style_profile_defaults(parameter_overrides, reference_style_profile)
+
+    merged_prompt = _merge_positive_prompt(prompt, style_profile=reference_style_profile)
+    merged_negative_prompt = _merge_negative_prompt(negative_prompt, style_profile=reference_style_profile)
     style_preset_name, style_preset = _configured_style_preset()
     if seed is None:
         request_seed = _generate_seed()
@@ -498,7 +687,6 @@ def build_novelai_request_payload(
     else:
         request_seed = _coerce_seed(seed)
         seed_source = "provided"
-    parameter_overrides = _normalize_parameter_aliases(dict(parameter_overrides))
     _coerce_reference_images(parameter_overrides)
 
     parameters: Dict[str, Any] = {
@@ -566,6 +754,7 @@ def build_novelai_request_payload(
             "high_res_policy": HIGH_RES_REQUIRES_APPROVAL,
             "high_res_approved": high_res_approved,
             "style_preset": style_preset_name if style_preset else None,
+            "reference_style_profiles": reference_style_profiles,
             "seed": parameters["seed"],
             "seed_source": seed_source,
         },
@@ -681,6 +870,11 @@ def _encode_reference_images_for_live(
     parameter_overrides = dict(parameter_overrides)
     if parameter_overrides.get("reference_image_multiple"):
         return parameter_overrides
+    reference_style_profiles = _reference_style_profiles_from_overrides(parameter_overrides)
+    _apply_reference_style_profile_defaults(
+        parameter_overrides,
+        _primary_reference_style_profile(reference_style_profiles),
+    )
     raw_image_base64, strengths, information_values = _extract_reference_image_config(parameter_overrides)
     if not raw_image_base64:
         return parameter_overrides
@@ -696,6 +890,8 @@ def _encode_reference_images_for_live(
     ]
     parameter_overrides["reference_strength_multiple"] = strengths
     parameter_overrides["reference_information_extracted_multiple"] = information_values
+    if reference_style_profiles:
+        parameter_overrides["reference_style_profile_records"] = reference_style_profiles
     return parameter_overrides
 
 

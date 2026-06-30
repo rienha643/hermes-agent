@@ -201,6 +201,91 @@ def test_novelai_reference_alias_resolves_from_manifest(tmp_path: Path, monkeypa
     assert params["reference_information_extracted_multiple"] == [0.91]
 
 
+def test_novelai_reference_alias_applies_style_profile_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    reference = tmp_path / "reference.png"
+    manifest = tmp_path / "manifest.json"
+    _write_png(reference)
+    manifest.write_text(
+        json.dumps(
+            {
+                "asset_set": "unit_style_set",
+                "items": [
+                    {
+                        "alias": "unit_ref",
+                        "aliases": ["style_ref_unit"],
+                        "external_ssd_path": str(reference),
+                        "style_profile": {
+                            "style_lane": "three_d_cg_render",
+                            "reference_strength_default": 0.4,
+                            "reference_information_extracted_default": 0.85,
+                            "positive_style_tags": [
+                                "stylized semi-realistic 3D anime game render",
+                                "glossy detailed skin",
+                            ],
+                            "negative_terms_to_suppress": [
+                                "photorealistic",
+                                "realistic skin texture",
+                                "flat anime screenshot",
+                            ],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(novelai.NAI_REFERENCE_MANIFESTS_ENV, str(manifest))
+    monkeypatch.setenv(novelai.NAI_STYLE_PRESET_ENV, "game_default_subculture")
+
+    payload = novelai.build_novelai_request_payload(
+        prompt="safe prompt",
+        reference_image_path="unit_style_set:style_ref_unit",
+        experimental_reference_images=True,
+    )
+    params = payload["parameters"]
+
+    assert base64.b64decode(params["reference_image_multiple"][0]).startswith(b"\x89PNG\r\n\x1a\n")
+    assert params["reference_strength_multiple"] == [0.4]
+    assert params["reference_information_extracted_multiple"] == [0.85]
+    assert "stylized semi-realistic 3D anime game render" in payload["input"]
+    assert "glossy detailed skin" in payload["input"]
+    assert "photorealistic" not in params["negative_prompt"]
+    assert "realistic skin texture" not in params["negative_prompt"]
+    assert "flat anime screenshot" not in params["negative_prompt"]
+    assert "plain background" in params["negative_prompt"]
+    assert payload["policy"]["reference_style_profiles"][0]["style_lane"] == "three_d_cg_render"
+
+
+def test_novelai_reference_style_profile_does_not_readd_scalar_after_live_encode() -> None:
+    import plugins.image_gen.novelai as novelai
+
+    payload = novelai.build_novelai_request_payload(
+        prompt="safe prompt",
+        reference_image_multiple=["ENCODED_VIBE"],
+        reference_strength_multiple=[0.4],
+        reference_information_extracted_multiple=[0.85],
+        reference_style_profile_records=[
+            {
+                "style_lane": "three_d_cg_render",
+                "reference_strength_default": 0.4,
+                "reference_information_extracted_default": 0.85,
+                "positive_style_tags": ["stylized semi-realistic 3D anime game render"],
+            }
+        ],
+    )
+    params = payload["parameters"]
+
+    assert params["reference_strength_multiple"] == [0.4]
+    assert params["reference_information_extracted_multiple"] == [0.85]
+    assert "reference_strength" not in params
+    assert "reference_information_extracted" not in params
+
+
 def test_novelai_dry_run_reference_image_path_is_encoded(tmp_path: Path) -> None:
     import plugins.image_gen.novelai as novelai
 
