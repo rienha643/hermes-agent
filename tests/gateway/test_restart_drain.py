@@ -218,13 +218,12 @@ async def test_shutdown_notification_sent_to_active_sessions():
     await runner._notify_active_sessions_of_shutdown()
 
     assert len(adapter.sent) == 1
-    assert "shutting down" in adapter.sent[0]
-    assert "interrupted" in adapter.sent[0]
+    assert "게이트웨이 종료 중" in adapter.sent[0]
 
 
 @pytest.mark.asyncio
 async def test_shutdown_notification_says_restarting_when_restart_requested():
-    """When _restart_requested is True, the message says 'restarting' and mentions /retry."""
+    """When _restart_requested is True, the message says restart in Korean."""
     runner, adapter = make_restart_runner()
     runner._restart_requested = True
     session_key = "agent:main:telegram:dm:999"
@@ -233,8 +232,7 @@ async def test_shutdown_notification_says_restarting_when_restart_requested():
     await runner._notify_active_sessions_of_shutdown()
 
     assert len(adapter.sent) == 1
-    assert "restarting" in adapter.sent[0]
-    assert "resume" in adapter.sent[0]
+    assert "게이트웨이 재시작 중" in adapter.sent[0]
 
 
 @pytest.mark.asyncio

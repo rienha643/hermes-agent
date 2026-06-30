@@ -2482,6 +2482,50 @@ _DOCKER_MEDIA_OUTPUT_CONTAINER_PATHS = {"/output", "/outputs"}
 # Bridge config.yaml values into the environment so os.getenv() picks them up.
 # config.yaml is authoritative for terminal settings — overrides .env.
 _config_path = _hermes_home / 'config.yaml'
+
+_HERMES_PROFILE_DISPLAY_NAMES = {
+    "artist": "팔레트",
+    "artist_grok": "세이르",
+    "coder": "이클립스",
+    "comfy": "안젤리카",
+    "cron-fast": "루벤시아",
+    "designer": "실비아",
+    "forge": "셀리아",
+    "scenario": "Tyr",
+    "speedy": "네브리스",
+}
+
+
+def _gateway_profile_name() -> str:
+    """Return the active Hermes profile name from HERMES_HOME."""
+    try:
+        home = _hermes_home.resolve()
+        if home.parent.name == "profiles":
+            return home.name
+    except Exception:
+        pass
+    return "default"
+
+
+def _gateway_profile_label() -> str:
+    """Return a user-facing profile label for lifecycle notices."""
+    profile = _gateway_profile_name()
+    display = _HERMES_PROFILE_DISPLAY_NAMES.get(profile)
+    if display:
+        return f"{display}({profile})"
+    return profile
+
+
+def _gateway_lifecycle_message(state: str) -> str:
+    """Render concise Korean gateway lifecycle text for home-channel notices."""
+    profile_label = _gateway_profile_label()
+    if state == "starting":
+        return f"🟢 게이트웨이 켜짐: {profile_label} 프로필이 Slack 수신을 시작했어."
+    if state == "restarting":
+        return f"🟡 게이트웨이 재시작 중: {profile_label} 프로필이 잠시 중단돼."
+    return f"🔴 게이트웨이 종료 중: {profile_label} 프로필 수신이 곧 중단돼."
+
+
 if _config_path.exists():
     try:
         import yaml as _yaml
@@ -5654,14 +5698,9 @@ class GatewayRunner:
         """
         active = self._snapshot_running_agents()
 
-        action = "restarting" if self._restart_requested else "shutting down"
-        hint = (
-            "Your current task will be interrupted. "
-            "Send any message after restart and I'll try to resume where you left off."
-            if self._restart_requested
-            else "Your current task will be interrupted."
+        msg = _gateway_lifecycle_message(
+            "restarting" if self._restart_requested else "stopping"
         )
-        msg = f"⚠️ Gateway {action} — {hint}"
 
         notified: set[tuple[str, str, Optional[str]]] = set()
         for session_key in active:
@@ -6631,21 +6670,18 @@ class GatewayRunner:
             await asyncio.sleep(1.0)
 
         # Notify the chat that initiated /restart that the gateway is back.
-        restart_notification_pending = _restart_notification_pending()
         delivered_restart_target = await self._send_restart_notification()
 
-        # Broadcast a lightweight "gateway is back" message to configured
-        # home channels only when this startup is resuming from /restart. If a
-        # /restart requester already received a direct completion notice in the
-        # same chat, skip the generic broadcast there to avoid duplicates while
-        # still allowing a home-channel fallback when the direct send fails.
-        if restart_notification_pending or delivered_restart_target is not None:
-            skip_home_targets = (
-                {delivered_restart_target} if delivered_restart_target else None
-            )
-            await self._send_home_channel_startup_notifications(
-                skip_targets=skip_home_targets,
-            )
+        # Broadcast a lightweight "gateway is back" message to configured home
+        # channels on every successful startup. When a precise restart target
+        # exists, skip only that exact target to avoid duplicate same-chat
+        # delivery while still keeping the operator home channel informed.
+        skip_home_targets = (
+            {delivered_restart_target} if delivered_restart_target else None
+        )
+        await self._send_home_channel_startup_notifications(
+            skip_targets=skip_home_targets,
+        )
 
         # Automatically continue fresh sessions that were interrupted by the
         # previous gateway restart/shutdown.  The resume_pending flag is cleared
@@ -17317,7 +17353,7 @@ class GatewayRunner:
         """
         delivered: set[tuple[str, str, Optional[str]]] = set()
         skipped = skip_targets or set()
-        message = "♻️ Gateway online — Hermes is back and ready."
+        message = _gateway_lifecycle_message("starting")
 
         for platform, adapter in self.adapters.items():
             home = self.config.get_home_channel(platform)

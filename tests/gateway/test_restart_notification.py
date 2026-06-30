@@ -243,7 +243,7 @@ async def test_send_home_channel_startup_notification_to_configured_home(tmp_pat
     assert delivered == {("telegram", "home-42", None)}
     adapter.send.assert_called_once_with(
         "home-42",
-        "♻️ Gateway online — Hermes is back and ready.",
+        "🟢 게이트웨이 켜짐: default 프로필이 Slack 수신을 시작했어.",
     )
 
 
@@ -267,7 +267,7 @@ async def test_send_home_channel_startup_notification_preserves_thread_metadata(
     assert delivered == {("telegram", "parent-42", "topic-7")}
     adapter.send.assert_called_once_with(
         "parent-42",
-        "♻️ Gateway online — Hermes is back and ready.",
+        "🟢 게이트웨이 켜짐: default 프로필이 Slack 수신을 시작했어.",
         metadata={"thread_id": "topic-7"},
     )
 
@@ -619,6 +619,6 @@ async def test_shutdown_notifications_use_cached_live_thread_source_when_origin_
 
     adapter.send.assert_awaited_once_with(
         "parent-42",
-        "⚠️ Gateway shutting down — Your current task will be interrupted.",
+        "🔴 게이트웨이 종료 중: default 프로필 수신이 곧 중단돼.",
         metadata={"thread_id": "topic-7"},
     )
