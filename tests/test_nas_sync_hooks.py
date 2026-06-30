@@ -942,6 +942,22 @@ def test_backup_script_copy_only_allowed(monkeypatch, tmp_path):
     assert copied == 1
 
 
+def test_backup_script_includes_codex_control_daily_snapshot_source(monkeypatch, tmp_path):
+    codex_control_root = tmp_path / "HermesCodexControl"
+    codex_control_root.mkdir()
+    monkeypatch.setenv("HERMES_CODEX_CONTROL_ROOT", str(codex_control_root))
+
+    backup_mod = _load_backup_script_module()
+
+    assert "codex-control" in backup_mod.CATEGORY_ORDER
+    specs = backup_mod.build_category_specs()["codex-control"]
+    assert len(specs) == 1
+    assert specs[0].source == codex_control_root
+    assert backup_mod._snapshot_dest("codex-control", "20260630_031000").endswith(
+        "\\Hermes\\_snapshots\\20260630_031000\\codex-control"
+    )
+
+
 def test_snapshot_retention_plan_is_dry_run_and_keeps_latest():
     backup_mod = _load_backup_script_module()
 
