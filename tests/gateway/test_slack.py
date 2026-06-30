@@ -160,7 +160,7 @@ async def test_commander_dispatch_thread_skip_auto_thread_context(adapter):
         "bot_id": "B0BBQP11GSW",
         "ts": "1782360517.076999",
         "thread_ts": "1782333585.570739",
-        "text": "[COMMANDER_DISPATCH]\nschema: commander_dispatch_v1\nqueue_id: q1\ndispatch_event_id: d1\ntarget_slack_user_id: U_BOT\n[/COMMANDER_DISPATCH]\n\n<@U_BOT> 작업 요청",
+        "text": "[COMMANDER_DISPATCH]\nschema: commander_dispatch_v1\nqueue_id: q1\ndispatch_event_id: d1\norigin_user: U_HUMAN\ntarget_slack_user_id: U_BOT\n[/COMMANDER_DISPATCH]\n\n<@U_BOT> 작업 요청",
     }
 
     await adapter._handle_slack_message(event)
@@ -169,6 +169,31 @@ async def test_commander_dispatch_thread_skip_auto_thread_context(adapter):
     adapter.handle_message.assert_awaited_once()
     handled = adapter.handle_message.await_args.args[0]
     assert handled.source.thread_id == "1782333585.570739:dispatch:d1"
+    assert handled.source.user_id == "U_HUMAN"
+
+
+def test_commander_dispatch_accepts_zenith_bot_id_without_user(adapter):
+    adapter._bot_user_id = "U_BOT"
+    event = {
+        "type": "message",
+        "channel": "C123",
+        "channel_type": "channel",
+        "bot_id": "B0BBQP11GSW",
+        "subtype": "bot_message",
+        "ts": "1782360517.076999",
+        "thread_ts": "1782333585.570739",
+        "text": (
+            "[COMMANDER_DISPATCH]\n"
+            "schema: commander_dispatch_v1\n"
+            "queue_id: q1\n"
+            "dispatch_event_id: d1\n"
+            "target_slack_user_id: U_BOT\n"
+            "[/COMMANDER_DISPATCH]\n\n"
+            "<@U_BOT> 작업 요청"
+        ),
+    }
+
+    assert adapter._is_commander_dispatch_event(event) is True
 
 
 def test_resolve_thread_ts_strips_commander_dispatch_suffix(adapter):

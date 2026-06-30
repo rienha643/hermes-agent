@@ -2217,10 +2217,15 @@ class SlackAdapter(BasePlatformAdapter):
             thread_ts = event.get("thread_ts") or ts  # ts fallback for channels
 
         commander_dispatch_id = None
+        commander_origin_user_id = None
         if is_commander_dispatch:
-            dispatch_match = _COMMANDER_DISPATCH_ID_RE.search(str(event.get("text") or ""))
+            event_text = str(event.get("text") or "")
+            dispatch_match = _COMMANDER_DISPATCH_ID_RE.search(event_text)
             if dispatch_match:
                 commander_dispatch_id = str(dispatch_match.group(1) or "").strip() or None
+            origin_match = re.search(r"^origin_user:\s*(\S+)\s*$", event_text, flags=re.MULTILINE)
+            if origin_match:
+                commander_origin_user_id = str(origin_match.group(1) or "").strip() or None
         session_thread_ts = thread_ts
         if commander_dispatch_id and thread_ts:
             session_thread_ts = f"{thread_ts}:dispatch:{commander_dispatch_id}"
@@ -2469,15 +2474,19 @@ class SlackAdapter(BasePlatformAdapter):
             else:
                 msg_type = MessageType.DOCUMENT
 
+        # Commander dispatches are posted by Zenith, but authorization should
+        # remain tied to the original human requestor recorded in the envelope.
+        effective_user_id = commander_origin_user_id or user_id
+
         # Resolve user display name (cached after first lookup)
-        user_name = await self._resolve_user_name(user_id, chat_id=channel_id)
+        user_name = await self._resolve_user_name(effective_user_id, chat_id=channel_id)
 
         # Build source
         source = self.build_source(
             chat_id=channel_id,
             chat_name=channel_id,  # Will be resolved later if needed
             chat_type="dm" if is_dm else "group",
-            user_id=user_id,
+            user_id=effective_user_id,
             user_name=user_name,
             thread_id=session_thread_ts,
             is_bot=bool(event.get("bot_id") or event.get("subtype") == "bot_message"),
@@ -3289,9 +3298,9 @@ class SlackAdapter(BasePlatformAdapter):
         commander_bots = self._commander_dispatch_bot_ids()
         event_user = str(event.get("user") or "")
         event_bot = str(event.get("bot_id") or "")
-        if commander_users and event_user not in commander_users:
-            return False
-        if commander_bots and event_bot and event_bot not in commander_bots:
+        user_allowed = bool(event_user and event_user in commander_users) if commander_users else True
+        bot_allowed = bool(event_bot and event_bot in commander_bots) if commander_bots else True
+        if not (user_allowed or bot_allowed):
             return False
 
         if self._bot_user_id and f"<@{self._bot_user_id}>" not in text:
