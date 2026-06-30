@@ -52,7 +52,7 @@ Next action: Continue with cron stabilization.
     assert _gateway_report_language(text) == "en"
     ping = _evaluate_gateway_user_report_governance(text)
 
-    assert "GOVERNANCE PING" in ping
+    assert "HERMES GOVERNANCE WARN" in ping
     assert "report_language_mismatch" in ping
     assert "blocked_state: REPORT_FAIL" in ping
 
@@ -77,7 +77,7 @@ def test_gateway_user_report_governance_pings_on_omitted_protected_report():
     assert _gateway_report_omitted_present(text) is True
     ping = _evaluate_gateway_user_report_governance(text)
 
-    assert "GOVERNANCE PING" in ping
+    assert "HERMES GOVERNANCE WARN" in ping
     assert "protected_report_omitted" in ping
 
 
@@ -891,7 +891,7 @@ FAIL
     assert "file_upload_evidence" in result.decision.missing_evidence
     assert "mirror_hash_evidence" in result.decision.missing_evidence
     assert result.decision.auto_blocking is False
-    assert "GOVERNANCE PING" in result.ping_text
+    assert "HERMES GOVERNANCE WARN" in result.ping_text
 
 
 def test_nas_hook_requested_without_mirror_hash_remains_unknown_and_pings(tmp_path: Path):

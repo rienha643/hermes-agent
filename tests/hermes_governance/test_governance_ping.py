@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from govlawlivewip_governance.taskrun import (
+from hermes_governance.taskrun import (
     DeliveryEvidence,
     ExecutionEvidence,
     ReportEvidence,
@@ -98,8 +98,8 @@ def test_governance_ping_formatter_contains_required_slack_fields():
 
     message = format_governance_ping(intent, decision)
 
-    assert "🚨🚨🚨 GOVERNANCE PING 🚨🚨🚨" in message
-    assert "⚠️ 거버넌스 법 위반 또는 증거 부족 상태가 감지되었습니다." in message
+    assert "⚠️ HERMES GOVERNANCE WARN" in message
+    assert "작업 근거가 부족해 사용자/Codex 검토가 필요합니다." in message
     assert ":rotating_light:" not in message
     assert ":warning:" not in message
     assert "```" in message

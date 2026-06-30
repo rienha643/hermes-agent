@@ -1237,7 +1237,12 @@ def _report_declares_missing_nas_evidence(text: str) -> bool:
 
 def _looks_like_governance_delivery_report(text: str) -> bool:
     body = str(text or "").casefold()
-    return "govlawlivewip" in body or "governance ping" in body or "governance fresh e2e" in body
+    return (
+        "hermes_governance" in body
+        or "hermes governance" in body
+        or "governance ping" in body
+        or "governance fresh e2e" in body
+    )
 
 
 _HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
@@ -1290,7 +1295,7 @@ def _is_no_artifact_generation_guard_response(text: str) -> bool:
 
 
 def _gateway_report_language(text: str) -> str:
-    """Classify the user-facing report language for GOVLAWLIVEWIP checks."""
+    """Classify the user-facing report language for Hermes Governance checks."""
     body = str(text or "")
     if _HANGUL_RE.search(body):
         return "ko"
@@ -1313,15 +1318,16 @@ def _looks_like_governed_user_report(text: str) -> bool:
 
 
 def _evaluate_gateway_user_report_governance(text: str) -> str:
-    """Return a GOVLAWLIVEWIP PING for final-report language/omission drift."""
+    """Return a Hermes Governance warning for final-report language/omission drift."""
     if _is_no_artifact_generation_guard_response(text):
         return ""
     if not _looks_like_governed_user_report(text):
         return ""
-    if "GOVERNANCE PING" in str(text or ""):
+    upper_body = str(text or "").upper()
+    if "GOVERNANCE PING" in upper_body or "HERMES GOVERNANCE" in upper_body:
         return ""
 
-    from govlawlivewip_governance.taskrun import (
+    from hermes_governance.taskrun import (
         ExecutionEvidence,
         ReportEvidence,
         RoutingEvidence,
@@ -1361,8 +1367,8 @@ def _evaluate_gateway_user_report_governance(text: str) -> str:
 
 
 def _evaluate_gateway_delivery_governance(text: str, *, attachment_count: int = 0) -> GatewayDeliveryGovernanceResult:
-    """Calculate GOVLAWLIVEWIP delivery state from gateway-visible evidence."""
-    from govlawlivewip_governance.taskrun import (
+    """Calculate Hermes Governance delivery state from gateway-visible evidence."""
+    from hermes_governance.taskrun import (
         ArtifactEvidence,
         DeliveryEvidence,
         ExecutionEvidence,
@@ -1473,7 +1479,7 @@ def _apply_post_delivery_evidence_overlay(
     keeps the worker text intact but appends a gateway-calculated source of
     truth whenever persisted Slack/NAS evidence exists.
     """
-    from govlawlivewip_governance.taskrun import (
+    from hermes_governance.taskrun import (
         ArtifactEvidence,
         DeliveryEvidence,
         ExecutionEvidence,
@@ -6190,15 +6196,15 @@ class GatewayRunner:
         except RuntimeError:
             self._gateway_loop = None
         logger.info("Session storage: %s", self.config.sessions_dir)
-        # GOVLAWLIVEWIP 검증 기간에는 gateway 시작 시 정책 모듈을 명시적으로 로드해 runtime evidence를 남긴다.
+        # Hermes Governance는 gateway 시작 시 정책 모듈을 명시적으로 로드해 runtime evidence를 남긴다.
         try:
-            from govlawlivewip_governance.taskrun import evaluate_task_run, format_governance_ping
+            from hermes_governance.taskrun import evaluate_task_run, format_governance_ping
             from gateway.project_registry import format_project_id
 
             _governance_source = Path(inspect.getsourcefile(evaluate_task_run) or "")
             _governance_hash = hashlib.sha256(_governance_source.read_bytes()).hexdigest() if _governance_source.exists() else "unknown"
             logger.info(
-                "GOVLAWLIVEWIP governance loaded: module=%s formatter=%s source_hash=%s phase=%s auto_blocking=%s date_prefix_sample=%s",
+                "Hermes Governance loaded: module=%s formatter=%s source_hash=%s phase=%s auto_blocking=%s date_prefix_sample=%s",
                 evaluate_task_run.__module__,
                 format_governance_ping.__name__,
                 _governance_hash,
@@ -6207,7 +6213,7 @@ class GatewayRunner:
                 format_project_id("runtime_apply", datetime.now()),
             )
         except Exception as _e:
-            logger.warning("GOVLAWLIVEWIP governance load failed: %s", _e)
+            logger.warning("Hermes Governance load failed: %s", _e)
 
         # Sanity-check that systemd's TimeoutStopSec covers our drain
         # window.  When the user upgraded hermes-agent without re-running
@@ -11415,7 +11421,7 @@ class GatewayRunner:
                     _post_delivery_overlay = _apply_post_delivery_evidence_overlay(response)
                     if _post_delivery_overlay.overlay_applied:
                         logger.info(
-                            "GOVLAWLIVEWIP post-delivery overlay applied: slack=%s nas=%s governance=%s final_state=%s",
+                            "Hermes Governance post-delivery overlay applied: slack=%s nas=%s governance=%s final_state=%s",
                             _post_delivery_overlay.slack_overlay,
                             _post_delivery_overlay.nas_overlay,
                             _post_delivery_overlay.governance_overlay,
@@ -11456,7 +11462,7 @@ class GatewayRunner:
                     )
                     if _governance_delivery.decision.final_state == "GOVERNANCE_PING" and _governance_delivery.ping_text:
                         logger.warning(
-                            "GOVLAWLIVEWIP delivery governance ping: missing=%s blocked_state=%s auto_blocking=%s",
+                            "Hermes Governance delivery warning: missing=%s blocked_state=%s auto_blocking=%s",
                             _governance_delivery.decision.missing_evidence,
                             _governance_delivery.decision.blocked_state,
                             _governance_delivery.decision.auto_blocking,
@@ -11464,7 +11470,7 @@ class GatewayRunner:
                         _record_gateway_governance_event(
                             self.config,
                             rule_id=str(_governance_delivery.decision.violation_type or "gateway_delivery_governance_ping"),
-                            severity="WARN_STOP_THE_LINE",
+                            severity="WARN",
                             action="APPEND_PING",
                             profile=_active_profile,
                             platform=_platform_name,
@@ -11487,15 +11493,15 @@ class GatewayRunner:
                         )
                         response = f"{response}\n\n{_governance_delivery.ping_text}"
                 except Exception as _governance_delivery_exc:
-                    logger.warning("GOVLAWLIVEWIP delivery governance evaluation failed: %s", _governance_delivery_exc)
+                    logger.warning("Hermes Governance delivery evaluation failed: %s", _governance_delivery_exc)
             try:
                 _user_report_ping = _evaluate_gateway_user_report_governance(response)
                 if _user_report_ping:
-                    logger.warning("GOVLAWLIVEWIP user report governance ping appended")
+                    logger.warning("Hermes Governance user report warning appended")
                     _record_gateway_governance_event(
                         self.config,
                         rule_id=_gateway_governance_rule_id_from_ping(_user_report_ping, "gateway_user_report_governance_ping"),
-                        severity="WARN_STOP_THE_LINE",
+                        severity="WARN",
                         action="APPEND_PING",
                         profile=_active_profile,
                         platform=_platform_name,
@@ -11510,7 +11516,7 @@ class GatewayRunner:
                     )
                     response = f"{response}\n\n{_user_report_ping}"
             except Exception as _user_report_governance_exc:
-                logger.warning("GOVLAWLIVEWIP user report governance evaluation failed: %s", _user_report_governance_exc)
+                logger.warning("Hermes Governance user report evaluation failed: %s", _user_report_governance_exc)
             response, _truncated_guard_applied = _compact_gateway_final_response(response)
 
             # If the agent's session_id changed during compression, update

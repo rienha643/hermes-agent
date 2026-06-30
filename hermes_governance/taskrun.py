@@ -415,11 +415,23 @@ def evaluate_task_run(
 
 
 def format_governance_ping(intent: TaskIntent, decision: ReleaseDecision) -> str:
-    """Slack shortcode에 의존하지 않는 Unicode 거버넌스 PING을 만든다."""
+    """Slack shortcode에 의존하지 않는 Unicode 거버넌스 알림을 만든다."""
     missing = decision.missing_evidence or []
+    if decision.auto_blocking:
+        title = "🛑 HERMES GOVERNANCE HARD BLOCK"
+        summary = "기계적으로 확인 가능한 위반이 있어 작업 응답이 차단되었습니다."
+    elif decision.blocked_state == "REPORT_FAIL":
+        title = "⚠️ HERMES GOVERNANCE WARN"
+        summary = "보고 언어/형식 정책과 맞지 않아 검토가 필요합니다."
+    elif decision.stop_the_line_conditions or missing:
+        title = "⚠️ HERMES GOVERNANCE WARN"
+        summary = "작업 근거가 부족해 사용자/Codex 검토가 필요합니다."
+    else:
+        title = "ℹ️ HERMES GOVERNANCE ADVISORY"
+        summary = "운영 참고용 거버넌스 신호가 기록되었습니다."
     lines = [
-        "🚨🚨🚨 GOVERNANCE PING 🚨🚨🚨",
-        "⚠️ 거버넌스 법 위반 또는 증거 부족 상태가 감지되었습니다.",
+        title,
+        summary,
         "```",
         f"task_id: {intent.task_id}",
         f"task_mode: {intent.task_mode}",

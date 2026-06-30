@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-from govlawlivewip_governance.taskrun import (
+from hermes_governance.taskrun import (
     DeliveryEvidence,
     ExecutionEvidence,
     ReportEvidence,

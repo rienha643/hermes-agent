@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from govlawlivewip_governance.taskrun import DeliveryEvidence, ExecutionEvidence, ReportEvidence, RoutingEvidence, SyncEvidence, TaskIntent, evaluate_task_run
+from hermes_governance.taskrun import DeliveryEvidence, ExecutionEvidence, ReportEvidence, RoutingEvidence, SyncEvidence, TaskIntent, evaluate_task_run
 
 
 @pytest.mark.parametrize("requested_role,actual_executor", [("Palette", "artist"), ("Eclipse", "coder"), ("Rafina", "qa"), ("unknown-role", "local-process")])

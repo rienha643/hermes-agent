@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-from govlawlivewip_governance.taskrun import DeliveryEvidence, ExecutionEvidence, ReportEvidence, RoutingEvidence, SyncEvidence, TaskIntent, evaluate_task_run
+from hermes_governance.taskrun import DeliveryEvidence, ExecutionEvidence, ReportEvidence, RoutingEvidence, SyncEvidence, TaskIntent, evaluate_task_run
 
 
 def _evaluate(intent=None, routing=None, execution=None, delivery=None, sync=None, report=None):
