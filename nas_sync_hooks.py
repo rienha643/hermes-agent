@@ -20,11 +20,17 @@ _SUPPORTED_CATEGORIES = {"image", "documents", "story"}
 _IN_PROCESS_LAST_LAUNCH: dict[str, float] = {}
 _IN_PROCESS_LOCK = Lock()
 HOOK_FREEZE_ENV = "HERMES_NAS_HOOKS_FROZEN"
+HOOK_REPORT_ONLY_ENV = "HERMES_NAS_HOOK_REPORT_ONLY"
 
 
 def _hooks_frozen() -> bool:
     value = os.environ.get(HOOK_FREEZE_ENV, "").strip().casefold()
     return value in {"1", "true", "yes", "on", "frozen", "freeze"}
+
+
+def _hook_report_only_enabled() -> bool:
+    value = os.environ.get(HOOK_REPORT_ONLY_ENV, "1").strip().casefold()
+    return value not in {"0", "false", "no", "off", "copy", "write"}
 _STORY_SCOPE_EMPTY_NAMES = {
     "",
     ".",
@@ -216,6 +222,7 @@ def queue_nas_sync_hook(
             logger.warning("NAS sync hook script not found; skipping immediate sync for %s", key)
             return False
 
+        report_only = _hook_report_only_enabled()
         cmd = [
             sys.executable,
             str(script),
@@ -230,10 +237,13 @@ def queue_nas_sync_hook(
             "--debounce-seconds",
             str(int(debounce_seconds)),
         ]
+        if report_only:
+            cmd.append("--report-only")
         try:
             env = os.environ.copy()
             state_dir = _resolve_nas_hook_state_dir()
             env["HERMES_NAS_HOOK_STATE_DIR"] = str(state_dir)
+            env["HERMES_NAS_HOOK_REPORT_ONLY"] = "1" if report_only else "0"
             launched_at = _utc_now_iso()
             launch_token = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}_{key_hash[:12]}"
             stdout_path = _nas_hook_launcher_output_dir() / f"{launch_token}.stdout.log"
@@ -296,6 +306,7 @@ def queue_nas_sync_hook(
             "metadata_path": str(metadata_path),
             "cmd": cmd,
             "debounce_seconds": debounce_seconds,
+            "report_only": report_only,
         }
         try:
             _write_launcher_metadata(metadata_path, metadata)

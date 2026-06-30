@@ -80,6 +80,8 @@ def test_queue_nas_sync_hook_launches_and_debounces(monkeypatch, tmp_path):
     assert launched[0][6:10] == ["--scope", "task-1", "--artifact-path", str(artifact_path)]
     assert launched_envs[0]["HERMES_HOME"] == str(tmp_path / "profiles" / "coder")
     assert launched_envs[0]["HERMES_NAS_HOOK_STATE_DIR"] == str(state_dir)
+    assert launched_envs[0]["HERMES_NAS_HOOK_REPORT_ONLY"] == "1"
+    assert "--report-only" in launched[0]
 
     stdout_path = Path(launched_kwargs[0]["stdout"].name)
     stderr_path = Path(launched_kwargs[0]["stderr"].name)
@@ -102,6 +104,7 @@ def test_queue_nas_sync_hook_launches_and_debounces(monkeypatch, tmp_path):
     assert len(metadata_files) == 1
     metadata = json.loads(metadata_files[0].read_text(encoding="utf-8"))
     assert metadata == event
+    assert metadata["report_only"] is True
 
 
 def test_queue_nas_sync_hook_launches_with_resolved_symlink_paths(monkeypatch, tmp_path):
@@ -144,6 +147,7 @@ def test_queue_nas_sync_hook_launches_with_resolved_symlink_paths(monkeypatch, t
         "--artifact-path",
         str(artifact_path.resolve(strict=False)),
     ]
+    assert "--report-only" in launched[0]
 
 
 def test_queue_nas_sync_hook_records_launch_failure(monkeypatch, tmp_path):
@@ -338,6 +342,7 @@ def test_queue_nas_sync_hook_story_normalizes_story_root(monkeypatch, tmp_path):
     assert len(launched) == 1
     assert launched[0][2:6] == ["--hook", str(story_root), "--category", "story"]
     assert launched[0][6:10] == ["--scope", "", "--artifact-path", str(artifact_path.resolve(strict=False))]
+    assert "--report-only" in launched[0]
 
 
 def test_run_artifact_hook_story_uses_canonical_destination(monkeypatch, tmp_path):
@@ -435,6 +440,50 @@ def test_hook_state_dir_override_drives_lock_and_state_paths(monkeypatch, tmp_pa
     assert artifact_state["status"] == "success"
     assert artifact_state["artifact_verified"] is True
     assert artifact_state["mirror_verified"] is True
+
+
+def test_run_artifact_hook_report_only_writes_evidence_without_sync(monkeypatch, tmp_path):
+    backup_mod = _load_backup_script_module()
+    state_dir = tmp_path / "state" / "nas-sync"
+    monkeypatch.setenv("HERMES_NAS_HOOK_STATE_DIR", str(state_dir))
+
+    source_root = tmp_path / "HermesWork" / "Documents" / "reports"
+    source_root.mkdir(parents=True)
+    artifact_path = source_root / "artifact.md"
+    artifact_path.write_text("payload", encoding="utf-8")
+    expected_hash = backup_mod._sha256_path(artifact_path).lower()
+
+    def fail_sync(*args, **kwargs):
+        raise AssertionError("report-only hook must not write to NAS")
+
+    monkeypatch.setattr(backup_mod, "_acquire_hook_lock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(backup_mod, "_release_hook_lock", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backup_mod, "load_credentials", fail_sync)
+    monkeypatch.setattr(backup_mod, "sync_source_to_share", fail_sync)
+    monkeypatch.setattr(backup_mod, "_share_file_sha256", fail_sync)
+
+    ok, summary = backup_mod.run_artifact_hook(
+        category="documents",
+        scope="reports",
+        source_root=source_root,
+        artifact_path=artifact_path,
+        report_only=True,
+    )
+
+    assert ok
+    assert "result=report-only" in summary
+    assert "verified=false" in summary
+    state = json.loads(next(state_dir.glob("*.json")).read_text(encoding="utf-8"))
+    assert state["status"] == "report_only"
+    assert state["mode"] == "report-only"
+    assert state["artifact_verified"] is False
+    assert state["mirror_verified"] is False
+    assert state["artifact_sha256"] == expected_hash
+    assert state["changed"] == 0
+    artifact_state = state["artifacts"]["artifact.md"]
+    assert artifact_state["status"] == "report_only"
+    assert artifact_state["artifact_verified"] is False
+    assert artifact_state["mirror_verified"] is False
 
 
 def test_run_artifact_hook_writes_success_state_with_verified_hash(monkeypatch, tmp_path):
