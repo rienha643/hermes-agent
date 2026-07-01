@@ -100,6 +100,25 @@ def test_novelai_explicit_seed_is_preserved_in_payload_policy() -> None:
     assert payload["policy"]["seed_source"] == "provided"
 
 
+def test_novelai_dry_run_does_not_send_report_only_metadata_as_api_params() -> None:
+    import plugins.image_gen.novelai as novelai
+
+    provider = novelai.NovelAIImageGenProvider()
+    result = provider.generate(
+        "safe prompt",
+        dry_run_request=True,
+        operation="txt2img",
+        output_type="key_visual",
+        workflow_key="novelai_key_visual_v1",
+        style_preset="game_default_subculture",
+        preset="game_default_subculture",
+    )
+
+    params = result["request_payload"]["parameters"]
+    for key in ("operation", "output_type", "workflow_key", "style_preset", "preset"):
+        assert key not in params
+
+
 def test_novelai_parameter_overrides_are_preserved_in_payload() -> None:
     import plugins.image_gen.novelai as novelai
 
@@ -992,3 +1011,52 @@ def test_novelai_live_generation_preserves_requested_artifact_name(
     metadata = json.loads((Path(result["sidecar_dir"]) / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["artifact_name"] == "seir_nai_smoke_20260630_v1.png"
     assert metadata["output_image"] == "seir_nai_smoke_20260630_v1.png"
+
+
+def test_novelai_live_generation_report_evidence_preserves_dispatch_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import plugins.image_gen.novelai as novelai
+
+    response_png = tmp_path / "response.png"
+    _write_png(response_png)
+
+    def fake_post(payload, *, api_key, endpoint, timeout):
+        return novelai.NovelAIHTTPResponse(
+            status=200,
+            headers={"content-type": "image/png"},
+            body=response_png.read_bytes(),
+        )
+
+    monkeypatch.setenv("NOVELAI_API_KEY", "test-key-not-printed")
+    monkeypatch.setenv("HERMES_WORK_ROOT", str(tmp_path / "HermesWork" / "Image"))
+    monkeypatch.setattr(novelai, "_post_novelai_generation", fake_post)
+    monkeypatch.setattr(novelai, "queue_nas_sync_hook", lambda **kwargs: False)
+
+    result = novelai.NovelAIImageGenProvider().generate(
+        "safe key visual prompt",
+        run_id="live-report-fields",
+        operation="txt2img",
+        output_type="key_visual",
+        workflow_key="novelai_key_visual_v1",
+        style_preset="game_default_subculture",
+        live_generation_approved=True,
+    )
+
+    evidence = result["report_evidence"]
+    assert evidence["operation"] == "txt2img"
+    assert evidence["output_type"] == "key_visual"
+    assert evidence["workflow_key"] == "novelai_key_visual_v1"
+    assert evidence["preset"] == "game_default_subculture"
+    assert evidence["style_preset"] == "game_default_subculture"
+    assert result["operation"] == "txt2img"
+    assert result["output_type"] == "key_visual"
+    assert result["workflow_key"] == "novelai_key_visual_v1"
+    metadata = json.loads((Path(result["sidecar_dir"]) / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["operation"] == "txt2img"
+    assert metadata["preset"] == "game_default_subculture"
+    assert metadata["style_preset"] == "game_default_subculture"
+    assert metadata["output_type"] == "key_visual"
+    assert metadata["workflow_key"] == "novelai_key_visual_v1"
+    assert metadata["report_evidence"]["workflow_key"] == "novelai_key_visual_v1"

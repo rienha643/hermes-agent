@@ -302,6 +302,9 @@ def _build_image_generate_auto_completion_report(
     audit = evidence.get("workflow_node_audit")
     technical_status = evidence.get("technical_execution_status", payload.get("technical_execution_status", "COMPLETE"))
     visual_status = evidence.get("visual_quality_status", payload.get("visual_quality_status", "USER_REVIEW_REQUIRED"))
+    checkpoint_value = evidence.get("checkpoint", payload.get("model", "UNKNOWN"))
+    requested_checkpoint = evidence.get("requested_checkpoint", payload.get("requested_checkpoint"))
+    resolved_checkpoint = evidence.get("resolved_checkpoint", payload.get("resolved_checkpoint"))
     lines = [
         "[이미지 생성 자동 완료보고]",
         f"기술 실행 상태: {technical_status}",
@@ -312,7 +315,7 @@ def _build_image_generate_auto_completion_report(
         f"- 프리셋: {evidence.get('preset', payload.get('preset', 'UNKNOWN'))}",
         f"- 산출물 유형: {evidence.get('output_type', payload.get('output_type', 'UNKNOWN'))}",
         f"- Workflow Key: `{evidence.get('workflow_key', payload.get('workflow_key', 'UNKNOWN'))}`",
-        f"- Checkpoint: `{evidence.get('checkpoint', payload.get('model', 'UNKNOWN'))}`",
+        f"- Checkpoint: `{checkpoint_value}`",
         f"- VAE: `{evidence.get('vae', payload.get('vae', 'UNKNOWN'))}`",
         f"- LoRA: {_format_lora_report_value(evidence.get('loras', payload.get('loras')))}",
         f"- 모델 스택 검증: {evidence.get('model_stack_verified', payload.get('model_stack_verified', 'UNKNOWN'))}",
@@ -320,6 +323,13 @@ def _build_image_generate_auto_completion_report(
         f"- Seed: {evidence.get('seed', payload.get('seed', 'UNKNOWN'))}",
         f"- 산출물 경로: {artifact_path}",
     ]
+    if requested_checkpoint or resolved_checkpoint:
+        lines.extend(
+            [
+                f"- 요청 Checkpoint: `{requested_checkpoint or 'UNKNOWN'}`",
+                f"- 해결 Checkpoint: `{resolved_checkpoint or checkpoint_value}`",
+            ]
+        )
     lines.extend(_format_workflow_audit_report(audit))
     return "\n".join(lines).strip()
 

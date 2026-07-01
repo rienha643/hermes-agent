@@ -3315,8 +3315,19 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
 
         base_url = _resolve_base_url()
         configured_checkpoint = _resolve_model()
-        explicit_checkpoint = isinstance(kwargs.get("model"), str) and bool(str(kwargs.get("model")).strip())
-        checkpoint = str(kwargs.get("model") or configured_checkpoint).strip() or DEFAULT_CHECKPOINT
+        requested_model_arg = kwargs.get("model")
+        requested_checkpoint_arg = kwargs.get("checkpoint")
+        explicit_checkpoint_value = ""
+        explicit_checkpoint = False
+        if isinstance(requested_checkpoint_arg, str) and requested_checkpoint_arg.strip():
+            explicit_checkpoint_value = requested_checkpoint_arg.strip()
+            explicit_checkpoint = True
+        elif isinstance(requested_model_arg, str) and requested_model_arg.strip():
+            model_value = requested_model_arg.strip()
+            if model_value != DEFAULT_CHECKPOINT:
+                explicit_checkpoint_value = model_value
+                explicit_checkpoint = True
+        checkpoint = str(explicit_checkpoint_value or configured_checkpoint).strip() or DEFAULT_CHECKPOINT
         requested_checkpoint = checkpoint
         explicit_vae = isinstance(kwargs.get("vae"), str) and bool(str(kwargs.get("vae")).strip())
         vae = str(kwargs.get("vae") or _resolve_vae() or "").strip() or None
@@ -3498,10 +3509,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             subject_dominance_rule = runtime_preset.get("subject_dominance_rule")
             workflow_key = str(runtime_preset.get("workflow_key") or workflow_key)
             preset_checkpoint = str(runtime_preset.get("checkpoint") or "").strip()
-            if preset_checkpoint and (
-                not explicit_checkpoint
-                or checkpoint in {DEFAULT_CHECKPOINT, configured_checkpoint}
-            ):
+            if preset_checkpoint and not explicit_checkpoint:
                 checkpoint = preset_checkpoint
                 requested_checkpoint = checkpoint
             preset_vae = str(runtime_preset.get("vae") or "").strip()
@@ -5578,6 +5586,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             else None
         )
         created_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        operation_value = operation or "txt2img"
         raw_prompt_payload = {
             "submit_payload": payload,
             "submit_response": submit,
@@ -5589,6 +5598,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "loras": lora_stack,
             "workflow_node_audit": workflow_node_audit,
             "model_stack_verified": model_stack_verified,
+            "operation": operation_value,
             "workflow_key": workflow_key,
             "requested_output_type": requested_output_type,
             "output_type": normalized_output_type,
@@ -5616,6 +5626,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "subject_dominance_rule": subject_dominance_rule,
             "prompt_translation_policy": prompt_translation_policy,
             "raw_prompt_payload": raw_prompt_payload,
+            "operation": operation_value,
             "requested_checkpoint": checkpoint_resolution.get("requested_checkpoint", requested_checkpoint),
             "resolved_checkpoint": checkpoint,
             "resolution_mode": checkpoint_resolution.get("resolution_mode"),
@@ -5636,6 +5647,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "prompt_id": prompt_id,
             "api_base_url": base_url,
             "workflow_key": workflow_key,
+            "operation": operation_value,
             "requested_workflow_key": requested_workflow_key or None,
             "requested_output_type": requested_output_type,
             "output_type": normalized_output_type,
@@ -5746,6 +5758,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "workflow_key": workflow_key,
             "workflow_path": str(bundle["workflow_path"]),
             "prompt_id": prompt_id,
+            "operation": operation_value,
             "seed": seed,
             "vae": vae,
             "vae_report_value": vae if vae is not None else "checkpoint_builtin_vae",
@@ -5771,7 +5784,7 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "reference_identity_evidence": reference_identity_evidence,
         }
         report_evidence = {
-            "operation": "txt2img",
+            "operation": operation_value,
             "workflow_key": workflow_key,
             "workflow_path": str(bundle["workflow_path"]),
             "prompt_id": prompt_id,
@@ -5783,6 +5796,11 @@ class ComfyLocalImageGenProvider(ImageGenProvider):
             "loras": lora_stack,
             "workflow_node_audit": workflow_node_audit,
             "model_stack_verified": model_stack_verified,
+            "requested_checkpoint": checkpoint_resolution.get("requested_checkpoint", requested_checkpoint),
+            "resolved_checkpoint": checkpoint,
+            "resolution_mode": checkpoint_resolution.get("resolution_mode"),
+            "resolution_reason": checkpoint_resolution.get("resolution_reason"),
+            "source_model_rejected": checkpoint_resolution.get("source_model_rejected"),
             "technical_execution_status": "COMPLETE",
             "visual_quality_status": "USER_REVIEW_REQUIRED",
             "visual_quality_note": "Automatic report confirms execution evidence only. Do not claim visual PASS without user/Codex review.",

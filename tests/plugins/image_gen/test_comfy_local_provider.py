@@ -3058,6 +3058,40 @@ class TestComfyLocalCharacterProductionPreset:
         assert result["evidence"]["workflow_key"] == "portrait_round_v1_txt2img_v1"
         assert result["prompt_translation_policy"] == "portrait-round-v1-skeleton + keyword-translate + sfw-sanitize + portrait-primary-wai-knai-addmicro"
 
+    def test_generate_honors_checkpoint_alias_over_portrait_preset_checkpoint(self, monkeypatch, tmp_path):
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt="미소녀 얼굴 초상 portrait, ornate costume, clean subculture illustration",
+            model=None,
+            checkpoint="pornmasterAnime_ilV5.safetensors",
+        )
+
+        assert result["success"] is True
+        assert captured["metadata"]["operation"] == "txt2img"
+        assert captured["metadata"]["checkpoint"] == "pornmasterAnime_ilV5.safetensors"
+        assert captured["prompt_payload"]["operation"] == "txt2img"
+        assert captured["workflow_json"]["1"]["inputs"]["ckpt_name"] == "pornmasterAnime_ilV5.safetensors"
+        assert result["report_evidence"]["requested_checkpoint"] == "pornmasterAnime_ilV5.safetensors"
+        assert result["report_evidence"]["resolved_checkpoint"] == "pornmasterAnime_ilV5.safetensors"
+        assert result["report_evidence"]["resolution_mode"] == "exact"
+
+    def test_generate_honors_explicit_model_even_when_it_matches_configured_model(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("COMFY_LOCAL_IMAGE_MODEL", "pornmasterAnime_ilV5.safetensors")
+
+        result, captured = self._run_generate(
+            monkeypatch,
+            tmp_path,
+            prompt="미소녀 얼굴 초상 portrait, ornate costume, clean subculture illustration",
+            model="pornmasterAnime_ilV5.safetensors",
+        )
+
+        assert result["success"] is True
+        assert captured["metadata"]["checkpoint"] == "pornmasterAnime_ilV5.safetensors"
+        assert captured["workflow_json"]["1"]["inputs"]["ckpt_name"] == "pornmasterAnime_ilV5.safetensors"
+        assert result["report_evidence"]["requested_checkpoint"] == "pornmasterAnime_ilV5.safetensors"
+        assert result["report_evidence"]["resolved_checkpoint"] == "pornmasterAnime_ilV5.safetensors"
+
     def test_generate_routes_fullbody_to_vertical_fullbody_v8_workflow(self, monkeypatch, tmp_path):
         result, captured = self._run_generate(
             monkeypatch,

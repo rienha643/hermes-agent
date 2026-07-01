@@ -829,3 +829,31 @@ def test_media_tag_fallback_collects_trusted_current_tool_media(tmp_path):
 
     assert media_tags == [f"MEDIA:{current_audio}"]
     assert has_voice is True
+
+
+def test_media_tag_fallback_collects_image_generate_media_files(tmp_path):
+    current_image = tmp_path / "angelica_compact.png"
+    current_image.write_bytes(b"png")
+
+    agent_result = {
+        "messages": [
+            {
+                "role": "tool",
+                "tool_name": "image_generate",
+                "content": {
+                    "success": True,
+                    "media_files": [str(current_image)],
+                    "report_evidence": {"artifact_path": str(current_image)},
+                },
+            }
+        ]
+    }
+
+    media_tags, has_voice = _collect_current_turn_media_tags_from_tool_results(
+        agent_result,
+        history_len=0,
+        history_media_paths=set(),
+    )
+
+    assert media_tags == [f"MEDIA:{current_image}"]
+    assert has_voice is False

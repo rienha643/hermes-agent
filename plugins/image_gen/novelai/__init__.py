@@ -1159,6 +1159,11 @@ def _generate_live_novelai_image(
     endpoint: str,
     timeout: int,
     parameter_overrides: Dict[str, Any],
+    operation: str | None = None,
+    output_type: str | None = None,
+    workflow_key: str | None = None,
+    preset: str | None = None,
+    style_preset: str | None = None,
 ) -> Dict[str, Any]:
     api_key = _novelai_api_key()
     parameter_overrides = _encode_reference_images_for_live(
@@ -1212,6 +1217,11 @@ def _generate_live_novelai_image(
         aspect_ratio=aspect_ratio,
         artifact_name=artifact_name,
         save_raw_response=save_raw_response,
+        operation=operation,
+        output_type=output_type,
+        workflow_key=workflow_key,
+        preset=preset,
+        style_preset=style_preset,
     )
     _write_live_response_metadata(Path(result["sidecar_dir"]), raw_metadata, Path(result["image"]))
     return result
@@ -1371,6 +1381,22 @@ def _write_metadata_report_fields(
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _write_metadata_report_evidence(
+    published_sidecar_dir: Path,
+    report_evidence: Dict[str, Any],
+) -> None:
+    metadata_path = published_sidecar_dir / "metadata.json"
+    metadata = _load_json(metadata_path)
+    metadata["operation"] = report_evidence.get("operation")
+    metadata["preset"] = report_evidence.get("preset")
+    metadata["style_preset"] = report_evidence.get("style_preset")
+    metadata["output_type"] = report_evidence.get("output_type")
+    metadata["workflow_key"] = report_evidence.get("workflow_key")
+    metadata["artifact_path"] = report_evidence.get("artifact_path")
+    metadata["report_evidence"] = report_evidence
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _write_extended_manifest(
     *,
     source_png: Path,
@@ -1438,6 +1464,11 @@ def publish_existing_generation(
     artifact_name: str = "image_000.png",
     work_root: str | Path | None = None,
     save_raw_response: bool | None = None,
+    operation: str | None = None,
+    output_type: str | None = None,
+    workflow_key: str | None = None,
+    preset: str | None = None,
+    style_preset: str | None = None,
 ) -> Dict[str, Any]:
     """Publish an existing NovelAI PNG into HermesWork and return provider output.
 
@@ -1512,6 +1543,11 @@ def publish_existing_generation(
     )
     report_evidence = {
         "provider": "novelai",
+        "operation": operation or "txt2img",
+        "preset": preset or style_preset or "UNKNOWN",
+        "style_preset": style_preset or preset or "UNKNOWN",
+        "output_type": output_type or "UNKNOWN",
+        "workflow_key": workflow_key or "novelai_txt2img",
         "model": model,
         "run_id": run_id,
         "prompt": prompt,
@@ -1524,6 +1560,7 @@ def publish_existing_generation(
         "actual_width": actual_width,
         "actual_height": actual_height,
     }
+    _write_metadata_report_evidence(published_sidecar_dir, report_evidence)
 
     return success_response(
         image=str(published_png),
@@ -1541,6 +1578,11 @@ def publish_existing_generation(
             "actual_width": actual_width,
             "actual_height": actual_height,
             "output_resolution": output_resolution,
+            "operation": operation or "txt2img",
+            "preset": preset or style_preset or "UNKNOWN",
+            "style_preset": style_preset or preset or "UNKNOWN",
+            "output_type": output_type or "UNKNOWN",
+            "workflow_key": workflow_key or "novelai_txt2img",
             "report_evidence": report_evidence,
         },
     )
@@ -1634,13 +1676,18 @@ class NovelAIImageGenProvider(ImageGenProvider):
                 "live_generation_approved",
                 "model",
                 "negative_prompt",
+                "operation",
+                "output_type",
+                "preset",
                 "run_id",
                 "save_raw_response",
                 "seed",
                 "source_png",
                 "source_sidecar_dir",
+                "style_preset",
                 "timeout",
                 "upscale",
+                "workflow_key",
                 "width",
             }
             parameter_overrides = {
@@ -1677,6 +1724,11 @@ class NovelAIImageGenProvider(ImageGenProvider):
                 aspect_ratio=aspect_ratio,
                 artifact_name=_normalize_artifact_name(kwargs.get("artifact_name")),
                 save_raw_response=kwargs.get("save_raw_response"),
+                operation=str(kwargs.get("operation") or "txt2img"),
+                output_type=str(kwargs.get("output_type") or ""),
+                workflow_key=str(kwargs.get("workflow_key") or "novelai_txt2img"),
+                preset=str(kwargs.get("preset") or kwargs.get("style_preset") or ""),
+                style_preset=str(kwargs.get("style_preset") or kwargs.get("preset") or ""),
             )
 
         if not bool(kwargs.get("live_generation_approved", False)):
@@ -1705,13 +1757,18 @@ class NovelAIImageGenProvider(ImageGenProvider):
             "live_generation_approved",
             "model",
             "negative_prompt",
+            "operation",
+            "output_type",
+            "preset",
             "run_id",
             "save_raw_response",
             "seed",
             "source_png",
             "source_sidecar_dir",
+            "style_preset",
             "timeout",
             "upscale",
+            "workflow_key",
             "width",
         }
         parameter_overrides = {key: value for key, value in kwargs.items() if key not in reserved}
@@ -1740,6 +1797,11 @@ class NovelAIImageGenProvider(ImageGenProvider):
                 ),
                 timeout=int(kwargs.get("timeout") or NOVELAI_REQUEST_TIMEOUT_SECONDS),
                 parameter_overrides=parameter_overrides,
+                operation=str(kwargs.get("operation") or "txt2img"),
+                output_type=str(kwargs.get("output_type") or ""),
+                workflow_key=str(kwargs.get("workflow_key") or "novelai_txt2img"),
+                preset=str(kwargs.get("preset") or kwargs.get("style_preset") or ""),
+                style_preset=str(kwargs.get("style_preset") or kwargs.get("preset") or ""),
             )
         except NovelAIResolutionApprovalRequired:
             raise

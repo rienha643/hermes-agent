@@ -3679,6 +3679,39 @@ def _collect_current_turn_media_tags_from_tool_results(
         r'txt|csv|apk|ipa))',
         re.IGNORECASE,
     )
+    def _collect_structured_media_paths(value: Any, *, tool_name: str) -> None:
+        payload = _coerce_structured_attachment_payload(value)
+        if not isinstance(payload, dict):
+            return
+        normalized_tool = _normalize_structured_attachment_tool_name(tool_name)
+        if normalized_tool not in _STRUCTURED_ATTACHMENT_IMAGE_TOOLS:
+            return
+        if payload.get("success") is not True:
+            return
+
+        raw_candidates: list[Any] = []
+        media_files = payload.get("media_files")
+        if isinstance(media_files, (list, tuple)):
+            raw_candidates.extend(media_files)
+        for key in ("image", "local_path", "file_path", "artifact_path"):
+            raw_candidates.append(payload.get(key))
+        report_evidence = payload.get("report_evidence")
+        if isinstance(report_evidence, dict):
+            raw_candidates.append(report_evidence.get("artifact_path"))
+
+        for raw_candidate in raw_candidates:
+            if not isinstance(raw_candidate, str):
+                continue
+            path = raw_candidate.strip().strip("`\"'")
+            if not path or path in history_media_paths:
+                continue
+            suffix = Path(path).suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+                continue
+            tag = f"MEDIA:{path}"
+            if tag not in media_tags:
+                media_tags.append(tag)
+
     for msg in _slice_turn_messages(agent_result, history_len):
         if str(msg.get("role") or "").lower() not in {"tool", "function"}:
             continue
@@ -3690,6 +3723,7 @@ def _collect_current_turn_media_tags_from_tool_results(
         if tool_name in _STRUCTURED_ATTACHMENT_DENIED_TOOLS:
             continue
         content = msg.get("content", "")
+        _collect_structured_media_paths(content, tool_name=tool_name)
         if not isinstance(content, str) or "MEDIA:" not in content:
             continue
         for match in tool_media_re.finditer(content):
